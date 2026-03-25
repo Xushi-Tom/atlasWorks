@@ -1,0 +1,2495 @@
+body.tf-app {
+    --tf-bg: #030813;
+    --tf-bg-soft: #07101f;
+    --tf-surface: rgba(7, 17, 31, 0.86);
+    --tf-surface-strong: rgba(9, 20, 36, 0.95);
+    --tf-surface-muted: rgba(8, 16, 30, 0.78);
+    --tf-border: rgba(74, 195, 255, 0.22);
+    --tf-border-strong: rgba(74, 195, 255, 0.42);
+    --tf-text: #e8f7ff;
+    --tf-text-soft: #9ec1d7;
+    --tf-text-dim: #6e8ba6;
+    --tf-accent: #67f0ff;
+    --tf-accent-strong: #1fa4ff;
+    --tf-accent-warm: #ffb35c;
+    background:
+        radial-gradient(circle at 12% 18%, rgba(74, 195, 255, 0.18), transparent 24%),
+        radial-gradient(circle at 83% 12%, rgba(31, 164, 255, 0.16), transparent 22%),
+        radial-gradient(circle at 50% 130%, rgba(53, 255, 222, 0.1), transparent 28%),
+        linear-gradient(145deg, #01050d 0%, #041120 48%, #020913 100%);
+}
+
+body.tf-app.tf-theme-light {
+    --tf-bg: #eef5ff;
+    --tf-bg-soft: #f5f9ff;
+    --tf-surface: rgba(255, 255, 255, 0.88);
+    --tf-surface-strong: rgba(248, 252, 255, 0.95);
+    --tf-surface-muted: rgba(236, 244, 255, 0.84);
+    --tf-border: rgba(67, 138, 217, 0.18);
+    --tf-border-strong: rgba(67, 138, 217, 0.34);
+    --tf-text: #16314d;
+    --tf-text-soft: #4d6782;
+    --tf-text-dim: #7990aa;
+    --tf-accent: #188de6;
+    --tf-accent-strong: #0d6fcd;
+    --tf-accent-warm: #ff9d42;
+    background:
+        radial-gradient(circle at 10% 16%, rgba(72, 194, 255, 0.18), transparent 26%),
+        radial-gradient(circle at 84% 12%, rgba(255, 170, 77, 0.18), transparent 22%),
+        radial-gradient(circle at 50% 120%, rgba(48, 169, 255, 0.1), transparent 28%),
+        linear-gradient(145deg, #f7fbff 0%, #ebf4ff 45%, #f5f9ff 100%);
+}
+
+body.tf-app #app {
+    height: 100vh;
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: var(--tf-header-height) minmax(0, 1fr);
+    overflow: hidden;
+}
+
+body.tf-app::before {
+    background-image:
+        linear-gradient(rgba(97, 245, 255, 0.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(97, 245, 255, 0.06) 1px, transparent 1px);
+    background-size: 64px 64px;
+    opacity: 0.24;
+}
+
+body.tf-app::after {
+    background:
+        radial-gradient(circle at 50% 30%, rgba(74, 195, 255, 0.14), transparent 28%),
+        radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.04), transparent 58%);
+    opacity: 0.9;
+}
+
+body.tf-app.tf-theme-light::before {
+    background-image:
+        linear-gradient(rgba(24, 141, 230, 0.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(24, 141, 230, 0.06) 1px, transparent 1px);
+}
+
+body.tf-app.tf-theme-light::after {
+    background:
+        radial-gradient(circle at 50% 24%, rgba(24, 141, 230, 0.12), transparent 28%),
+        radial-gradient(circle at 76% 20%, rgba(255, 157, 66, 0.12), transparent 24%);
+}
+
+.tf-app .header {
+    background:
+        linear-gradient(90deg, rgba(4, 11, 22, 0.96), rgba(9, 23, 42, 0.92)),
+        linear-gradient(180deg, rgba(103, 240, 255, 0.08), transparent);
+    border-bottom: 1px solid rgba(103, 240, 255, 0.2);
+    box-shadow:
+        0 12px 36px rgba(0, 0, 0, 0.3),
+        inset 0 -1px 0 rgba(103, 240, 255, 0.08);
+}
+
+.tf-app .header::after {
+    content: "";
+    position: absolute;
+    left: 28px;
+    right: 28px;
+    bottom: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(103, 240, 255, 0.45), transparent);
+    pointer-events: none;
+}
+
+.tf-app .logo {
+    letter-spacing: 1.4px;
+    text-transform: none;
+}
+
+.tf-app .logo span {
+    position: relative;
+}
+
+.tf-app .logo span::after {
+    content: "Geo Tiling Control Console";
+    display: block;
+    margin-top: 2px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 2.6px;
+    text-transform: uppercase;
+    color: rgba(158, 193, 215, 0.72);
+}
+
+.tf-app .header-right {
+    gap: 12px;
+}
+
+.tf-app .theme-toggle-button {
+    width: auto;
+    min-width: 74px;
+    padding: 0 14px;
+}
+
+.tf-app .theme-toggle-text {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+}
+
+.tf-app .sidebar,
+.tf-app .tool-page-container,
+.tf-app .system-page-container,
+.tf-app .section-header,
+.tf-app .card,
+.tf-app .system-panel,
+.tf-app .form-section {
+    background-image:
+        linear-gradient(180deg, rgba(103, 240, 255, 0.03), transparent 26%),
+        linear-gradient(135deg, rgba(9, 20, 36, 0.96), rgba(5, 12, 24, 0.92));
+    border-color: rgba(74, 195, 255, 0.2);
+    box-shadow:
+        0 18px 44px rgba(0, 0, 0, 0.36),
+        inset 0 0 0 1px rgba(103, 240, 255, 0.04);
+}
+
+.tf-app .sidebar {
+    position: relative;
+    overflow: hidden;
+}
+
+.tf-app .tool-page-container,
+.tf-app .system-page-container {
+    position: relative;
+}
+
+.tf-app .sidebar::before,
+.tf-app .tool-page-container::before,
+.tf-app .system-page-container::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(130deg, rgba(103, 240, 255, 0.08), transparent 18%, transparent 82%, rgba(31, 164, 255, 0.06)),
+        linear-gradient(90deg, transparent, rgba(103, 240, 255, 0.04), transparent);
+    opacity: 0.8;
+    z-index: 0;
+}
+
+.tf-app .sidebar > *,
+.tf-app .tool-page-container > *,
+.tf-app .system-page-container > * {
+    position: relative;
+    z-index: 1;
+}
+
+.tf-app .nav-item,
+.tf-app .nav-subitem,
+.tf-app .btn,
+.tf-app .subnav-tab {
+    position: relative;
+    overflow: hidden;
+}
+
+.tf-app .nav-item::after,
+.tf-app .nav-subitem::after,
+.tf-app .btn::after,
+.tf-app .subnav-tab::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(120deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+    transform: translateX(-120%);
+    transition: transform 0.45s ease;
+    pointer-events: none;
+}
+
+.tf-app .nav-item:hover::after,
+.tf-app .nav-subitem:hover::after,
+.tf-app .btn:hover::after,
+.tf-app .subnav-tab:hover::after {
+    transform: translateX(120%);
+}
+
+.tf-app .nav-item.active,
+.tf-app .nav-subitem.active,
+.tf-app .subnav-tab.active {
+    box-shadow:
+        inset 0 0 0 1px rgba(103, 240, 255, 0.14),
+        0 0 24px rgba(31, 164, 255, 0.14);
+}
+
+.tf-app .section-header h2,
+.tf-app .card-header h3,
+.tf-app .form-section h3,
+.tf-app .tool-block > h3 {
+    text-shadow: 0 0 18px rgba(103, 240, 255, 0.14);
+}
+
+.tf-app .btn {
+    border-color: rgba(74, 195, 255, 0.18);
+}
+
+.tf-app .btn-primary {
+    background:
+        linear-gradient(135deg, rgba(103, 240, 255, 0.88), rgba(31, 164, 255, 0.82)),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent);
+    color: #02111e;
+    box-shadow:
+        0 10px 28px rgba(18, 120, 211, 0.32),
+        0 0 0 1px rgba(255, 255, 255, 0.14) inset;
+}
+
+.tf-app .btn-secondary {
+    background:
+        linear-gradient(135deg, rgba(12, 28, 48, 0.96), rgba(10, 22, 39, 0.92));
+    border-color: rgba(74, 195, 255, 0.22);
+    color: var(--tf-text);
+}
+
+.tf-app .btn-danger {
+    background: linear-gradient(135deg, rgba(255, 102, 127, 0.88), rgba(189, 44, 89, 0.84));
+}
+
+.tf-app .btn-ghost-danger {
+    color: #ff9fb0;
+    background: rgba(69, 21, 32, 0.26);
+    border-color: rgba(255, 102, 127, 0.22);
+}
+
+.tf-app .refresh-interval-select:focus,
+.tf-app .search-input:focus,
+.tf-app .form-group input:focus,
+.tf-app .form-group select:focus,
+.tf-app textarea:focus {
+    box-shadow:
+        0 0 0 3px rgba(103, 240, 255, 0.12),
+        0 0 24px rgba(31, 164, 255, 0.12);
+}
+
+.tf-app .overview-card,
+.tf-app .task-card,
+.tf-app .info-row,
+.tf-app .file-item {
+    backdrop-filter: blur(12px);
+}
+
+.tf-app .console-main-shell,
+.tf-app .console-modal-shell {
+    display: contents;
+}
+
+.tf-app .app-view {
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.tf-app .app-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(118, 161, 220, 0.75) rgba(7, 15, 28, 0.78);
+}
+
+.tf-app .app-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.tf-app .app-scroll::-webkit-scrollbar-track {
+    background: rgba(7, 15, 28, 0.78);
+    border-radius: 999px;
+}
+
+.tf-app .app-scroll::-webkit-scrollbar-thumb {
+    background: rgba(118, 161, 220, 0.75);
+    border-radius: 999px;
+}
+
+.tf-app .browser-product-grid {
+    align-items: start;
+}
+
+.tf-app .file-item-button {
+    width: 100%;
+    border: 1px solid rgba(74, 195, 255, 0.12);
+    text-align: left;
+    background: rgba(8, 18, 32, 0.72);
+}
+
+.tf-app .file-item-button:hover {
+    border-color: rgba(103, 240, 255, 0.24);
+    background: rgba(11, 24, 42, 0.94);
+}
+
+.tf-app .workspace-create-input {
+    width: 220px;
+}
+
+.tf-app .workspace-toolbar {
+    flex-wrap: wrap;
+}
+
+.tf-app .workspace-header-actions,
+.tf-app .task-header-tools {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.tf-app .workspace-create-group {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr);
+    gap: 12px;
+}
+
+.tf-app .workspace-detail-list {
+    margin-top: 16px;
+}
+
+.tf-app .tool-result-pre {
+    margin: 0;
+    min-height: 160px;
+    padding: 16px;
+    overflow: auto;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 16px;
+    background: rgba(5, 13, 24, 0.92);
+    color: var(--tf-text-soft);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.tf-app .toast-stack {
+    position: fixed;
+    top: calc(var(--tf-header-height) + 20px);
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 9999;
+}
+
+.tf-app .toast-card {
+    min-width: 320px;
+    max-width: 520px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 18px;
+    border-radius: 18px;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    background: rgba(10, 20, 34, 0.94);
+    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.32);
+    color: var(--tf-text);
+}
+
+.tf-app .toast-card-error {
+    border-color: rgba(255, 102, 127, 0.28);
+    background: rgba(49, 14, 22, 0.96);
+}
+
+.tf-app .toast-card-success {
+    border-color: rgba(47, 224, 181, 0.24);
+    background: rgba(11, 34, 30, 0.96);
+}
+
+.tf-app .toast-card-warning {
+    border-color: rgba(255, 191, 71, 0.24);
+    background: rgba(46, 31, 10, 0.96);
+}
+
+.tf-app .product-header {
+    gap: 24px;
+}
+
+.tf-app .shell-icon-button {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(74, 195, 255, 0.22);
+    border-radius: 14px;
+    background: rgba(7, 17, 31, 0.68);
+    color: var(--tf-text);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.tf-app .shell-icon-button:hover {
+    border-color: rgba(103, 240, 255, 0.42);
+    background: rgba(12, 28, 48, 0.92);
+}
+
+body.tf-app.tf-theme-light .header {
+    background:
+        linear-gradient(90deg, rgba(251, 254, 255, 0.98), rgba(234, 244, 255, 0.96)),
+        linear-gradient(180deg, rgba(24, 141, 230, 0.08), transparent);
+    border-bottom-color: rgba(24, 141, 230, 0.14);
+    box-shadow:
+        0 12px 30px rgba(67, 138, 217, 0.12),
+        inset 0 -1px 0 rgba(24, 141, 230, 0.08);
+}
+
+body.tf-app.tf-theme-light .header::after {
+    background: linear-gradient(90deg, transparent, rgba(24, 141, 230, 0.28), transparent);
+}
+
+body.tf-app.tf-theme-light .logo,
+body.tf-app.tf-theme-light .logo span,
+body.tf-app.tf-theme-light .datetime-info,
+body.tf-app.tf-theme-light .console-sidebar-brand strong,
+body.tf-app.tf-theme-light .console-nav-link.active,
+body.tf-app.tf-theme-light .console-subnav-link.active,
+body.tf-app.tf-theme-light .section-header h2,
+body.tf-app.tf-theme-light .card-header h3,
+body.tf-app.tf-theme-light .file-name,
+body.tf-app.tf-theme-light .task-list-title strong,
+body.tf-app.tf-theme-light .publish-record-title strong {
+    color: #16314d;
+}
+
+body.tf-app.tf-theme-light .logo span::after,
+body.tf-app.tf-theme-light .console-sidebar-brand p,
+body.tf-app.tf-theme-light .console-nav-copy small,
+body.tf-app.tf-theme-light .file-details,
+body.tf-app.tf-theme-light .section-subtitle,
+body.tf-app.tf-theme-light .task-list-message,
+body.tf-app.tf-theme-light .task-list-meta,
+body.tf-app.tf-theme-light .publish-record-meta,
+body.tf-app.tf-theme-light .publish-record-path {
+    color: #58718a;
+}
+
+body.tf-app.tf-theme-light .sidebar,
+body.tf-app.tf-theme-light .tool-page-container,
+body.tf-app.tf-theme-light .system-page-container,
+body.tf-app.tf-theme-light .section-header,
+body.tf-app.tf-theme-light .card,
+body.tf-app.tf-theme-light .system-panel,
+body.tf-app.tf-theme-light .form-section,
+body.tf-app.tf-theme-light .console-group-card,
+body.tf-app.tf-theme-light .sidebar-footer,
+body.tf-app.tf-theme-light .console-sidebar-foot,
+body.tf-app.tf-theme-light .directory-path-text,
+body.tf-app.tf-theme-light .file-item-button,
+body.tf-app.tf-theme-light .task-list-item,
+body.tf-app.tf-theme-light .publish-record-item,
+body.tf-app.tf-theme-light .task-filter-panel-list {
+    background-image:
+        linear-gradient(180deg, rgba(24, 141, 230, 0.04), transparent 26%),
+        linear-gradient(135deg, rgba(255, 255, 255, 0.97), rgba(239, 246, 255, 0.94));
+    border-color: rgba(67, 138, 217, 0.14);
+    box-shadow:
+        0 12px 34px rgba(112, 146, 184, 0.12),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.38);
+}
+
+body.tf-app.tf-theme-light .shell-icon-button,
+body.tf-app.tf-theme-light .console-group-toggle,
+body.tf-app.tf-theme-light .status-chip,
+body.tf-app.tf-theme-light .directory-root-badge,
+body.tf-app.tf-theme-light .task-list-order {
+    background: linear-gradient(135deg, rgba(230, 242, 255, 0.96), rgba(244, 249, 255, 0.94));
+    color: #1a4568;
+    border-color: rgba(67, 138, 217, 0.16);
+}
+
+body.tf-app.tf-theme-light .btn-secondary,
+body.tf-app.tf-theme-light .console-subnav-link,
+body.tf-app.tf-theme-light .console-nav-link,
+body.tf-app.tf-theme-light .directory-path-text {
+    color: #1f4466;
+}
+
+.tf-app .shell-hamburger {
+    width: 18px;
+    display: inline-flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.tf-app .shell-hamburger span {
+    width: 18px;
+    height: 2px;
+    border-radius: 999px;
+    background: currentColor;
+}
+
+.tf-app .header-context {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tf-app .header-context-label {
+    color: var(--tf-text-dim);
+    font-size: 11px;
+    letter-spacing: 1.8px;
+    text-transform: uppercase;
+}
+
+.tf-app .header-context strong {
+    color: #f4fbff;
+    font-size: 15px;
+    letter-spacing: 0.4px;
+}
+
+.tf-app .header-context-caption {
+    color: var(--tf-text-soft);
+    font-size: 12px;
+}
+
+.tf-app .status-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-right: 18px;
+}
+
+.tf-app .status-chip {
+    min-height: 30px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 999px;
+    background: rgba(8, 18, 32, 0.76);
+    color: var(--tf-text-soft);
+    font-size: 12px;
+    letter-spacing: 0.3px;
+}
+
+.tf-app .status-chip-live {
+    color: #042233;
+    background: linear-gradient(135deg, rgba(103, 240, 255, 0.92), rgba(31, 164, 255, 0.88));
+    border-color: transparent;
+}
+
+.tf-app .main-container.main-container-collapsed {
+    grid-template-columns: 92px minmax(0, 1fr);
+}
+
+.tf-app .shell-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.tf-app .shell-sidebar-collapsed {
+    padding: 14px 10px;
+}
+
+.tf-app .sidebar-topline {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.tf-app .sidebar-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tf-app .sidebar-copy strong {
+    color: #f4fbff;
+    font-size: 14px;
+    letter-spacing: 0.3px;
+}
+
+.tf-app .sidebar-copy p {
+    margin: 0;
+    color: var(--tf-text-dim);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.tf-app .sidebar-eyebrow,
+.tf-app .sidebar-footer-label {
+    color: var(--tf-accent);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+.tf-app .sidebar-rail-mark {
+    width: 100%;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(74, 195, 255, 0.18);
+    border-radius: 18px;
+    background: linear-gradient(145deg, rgba(8, 20, 36, 0.96), rgba(5, 12, 24, 0.94));
+    color: #eff9ff;
+    font-weight: 700;
+    letter-spacing: 1px;
+    box-shadow: inset 0 0 24px rgba(103, 240, 255, 0.08);
+}
+
+.tf-app .nav-item-shell {
+    min-height: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.tf-app .nav-item-shell::before,
+.tf-app .nav-item-shell::after {
+    display: none;
+}
+
+.tf-app .nav-button {
+    width: 100%;
+    min-height: 54px;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    color: var(--tf-text-soft);
+    background: transparent;
+    text-align: left;
+}
+
+.tf-app .nav-button:hover {
+    color: var(--tf-text);
+    border-color: rgba(103, 240, 255, 0.2);
+    background: linear-gradient(90deg, rgba(103, 240, 255, 0.12), rgba(31, 164, 255, 0.04));
+}
+
+.tf-app .nav-button.active {
+    color: #eff9ff;
+    border-color: rgba(103, 240, 255, 0.22);
+    background: linear-gradient(135deg, rgba(103, 240, 255, 0.16), rgba(31, 164, 255, 0.1));
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+        0 0 24px rgba(31, 164, 255, 0.12);
+}
+
+.tf-app .nav-token,
+.tf-app .nav-subtoken {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: rgba(7, 17, 31, 0.92);
+    color: var(--tf-accent);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+}
+
+.tf-app .nav-token {
+    width: 34px;
+    height: 34px;
+}
+
+.tf-app .nav-subtoken {
+    width: 28px;
+    height: 28px;
+    border-radius: 10px;
+}
+
+.tf-app .nav-item-main {
+    padding: 0;
+    gap: 10px;
+}
+
+.tf-app .nav-item.nav-group:hover .nav-item-main {
+    transform: none;
+}
+
+.tf-app .nav-group-link {
+    min-height: 54px;
+}
+
+.tf-app .nav-subitem {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tf-app .shell-sidebar-collapsed .nav-menu ul {
+    gap: 10px;
+}
+
+.tf-app .shell-sidebar-collapsed .nav-button,
+.tf-app .shell-sidebar-collapsed .nav-group-link {
+    min-height: 58px;
+    padding: 0;
+    justify-content: center;
+}
+
+.tf-app .shell-sidebar-collapsed .nav-token {
+    width: 38px;
+    height: 38px;
+}
+
+.tf-app .sidebar-footer {
+    margin-top: auto;
+    padding: 16px;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 18px;
+    background: rgba(6, 15, 28, 0.78);
+    color: var(--tf-text-soft);
+}
+
+.tf-app .sidebar-footer strong {
+    display: block;
+    margin-top: 6px;
+    color: #eff9ff;
+    font-size: 13px;
+    letter-spacing: 0.4px;
+}
+
+.tf-app .console-stage {
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    overflow: hidden;
+}
+
+.tf-app .console-stage > * {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.tf-app .section-header {
+    padding: 18px 22px;
+}
+
+.tf-app .section-header h2 {
+    font-size: 22px;
+}
+
+.tf-app .section-header .tool-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.tf-app .app-scroll > .map-tiles-container,
+.tf-app .app-scroll > .tool-page-container,
+.tf-app .app-scroll > .system-page-container,
+.tf-app .app-scroll > .datasource-container {
+    width: 100%;
+    max-width: 1560px;
+    margin: 0 auto;
+    min-height: auto;
+    height: auto;
+}
+
+.tf-app .map-tiles-container,
+.tf-app .tool-page-container,
+.tf-app .system-page-container {
+    padding: 24px;
+}
+
+.tf-app .app-scroll > .tool-page-container,
+.tf-app .app-scroll > .system-page-container {
+    overflow: visible;
+}
+
+.tf-app .app-scroll > .tool-page-container .form-container,
+.tf-app .app-scroll > .system-page-container .form-container {
+    height: auto;
+    min-height: 100%;
+}
+
+.tf-app .app-scroll > .tool-page-container .form-scroll-area,
+.tf-app .app-scroll > .system-page-container .form-scroll-area {
+    flex: 0 0 auto;
+    overflow: visible;
+}
+
+.tf-app .form-scroll-area {
+    padding: 8px 4px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+}
+
+.tf-app .form-section {
+    padding: 24px 24px 26px;
+    border-radius: 22px;
+}
+
+.tf-app .form-section h3 {
+    margin: 0 0 18px;
+    font-size: 18px;
+}
+
+.tf-app .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tf-app .form-group label {
+    color: #c8e4f6;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+
+.tf-app .form-row {
+    gap: 20px;
+}
+
+.tf-app .tool-block-panel {
+    gap: 22px;
+}
+
+.tf-app .form-row-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tf-app .path-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: stretch;
+}
+
+.tf-app .path-field > input {
+    flex: 1;
+}
+
+.tf-app .path-field-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.tf-app .checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.tf-app .band-source-hint {
+    color: var(--tf-text-soft);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.tf-app .tool-block-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+}
+
+.tf-app .modal-overlay-active {
+    display: flex !important;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 34px 24px;
+    z-index: 10020;
+}
+
+.tf-app .picker-modal-overlay-top {
+    z-index: 10080;
+}
+
+.tf-app .modal-overlay-active .modal-content {
+    margin: 0;
+}
+
+.tf-app .picker-modal-content,
+.tf-app .recommendation-modal-content {
+    width: min(1040px, calc(100vw - 48px));
+}
+
+.tf-app .recommendation-modal-content {
+    width: min(760px, calc(100vw - 48px));
+}
+
+.tf-app .picker-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-height: 0;
+}
+
+.tf-app .picker-selection-panel {
+    padding: 18px;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 18px;
+    background: rgba(6, 16, 29, 0.8);
+}
+
+.tf-app .picker-selection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.tf-app .picker-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.tf-app .picker-chip {
+    min-height: 34px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid rgba(74, 195, 255, 0.18);
+    border-radius: 999px;
+    background: rgba(10, 21, 36, 0.94);
+    color: var(--tf-text);
+}
+
+.tf-app .picker-browser-shell {
+    min-height: 420px;
+}
+
+.tf-app .picker-file-list {
+    min-height: 320px;
+    max-height: 52vh;
+}
+
+.tf-app .picker-file-item {
+    justify-content: space-between;
+}
+
+.tf-app .picker-file-item .file-info {
+    flex: 1;
+}
+
+.tf-app .picker-file-item-current {
+    border-color: rgba(103, 240, 255, 0.28);
+    background: linear-gradient(135deg, rgba(103, 240, 255, 0.12), rgba(31, 164, 255, 0.08));
+}
+
+.tf-app .recommendation-list-vue {
+    margin-top: 20px;
+    display: grid;
+    gap: 12px;
+}
+
+.tf-app .recommendation-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 16px 18px;
+}
+
+.tf-app .recommendation-item strong {
+    color: #eff9ff;
+}
+
+.tf-app .recommendation-item span {
+    color: var(--tf-text-soft);
+    text-align: right;
+}
+
+.tf-app .console-shell {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    gap: 24px;
+    height: 100%;
+    min-height: 0;
+    padding: 24px;
+    overflow: hidden;
+    position: relative;
+    z-index: 1;
+}
+
+.tf-app .console-shell-collapsed {
+    grid-template-columns: 96px minmax(0, 1fr);
+}
+
+.tf-app .console-sidebar-shell {
+    position: relative;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 18px;
+    padding: 18px;
+    border: 1px solid rgba(74, 195, 255, 0.2);
+    border-radius: 26px;
+    background:
+        linear-gradient(180deg, rgba(103, 240, 255, 0.03), transparent 18%),
+        linear-gradient(145deg, rgba(8, 18, 34, 0.96), rgba(5, 11, 22, 0.96));
+    box-shadow:
+        0 24px 48px rgba(0, 0, 0, 0.36),
+        inset 0 0 0 1px rgba(103, 240, 255, 0.05);
+    overflow: hidden;
+    backdrop-filter: blur(18px);
+}
+
+.tf-app .console-sidebar-shell::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        linear-gradient(180deg, rgba(103, 240, 255, 0.05), transparent 24%),
+        linear-gradient(90deg, transparent, rgba(103, 240, 255, 0.04), transparent);
+    pointer-events: none;
+}
+
+.tf-app .console-sidebar-shell > * {
+    position: relative;
+    z-index: 1;
+}
+
+.tf-app .console-sidebar-shell-collapsed {
+    padding: 14px 12px;
+}
+
+.tf-app .console-sidebar-head {
+    display: flex;
+    align-items: stretch;
+}
+
+.tf-app .console-sidebar-brand {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.tf-app .console-sidebar-kicker,
+.tf-app .section-kicker {
+    color: var(--tf-accent);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+.tf-app .section-kicker {
+    display: inline-flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.tf-app .console-sidebar-brand strong,
+.tf-app .console-sidebar-foot strong {
+    color: #f4fbff;
+    font-size: 15px;
+    letter-spacing: 0.3px;
+}
+
+.tf-app .console-sidebar-brand p,
+.tf-app .console-sidebar-foot p {
+    margin: 0;
+    color: var(--tf-text-dim);
+    font-size: 12px;
+    line-height: 1.65;
+}
+
+.tf-app .console-sidebar-rail-mark {
+    width: 100%;
+    min-height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(74, 195, 255, 0.18);
+    border-radius: 20px;
+    background: linear-gradient(145deg, rgba(8, 20, 36, 0.98), rgba(5, 12, 24, 0.96));
+    color: #eff9ff;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    box-shadow: inset 0 0 24px rgba(103, 240, 255, 0.08);
+}
+
+.tf-app .console-sidebar-scroll {
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 8px;
+    margin-right: -8px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(118, 161, 220, 0.75) rgba(7, 15, 28, 0.4);
+}
+
+.tf-app .console-sidebar-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+
+.tf-app .console-sidebar-scroll::-webkit-scrollbar-track {
+    background: rgba(7, 15, 28, 0.4);
+    border-radius: 999px;
+}
+
+.tf-app .console-sidebar-scroll::-webkit-scrollbar-thumb {
+    background: rgba(118, 161, 220, 0.75);
+    border-radius: 999px;
+}
+
+.tf-app .console-nav-list,
+.tf-app .console-subnav-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.tf-app .console-nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tf-app .console-nav-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(103, 240, 255, 0.24), transparent);
+}
+
+.tf-app .console-nav-clusters {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.tf-app .console-nav-link,
+.tf-app .console-subnav-link {
+    width: 100%;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--tf-text-soft);
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    transition:
+        border-color 0.2s ease,
+        background-color 0.2s ease,
+        color 0.2s ease,
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+.tf-app .console-nav-link {
+    min-height: 62px;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    border-radius: 18px;
+}
+
+.tf-app .console-nav-link:hover,
+.tf-app .console-subnav-link:hover {
+    color: var(--tf-text);
+    border-color: rgba(103, 240, 255, 0.22);
+    background: linear-gradient(90deg, rgba(103, 240, 255, 0.12), rgba(31, 164, 255, 0.05));
+    transform: translateX(2px);
+}
+
+.tf-app .console-nav-link.active,
+.tf-app .console-group-card.active > .console-group-header .console-nav-link,
+.tf-app .console-subnav-link.active {
+    color: #eff9ff;
+    border-color: rgba(103, 240, 255, 0.26);
+    background: linear-gradient(135deg, rgba(103, 240, 255, 0.18), rgba(31, 164, 255, 0.1));
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+        0 0 24px rgba(31, 164, 255, 0.12);
+}
+
+.tf-app .console-nav-token,
+.tf-app .console-subnav-token {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: rgba(7, 17, 31, 0.92);
+    color: var(--tf-accent);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+}
+
+.tf-app .console-nav-token {
+    width: 36px;
+    height: 36px;
+}
+
+.tf-app .console-subnav-token {
+    width: 28px;
+    height: 28px;
+    border-radius: 10px;
+}
+
+.tf-app .console-nav-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tf-app .console-nav-copy strong {
+    color: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+
+.tf-app .console-nav-copy small {
+    color: var(--tf-text-dim);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.tf-app .console-group-card {
+    padding: 10px;
+    border: 1px solid rgba(74, 195, 255, 0.12);
+    border-radius: 22px;
+    background: rgba(6, 15, 28, 0.62);
+}
+
+.tf-app .console-group-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+}
+
+.tf-app .console-nav-link-group {
+    min-height: 58px;
+}
+
+.tf-app .console-group-toggle {
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    border: 1px solid rgba(74, 195, 255, 0.14);
+    border-radius: 14px;
+    background: rgba(8, 18, 32, 0.72);
+    color: var(--tf-text-soft);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+
+.tf-app .console-group-toggle:hover {
+    border-color: rgba(103, 240, 255, 0.26);
+    background: rgba(12, 28, 48, 0.92);
+    color: var(--tf-text);
+}
+
+.tf-app .console-group-caret {
+    width: 10px;
+    height: 10px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform 0.2s ease;
+}
+
+.tf-app .console-group-card.expanded .console-group-caret {
+    transform: rotate(225deg);
+}
+
+.tf-app .console-subnav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 0 2px;
+}
+
+.tf-app .console-subnav-link {
+    min-height: 44px;
+    padding: 0 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 14px;
+    background: rgba(7, 15, 28, 0.46);
+}
+
+.tf-app .console-sidebar-shell-collapsed .console-nav-list {
+    gap: 12px;
+}
+
+.tf-app .console-sidebar-shell-collapsed .console-nav-link {
+    min-height: 60px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.tf-app .console-sidebar-shell-collapsed .console-nav-token {
+    width: 40px;
+    height: 40px;
+}
+
+.tf-app .console-sidebar-foot {
+    padding: 16px;
+    border: 1px solid rgba(74, 195, 255, 0.14);
+    border-radius: 18px;
+    background: rgba(6, 15, 28, 0.78);
+}
+
+.tf-app .content-stack {
+    width: 100%;
+    max-width: 1560px;
+    margin: 0 auto;
+    padding: 18px;
+}
+
+.tf-app .content-stack-tools,
+.tf-app .content-stack-system {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+}
+
+.tf-app .content-stack-workbench {
+    padding: 18px;
+}
+
+.tf-app .section-header-product,
+.tf-app .section-header-workbench {
+    width: 100%;
+    max-width: 1524px;
+    margin: 0 auto;
+}
+
+.tf-app .section-header-product,
+.tf-app .section-header-workbench {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.tf-app .section-header-product > div:first-child,
+.tf-app .section-header-workbench > div:first-child {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 12px 18px;
+    flex-wrap: wrap;
+}
+
+.tf-app .section-header-product > div:first-child .section-kicker,
+.tf-app .section-header-workbench > div:first-child .section-kicker {
+    width: 100%;
+}
+
+.tf-app .section-header .section-subtitle {
+    margin: 0;
+    max-width: 860px;
+}
+
+.tf-app .datasource-browser-shell {
+    min-height: 0;
+}
+
+.tf-app .datasource-browser-header {
+    padding-bottom: 16px;
+}
+
+.tf-app .datasource-browser-toolbar {
+    align-items: flex-start;
+}
+
+.tf-app .directory-shell-head {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+}
+
+.tf-app .directory-shell-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+
+.tf-app .directory-path-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 18px;
+}
+
+.tf-app .directory-root-badge {
+    min-height: 42px;
+    padding: 0 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: linear-gradient(135deg, rgba(39, 131, 191, 0.28), rgba(25, 88, 148, 0.18));
+    color: var(--tf-accent);
+    font-size: 16px;
+    font-weight: 700;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+.tf-app .directory-root-button {
+    border: 0;
+    cursor: pointer;
+}
+
+.tf-app .directory-path-text {
+    min-height: 56px;
+    padding: 0 18px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    border: 1px solid rgba(74, 195, 255, 0.18);
+    border-radius: 16px;
+    background: rgba(11, 22, 40, 0.72);
+    color: #f0f7ff;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+
+.tf-app .directory-path-link {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.tf-app .directory-path-link:hover {
+    color: var(--tf-accent);
+}
+
+.tf-app .directory-path-divider,
+.tf-app .directory-path-static {
+    color: var(--tf-text-soft);
+}
+
+.tf-app .directory-shell-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+
+.tf-app .directory-inline-form {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.tf-app .directory-inline-form .workspace-create-input {
+    width: min(360px, 100%);
+}
+
+.tf-app .datasource-browser-header-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.tf-app .breadcrumb-inline {
+    padding: 0;
+    background: transparent;
+    border: 0;
+}
+
+.tf-app .breadcrumb-separator {
+    color: var(--tf-text-dim);
+    font-size: 14px;
+}
+
+.tf-app .datasource-header-actions {
+    justify-content: flex-end;
+    margin-left: auto;
+}
+
+.tf-app .datasource-current-path {
+    margin-top: 12px;
+    color: var(--tf-text-soft);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.tf-app .datasource-file-list {
+    min-height: 520px;
+}
+
+.tf-app .datasource-file-list-compact {
+    display: grid;
+    gap: 16px;
+    align-content: start;
+    grid-auto-rows: max-content;
+}
+
+.tf-app .file-item-row {
+    display: flex;
+    position: relative;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0;
+    min-height: 108px;
+    overflow: hidden;
+}
+
+.tf-app .file-item-row::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 18px;
+    bottom: 18px;
+    width: 3px;
+    border-radius: 999px;
+    background: linear-gradient(180deg, var(--tf-accent), var(--tf-accent-warm));
+    opacity: 0.9;
+}
+
+.tf-app .file-item-main {
+    flex: 1;
+    min-width: 0;
+    min-height: 108px;
+    display: flex;
+    align-items: center;
+    padding: 22px 26px;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+}
+
+.tf-app .file-item-main:hover {
+    background: rgba(13, 26, 44, 0.38);
+}
+
+.tf-app .file-actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 18px 16px 0;
+}
+
+.tf-app .task-board-shell,
+.tf-app .task-list-shell,
+.tf-app .publish-list-shell {
+    min-height: 0;
+}
+
+.tf-app .task-filter-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 24px;
+}
+
+.tf-app .task-filter-panel-list {
+    border-bottom: 1px solid rgba(74, 195, 255, 0.12);
+}
+
+.tf-app .task-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.tf-app .task-filter-label {
+    color: #f0f7ff;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.tf-app .task-filter-inline {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.tf-app .task-table-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.tf-app .task-list-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.tf-app .task-list-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.tf-app .task-list-item {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1.6fr) minmax(220px, 0.7fr) auto;
+    gap: 18px;
+    align-items: center;
+    padding: 20px 22px;
+    border: 1px solid rgba(74, 195, 255, 0.12);
+    border-radius: 20px;
+    background: rgba(7, 18, 33, 0.72);
+}
+
+.tf-app .task-list-order {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 72px;
+    border: 1px solid rgba(74, 195, 255, 0.14);
+    border-radius: 18px;
+    background: rgba(8, 18, 32, 0.76);
+    color: #f0f7ff;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.tf-app .task-list-main,
+.tf-app .publish-record-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tf-app .task-list-title,
+.tf-app .publish-record-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.tf-app .task-list-title strong,
+.tf-app .publish-record-title strong {
+    color: #f0f7ff;
+    font-size: 17px;
+}
+
+.tf-app .task-list-meta,
+.tf-app .publish-record-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    color: var(--tf-text-soft);
+    font-size: 13px;
+}
+
+.tf-app .task-list-message,
+.tf-app .publish-record-path {
+    color: var(--tf-text-soft);
+    line-height: 1.7;
+    word-break: break-word;
+}
+
+.tf-app .task-list-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tf-app .task-list-progress strong {
+    color: #f0f7ff;
+    font-size: 18px;
+}
+
+.tf-app .task-list-actions,
+.tf-app .publish-record-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.tf-app .task-table-header,
+.tf-app .task-table-row {
+    display: grid;
+    grid-template-columns: 88px minmax(240px, 1.4fr) 140px 150px 190px 190px 170px;
+    gap: 14px;
+    align-items: center;
+}
+
+.tf-app .task-filter-panel-simple {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 20px;
+}
+
+.tf-app .task-filter-regular {
+    display: grid;
+    grid-template-columns: minmax(280px, 1.4fr) repeat(2, minmax(180px, 0.7fr));
+    gap: 16px;
+}
+
+.tf-app .task-filter-regular-wide {
+    grid-template-columns: minmax(320px, 1fr);
+}
+
+.tf-app .task-filter-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.tf-app .task-table-header {
+    padding: 16px 18px;
+    border-radius: 16px;
+    background: rgba(25, 45, 72, 0.58);
+    color: #d8edff;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.tf-app .task-table-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tf-app .task-table-row {
+    padding: 16px 18px;
+    border: 1px solid rgba(74, 195, 255, 0.1);
+    border-radius: 14px;
+    background: rgba(7, 18, 33, 0.72);
+}
+
+.tf-app .task-table-cell {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--tf-text-soft);
+    justify-content: center;
+}
+
+.tf-app .task-table-index {
+    color: #f0f7ff;
+    font-size: 18px;
+    font-weight: 700;
+    justify-content: center;
+}
+
+.tf-app .task-table-name strong,
+.tf-app .task-table-progress strong {
+    color: #f0f7ff;
+    font-size: 16px;
+}
+
+.tf-app .task-table-name span,
+.tf-app .publish-table-cell span {
+    line-height: 1.6;
+}
+
+.tf-app .task-table-status {
+    align-items: center;
+    justify-content: center;
+}
+
+.tf-app .task-table-progress {
+    justify-content: center;
+    align-items: center;
+}
+
+.tf-app .task-progress-message {
+    line-height: 1.6;
+}
+
+.tf-app .task-table-actions {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    align-items: center;
+    align-self: center;
+}
+
+.tf-app .publish-table {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.tf-app .publish-table-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.tf-app .publish-record-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.tf-app .publish-record-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: center;
+    padding: 20px 22px;
+    border: 1px solid rgba(74, 195, 255, 0.12);
+    border-radius: 20px;
+    background: rgba(7, 18, 33, 0.72);
+}
+
+.tf-app .publish-table-header,
+.tf-app .publish-table-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.95fr) minmax(200px, 0.8fr) minmax(170px, 0.72fr) minmax(320px, 1.4fr) 140px 180px 220px;
+    gap: 14px;
+    align-items: center;
+}
+
+.tf-app .publish-table-header {
+    padding: 16px 18px;
+    border-radius: 16px;
+    background: rgba(25, 45, 72, 0.58);
+    color: #d8edff;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.tf-app .publish-table-row {
+    padding: 16px 18px;
+    border: 1px solid rgba(74, 195, 255, 0.1);
+    border-radius: 14px;
+    background: rgba(7, 18, 33, 0.72);
+}
+
+.tf-app .publish-table-cell {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--tf-text-soft);
+    justify-content: center;
+}
+
+.tf-app .publish-table-cell strong {
+    color: #f0f7ff;
+}
+
+.tf-app .publish-table-path {
+    word-break: break-word;
+}
+
+.tf-app .publish-table-actions {
+    align-items: center;
+    flex-direction: row;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+}
+
+.tf-app .publish-link {
+    color: var(--tf-accent);
+    text-decoration: none;
+    word-break: break-all;
+}
+
+.tf-app .publish-link:hover {
+    color: #ffffff;
+    text-decoration: underline;
+}
+
+.tf-app .publish-modal-form {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.tf-app .publish-source-mode {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.tf-app .publish-source-preview {
+    margin-top: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 14px;
+    background: rgba(7, 18, 33, 0.62);
+    color: var(--tf-text-soft);
+    line-height: 1.6;
+}
+
+.tf-app .publish-source-preview-empty {
+    color: var(--tf-text-dim);
+}
+
+.tf-app .task-detail-modal,
+.tf-app .publish-create-modal,
+.tf-app .publish-detail-modal {
+    width: min(980px, calc(100vw - 48px));
+}
+
+.tf-app .task-detail-body,
+.tf-app .publish-detail-body {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.tf-app .task-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.tf-app .task-detail-section-title {
+    color: #f0f7ff;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+}
+
+.tf-app .task-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.tf-app .task-detail-grid-result,
+.tf-app .publish-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tf-app .task-detail-card {
+    min-width: 0;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 16px;
+    background: rgba(7, 18, 33, 0.68);
+}
+
+.tf-app .task-detail-card span {
+    color: var(--tf-text-dim);
+    font-size: 12px;
+    letter-spacing: 0.4px;
+}
+
+.tf-app .task-detail-card strong {
+    color: #f0f7ff;
+    font-size: 15px;
+    line-height: 1.6;
+    word-break: break-word;
+}
+
+.tf-app .task-detail-message-box {
+    padding: 16px 18px;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 16px;
+    background: rgba(7, 18, 33, 0.62);
+    color: var(--tf-text-soft);
+    line-height: 1.8;
+    word-break: break-word;
+}
+
+.tf-app .task-event-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.tf-app .task-event-item {
+    padding: 14px 16px;
+    border: 1px solid rgba(74, 195, 255, 0.14);
+    border-radius: 14px;
+    background: rgba(7, 18, 33, 0.58);
+}
+
+.tf-app .task-event-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+    color: var(--tf-text-soft);
+}
+
+.tf-app .task-event-head strong {
+    color: #f0f7ff;
+    font-size: 14px;
+}
+
+.tf-app .task-event-body {
+    color: var(--tf-text-soft);
+    line-height: 1.7;
+}
+
+.tf-app .datasource-detail-content {
+    width: min(860px, calc(100vw - 48px));
+}
+
+.tf-app .datasource-import-content {
+    width: min(720px, calc(100vw - 48px));
+}
+
+.tf-app .datasource-upload-note {
+    margin-top: 18px;
+}
+
+.tf-app .sidebar-slide-enter-active,
+.tf-app .sidebar-slide-leave-active {
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    transform-origin: top center;
+}
+
+.tf-app .sidebar-slide-enter-from,
+.tf-app .sidebar-slide-leave-to {
+    opacity: 0;
+    transform: translateY(-8px);
+}
+
+.tf-app .section-header-workbench {
+    padding: 18px 22px;
+    align-items: center;
+    gap: 14px;
+}
+
+.tf-app .section-header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+}
+
+.tf-app .section-header-workbench .section-subtitle {
+    max-width: 860px;
+    line-height: 1.6;
+}
+
+.tf-app .form-section {
+    padding: 22px 22px 24px;
+}
+
+.tf-app .form-section h3 {
+    margin: 0;
+    font-size: 20px;
+}
+
+.tf-app .form-row {
+    gap: 22px;
+}
+
+.tf-app .band-source-hint {
+    margin: 0 0 14px;
+}
+
+.tf-app .workbench-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.tf-app .tool-workbench {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.tf-app .tool-workbench-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+}
+
+.tf-app .tool-workbench-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.82fr);
+    gap: 24px;
+    align-items: start;
+}
+
+.tf-app .tool-workbench-grid-tight {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 0.9fr);
+}
+
+.tf-app .tool-workbench-main {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.tf-app .tool-result-panel {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 22px;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 20px;
+    background: rgba(5, 13, 24, 0.86);
+}
+
+.tf-app .tool-result-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.tf-app .tool-result-header h3 {
+    margin: 0;
+    font-size: 17px;
+}
+
+.tf-app .artifact-list {
+    display: grid;
+    gap: 14px;
+}
+
+.tf-app .workbench-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+}
+
+.tf-app .workbench-section-wide {
+    grid-column: 1 / -1;
+}
+
+.tf-app .workbench-section-lead {
+    padding-top: 30px;
+}
+
+.tf-app .workbench-section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 22px;
+}
+
+.tf-app .workbench-note {
+    margin: 12px 0 0;
+    color: var(--tf-text-soft);
+    font-size: 13px;
+    line-height: 1.75;
+}
+
+.tf-app .workbench-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.tf-app .workbench-chip {
+    min-height: 34px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid rgba(74, 195, 255, 0.16);
+    border-radius: 999px;
+    background: rgba(8, 18, 32, 0.72);
+    color: var(--tf-text-soft);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.tf-app .form-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.tf-app .workbench-actions {
+    padding: 6px 4px 2px;
+    justify-content: flex-end;
+}
+
+.tf-app .workbench-actions-hero {
+    width: 100%;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 12px;
+    padding-top: 4px;
+}
+
+.tf-app .btn-hero {
+    width: auto;
+    min-width: 240px;
+    min-height: 48px;
+    padding: 0 26px;
+    font-size: 15px;
+    letter-spacing: 0.8px;
+    border-radius: 18px;
+    position: relative;
+    overflow: hidden;
+    box-shadow:
+        0 16px 34px rgba(18, 120, 211, 0.28),
+        0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+        0 0 36px rgba(103, 240, 255, 0.2);
+}
+
+.tf-app .btn-hero::before {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    border-radius: 17px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), transparent 22%, transparent 78%, rgba(255, 255, 255, 0.08));
+    pointer-events: none;
+}
+
+.tf-app .btn-header-action {
+    min-width: 180px;
+    min-height: 44px;
+    padding: 0 22px;
+    border-radius: 16px;
+    font-size: 14px;
+    letter-spacing: 0.4px;
+}
+
+.tf-app .status-chip-running {
+    color: #062337;
+    background: linear-gradient(135deg, rgba(103, 240, 255, 0.92), rgba(31, 164, 255, 0.88));
+    border-color: transparent;
+}
+
+.tf-app .status-chip-completed {
+    color: #05281f;
+    background: linear-gradient(135deg, rgba(81, 237, 179, 0.92), rgba(35, 185, 137, 0.88));
+    border-color: transparent;
+}
+
+.tf-app .status-chip-failed {
+    color: #fff1f4;
+    background: linear-gradient(135deg, rgba(209, 73, 102, 0.92), rgba(153, 31, 74, 0.9));
+    border-color: transparent;
+}
+
+.tf-app .status-chip-stopped {
+    color: #f6f0df;
+    background: linear-gradient(135deg, rgba(198, 151, 68, 0.92), rgba(158, 112, 35, 0.88));
+    border-color: transparent;
+}
+
+.tf-app .status-chip-queued,
+.tf-app .status-chip-unknown {
+    color: var(--tf-text);
+    background: rgba(13, 28, 46, 0.88);
+}
+
+@media (max-width: 1200px) {
+    .tf-app .header-context-caption,
+    .tf-app .status-strip {
+        display: none;
+    }
+}
+
+@media (max-width: 960px) {
+    .tf-app .console-shell,
+    .tf-app .console-shell.console-shell-collapsed {
+        grid-template-columns: 1fr;
+        gap: 18px;
+    }
+
+    .tf-app .console-sidebar-shell,
+    .tf-app .console-sidebar-shell-collapsed {
+        max-height: 360px;
+    }
+
+    .tf-app .header {
+        padding: 0 18px;
+    }
+
+    .tf-app .header-context {
+        display: none;
+    }
+
+    .tf-app .workbench-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .tf-app .workbench-section-head {
+        flex-direction: column;
+    }
+
+    .tf-app .workbench-chip-row {
+        justify-content: flex-start;
+    }
+
+    .tf-app .tool-workbench-grid,
+    .tf-app .tool-workbench-grid-tight {
+        grid-template-columns: 1fr;
+    }
+
+    .tf-app .tool-workbench-head {
+        flex-direction: column;
+    }
+
+    .tf-app .file-item-row {
+        flex-direction: column;
+    }
+
+    .tf-app .file-actions {
+        padding: 0 18px 18px;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .tf-app .directory-shell-toolbar,
+    .tf-app .task-filter-panel,
+    .tf-app .task-table-header,
+    .tf-app .task-table-row,
+    .tf-app .publish-table-header,
+    .tf-app .publish-table-row {
+        grid-template-columns: 1fr;
+    }
+
+    .tf-app .task-list-item,
+    .tf-app .publish-record-item {
+        grid-template-columns: 1fr;
+    }
+
+    .tf-app .task-filter-inline {
+        grid-template-columns: 1fr;
+    }
+
+    .tf-app .task-table-actions,
+    .tf-app .publish-table-actions,
+    .tf-app .task-list-actions,
+    .tf-app .publish-record-actions {
+        justify-content: flex-start;
+        align-items: flex-start;
+    }
+
+    .tf-app .task-detail-grid,
+    .tf-app .task-detail-grid-result,
+    .tf-app .publish-detail-grid,
+    .tf-app .task-filter-regular {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 720px) {
+    .tf-app .console-shell {
+        padding: 16px;
+    }
+
+    .tf-app .section-header {
+        flex-direction: column;
+        padding: 18px;
+    }
+
+    .tf-app .product-grid-2 {
+        grid-template-columns: 1fr;
+    }
+
+    .tf-app .map-tiles-container,
+    .tf-app .tool-page-container,
+    .tf-app .system-page-container {
+        padding: 16px;
+    }
+
+    .tf-app .form-section {
+        padding: 20px 18px;
+    }
+
+    .tf-app .content-stack,
+    .tf-app .content-stack-workbench {
+        padding: 16px;
+    }
+
+    .tf-app .section-header-product > div:first-child,
+    .tf-app .section-header-workbench > div:first-child {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .tf-app .workspace-create-input {
+        width: 100%;
+    }
+
+    .tf-app .form-row,
+    .tf-app .form-row-3,
+    .tf-app .checkbox-grid,
+    .tf-app .path-field {
+        grid-template-columns: 1fr;
+        display: grid;
+    }
+
+    .tf-app .path-field-actions {
+        justify-content: flex-start;
+    }
+
+    .tf-app .datasource-browser-header-main {
+        align-items: stretch;
+    }
+
+    .tf-app .datasource-header-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .tf-app .directory-path-row,
+    .tf-app .directory-current-row {
+        grid-template-columns: 1fr;
+        display: grid;
+    }
+
+    .tf-app .workspace-header-actions,
+    .tf-app .task-header-tools {
+        width: 100%;
+        justify-content: stretch;
+    }
+
+    .tf-app .section-header-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .tf-app .directory-inline-form {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .tf-app .workspace-create-group {
+        grid-template-columns: 1fr;
+        width: 100%;
+    }
+
+    .tf-app .btn-header-action {
+        width: 100%;
+    }
+}

@@ -1,0 +1,15 @@
+# Frontend build and dependencies
+frontend/node_modules/
+frontend/dist/
+
+# Python cache
+backend/__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Runtime artifacts
+runtime/
+
+# OS/editor
+.DS_Store
+Thumbs.db

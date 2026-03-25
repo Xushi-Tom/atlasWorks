@@ -1,0 +1,67 @@
+services:
+  atlasworks-postgres:
+    image: ${ATLASWORKS_POSTGRES_IMAGE:-postgres:15}
+    container_name: atlasworks-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atlasworks
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: atlasworks
+    ports:
+      - "25432:5432"
+    volumes:
+      - ./runtime/postgres:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d atlasworks"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  atlasworks-api:
+    image: atlasworks:release-2.0.0
+    build:
+      context: ..
+      dockerfile: atlasWorks/deploy/docker/Dockerfile
+    container_name: atlasworks-api
+    restart: unless-stopped
+    depends_on:
+      atlasworks-postgres:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      ATLASWORKS_WORKERS: 1
+      ATLASWORKS_THREADS: 4
+      ATLASWORKS_PUBLIC_BASE_URL: ${ATLASWORKS_PUBLIC_BASE_URL:-}
+      ATLASWORKS_PUBLIC_BASE_MODE: ${ATLASWORKS_PUBLIC_BASE_MODE:-container_ip}
+      ATLASWORKS_PUBLIC_BASE_PORT: ${ATLASWORKS_PUBLIC_BASE_PORT:-8000}
+      ATLASWORKS_DOCS_USER: ${ATLASWORKS_DOCS_USER:-}
+      ATLASWORKS_DOCS_PASSWORD: ${ATLASWORKS_DOCS_PASSWORD:-Su19960624Xhi}
+      ATLASWORKS_DATA_SOURCE_DIR: /app/dataSource
+      ATLASWORKS_DATA_SOURCE_HOST_DIR: D:/TIF
+      ATLASWORKS_TILES_DIR: /app/tiles
+      ATLASWORKS_TILES_HOST_DIR: D:/tiles
+      ATLASWORKS_LOG_DIR: /app/log
+      ATLASWORKS_LOG_HOST_DIR: ./runtime/log
+      TF_DB_ENABLED: "1"
+      TF_DB_HOST: atlasworks-postgres
+      TF_DB_PORT: 5432
+      TF_DB_NAME: atlasworks
+      TF_DB_USER: postgres
+      TF_DB_PASSWORD: atlasworks
+      TF_DB_SSLMODE: disable
+      TF_TASK_SYNC_ENABLED: "1"
+      TF_TASK_SYNC_INTERVAL: 2
+    ports:
+      - "${ATLASWORKS_HOST_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes:
+      - "D:/TIF:/app/dataSource"
+      - "D:/tiles:/app/tiles"
+      - ./runtime/log:/app/log
