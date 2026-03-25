@@ -30,10 +30,12 @@ const form = reactive({
 });
 
 const createVisible = ref(false);
+const detailVisible = ref(false);
 const keyword = ref('');
 const publications = ref([]);
 const tasks = ref([]);
 const editingPublicationId = ref('');
+const currentPublication = ref(null);
 
 const publishMethodCatalog = {
     imagery: [
@@ -212,6 +214,11 @@ function editPublication(item) {
     form.visibility = item.metadata?.visibility || 'private';
     form.note = item.metadata?.note || '';
     createVisible.value = true;
+}
+
+function openPublicationDetail(item) {
+    currentPublication.value = item || null;
+    detailVisible.value = true;
 }
 
 async function togglePublicationStatus(item, explicitEnabled = null) {
@@ -399,7 +406,7 @@ onMounted(async () => {
                                     {{ formatDateTime(row.publishedAt || row.createdAt) }}
                                 </template>
                             </el-table-column>
-                            <el-table-column label="操作" width="260" fixed="right">
+                            <el-table-column label="操作" width="330" fixed="right">
                                 <template #default="{ row }">
                                     <div class="publish-table-actions">
                                         <el-switch
@@ -409,6 +416,7 @@ onMounted(async () => {
                                             inline-prompt
                                             @change="value => togglePublicationStatus(row, value)"
                                         />
+                                        <el-button size="small" @click="openPublicationDetail(row)">详情</el-button>
                                         <el-button size="small" @click="editPublication(row)">编辑</el-button>
                                         <el-button size="small" type="danger" @click="removePublication(row)">删除</el-button>
                                     </div>
@@ -430,7 +438,7 @@ onMounted(async () => {
                 </el-form-item>
 
                 <el-form-item v-if="form.sourceMode === 'task'" label="任务结果">
-                    <el-select v-model="form.taskId" filterable placeholder="请选择已完成任务">
+                    <el-select v-model="form.taskId" filterable placeholder="请选择已完成任务" popper-class="publish-select-popper">
                         <el-option v-for="task in publishableTasks" :key="task.taskId" :label="`${task.taskId} / ${getTaskResultPath(task)}`" :value="task.taskId" />
                     </el-select>
                     <div v-if="selectedTask" class="publish-source-preview">
@@ -456,7 +464,7 @@ onMounted(async () => {
                 </el-form-item>
 
                 <el-form-item label="发布类型">
-                    <el-select v-model="form.publishType">
+                    <el-select v-model="form.publishType" popper-class="publish-select-popper">
                         <el-option label="地图 / 遥感" value="imagery" />
                         <el-option label="地图 / 电子地图" value="electronic-map" />
                         <el-option label="地形" value="terrain" />
@@ -466,13 +474,13 @@ onMounted(async () => {
                 </el-form-item>
 
                 <el-form-item label="发布方式">
-                    <el-select v-model="form.publishMethod">
+                    <el-select v-model="form.publishMethod" popper-class="publish-select-popper">
                         <el-option v-for="option in publishMethodOptions" :key="option.value" :label="option.label" :value="option.value" />
                     </el-select>
                 </el-form-item>
 
                 <el-form-item label="可见性">
-                    <el-select v-model="form.visibility">
+                    <el-select v-model="form.visibility" popper-class="publish-select-popper">
                         <el-option label="私有" value="private" />
                         <el-option label="内部" value="internal" />
                         <el-option label="公开" value="public" />
@@ -491,6 +499,62 @@ onMounted(async () => {
             <template #footer>
                 <el-button @click="createVisible = false">取消</el-button>
                 <el-button type="primary" @click="submitPublication">{{ editingPublicationId ? '保存修改' : '创建发布' }}</el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog v-model="detailVisible" class="publish-detail-dialog" title="发布详情" width="760px" destroy-on-close>
+            <div v-if="currentPublication" class="publish-detail-grid">
+                <div class="detail-item">
+                    <span class="detail-label">发布 ID</span>
+                    <span class="detail-value">{{ currentPublication.publicationId || '-' }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">发布名称</span>
+                    <span class="detail-value">{{ currentPublication.alias || '-' }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">发布类型</span>
+                    <span class="detail-value">{{ getPublishTypeLabel(currentPublication.publishType) }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">发布方式</span>
+                    <span class="detail-value">{{ getPublishMethodLabel(currentPublication.publishType, currentPublication.metadata?.publishMethod) }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">可见性</span>
+                    <span class="detail-value">{{ getVisibilityLabel(currentPublication.metadata?.visibility) }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">状态</span>
+                    <span class="detail-value">{{ getPublicationStatusLabel(currentPublication.status) }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">启用状态</span>
+                    <span class="detail-value">{{ isPublicationEnabled(currentPublication) ? '启用' : '停用' }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">发布时间</span>
+                    <span class="detail-value">{{ formatDateTime(currentPublication.publishedAt || currentPublication.createdAt) }}</span>
+                </div>
+                <div class="detail-item detail-item-full">
+                    <span class="detail-label">发布地址</span>
+                    <span class="detail-value detail-break">{{ currentPublication.accessUrl || currentPublication.publishPath || '-' }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">任务 ID</span>
+                    <span class="detail-value">{{ currentPublication.metadata?.taskId || '-' }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">工作目录</span>
+                    <span class="detail-value detail-break">{{ currentPublication.metadata?.workspacePath || '-' }}</span>
+                </div>
+                <div class="detail-item detail-item-full">
+                    <span class="detail-label">发布说明</span>
+                    <span class="detail-value detail-break">{{ currentPublication.metadata?.note || '-' }}</span>
+                </div>
+            </div>
+            <template #footer>
+                <el-button @click="detailVisible = false">关闭</el-button>
             </template>
         </el-dialog>
 
@@ -522,6 +586,40 @@ onMounted(async () => {
 .publish-table-actions :deep(.el-button) {
     min-width: 58px;
     padding-inline: 12px;
+}
+
+.publish-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.detail-item {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(74, 195, 255, 0.18);
+    background: rgba(6, 18, 32, 0.75);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.detail-item-full {
+    grid-column: 1 / -1;
+}
+
+.detail-label {
+    font-size: 12px;
+    color: var(--tf-text-dim);
+}
+
+.detail-value {
+    color: var(--tf-text);
+    font-size: 14px;
+}
+
+.detail-break {
+    word-break: break-all;
 }
 
 .path-field {
@@ -609,6 +707,29 @@ onMounted(async () => {
     background: rgba(31, 164, 255, 0.16) !important;
 }
 
+.publish-list-shell :deep(.el-table__fixed-right),
+.publish-list-shell :deep(.el-table__fixed-right .el-table__fixed-header-wrapper),
+.publish-list-shell :deep(.el-table__fixed-right .el-table__fixed-body-wrapper),
+.publish-list-shell :deep(.el-table__fixed-right-patch) {
+    background: #061220 !important;
+}
+
+.publish-list-shell :deep(.el-table__fixed-right th.el-table__cell) {
+    background: #0d223c !important;
+}
+
+.publish-list-shell :deep(.el-table__fixed-right .el-table__body tr.el-table__row > td.el-table__cell) {
+    background: #061220 !important;
+}
+
+.publish-list-shell :deep(.el-table__fixed-right .el-table__body tr.el-table__row--striped > td.el-table__cell) {
+    background: #0d1f34 !important;
+}
+
+.publish-list-shell :deep(.el-table__fixed-right .el-table__body tr.el-table__row:hover > td.el-table__cell) {
+    background: #12314d !important;
+}
+
 .publish-list-shell :deep(.el-switch__label) {
     color: var(--tf-text-soft);
 }
@@ -680,9 +801,52 @@ onMounted(async () => {
     --el-switch-off-color: rgba(74, 195, 255, 0.34);
 }
 
+:deep(.publish-detail-dialog.el-dialog) {
+    background: linear-gradient(160deg, rgba(4, 14, 26, 0.96), rgba(9, 24, 42, 0.97));
+    border: 1px solid rgba(74, 195, 255, 0.3);
+    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.5);
+}
+
+:deep(.publish-detail-dialog .el-dialog__header) {
+    border-bottom: 1px solid rgba(74, 195, 255, 0.2);
+    margin-right: 0;
+}
+
+:deep(.publish-detail-dialog .el-dialog__title),
+:deep(.publish-detail-dialog .el-dialog__close) {
+    color: var(--tf-text);
+}
+
+:global(.publish-select-popper.el-popper) {
+    background: linear-gradient(170deg, rgba(6, 16, 30, 0.98), rgba(8, 24, 42, 0.98));
+    border: 1px solid rgba(74, 195, 255, 0.28);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
+:global(.publish-select-popper .el-select-dropdown__item) {
+    color: var(--tf-text-soft);
+    font-weight: 500;
+}
+
+:global(.publish-select-popper .el-select-dropdown__item.is-hovering),
+:global(.publish-select-popper .el-select-dropdown__item:hover) {
+    background: rgba(31, 164, 255, 0.2);
+    color: var(--tf-text);
+}
+
+:global(.publish-select-popper .el-select-dropdown__item.is-selected) {
+    color: #7dd8ff;
+    background: rgba(31, 164, 255, 0.25);
+    font-weight: 700;
+}
+
 @media (max-width: 960px) {
     .publish-table-actions {
         flex-wrap: wrap;
+    }
+
+    .publish-detail-grid {
+        grid-template-columns: 1fr;
     }
 
     .path-field {

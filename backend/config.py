@@ -36,7 +36,7 @@ def _env(*names, default=None):
 # 全局配置
 config = {
     "host": "0.0.0.0",
-    "port": _as_int(os.environ.get("PORT"), 8000),
+    "port": _as_int(os.environ.get("PORT"), 18000),
     "debug": _as_bool(os.environ.get("DEBUG"), False),
     "publicBaseUrl": _env("ATLASWORKS_PUBLIC_BASE_URL", "TERRAFORGE_PUBLIC_BASE_URL", default=""),
     "publicBaseMode": _env("ATLASWORKS_PUBLIC_BASE_MODE", "TERRAFORGE_PUBLIC_BASE_MODE", default="auto"),
