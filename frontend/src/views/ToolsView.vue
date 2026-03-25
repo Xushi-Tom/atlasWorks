@@ -304,8 +304,20 @@ onMounted(() => {
                 <h2>{{ currentMeta.title }}</h2>
                 <p class="section-subtitle">{{ currentMeta.subtitle }}</p>
             </div>
-            <div v-if="currentTab === 'toolArtifacts'" class="tool-actions">
-                <button class="btn btn-secondary" type="button" @click="loadArtifacts">刷新索引</button>
+            <div class="tool-actions">
+                <button v-if="currentTab === 'toolArtifacts'" class="btn btn-secondary" type="button" @click="loadArtifacts">刷新索引</button>
+            </div>
+        </div>
+        <div class="view-subnav">
+            <div class="subnav-tabs">
+                <button
+                    v-for="tab in tabs"
+                    :key="tab.id"
+                    class="subnav-tab"
+                    :class="{ active: currentTab === tab.id }"
+                    type="button"
+                    @click="currentTab = tab.id"
+                >{{ tab.label }}</button>
             </div>
         </div>
 

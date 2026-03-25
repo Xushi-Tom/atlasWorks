@@ -445,6 +445,11 @@ body.tf-app::after {
     width: 100%;
 }
 
+.tf-app .view-subnav {
+    padding: 0 24px 14px;
+    flex-shrink: 0;
+}
+
 .tf-app .subnav-tabs {
     display: inline-flex;
     align-items: center;

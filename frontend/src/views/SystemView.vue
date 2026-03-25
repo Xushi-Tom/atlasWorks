@@ -66,6 +66,13 @@ const currentLabel = computed(() => {
                 <p class="section-subtitle">集中查看平台健康、接口清单与运行配置，支撑服务巡检、问题定位与运维决策。</p>
             </div>
         </div>
+        <div class="view-subnav">
+            <div class="subnav-tabs">
+                <button class="subnav-tab" :class="{ active: currentTab === 'systemUpdates' }" type="button" @click="currentTab = 'systemUpdates'">系统更新</button>
+                <button class="subnav-tab" :class="{ active: currentTab === 'systemRoutes' }" type="button" @click="currentTab = 'systemRoutes'">API 路由</button>
+                <button class="subnav-tab" :class="{ active: currentTab === 'systemConfig' }" type="button" @click="currentTab = 'systemConfig'">系统配置</button>
+            </div>
+        </div>
 
         <div class="app-scroll">
             <div class="content-stack content-stack-system">
