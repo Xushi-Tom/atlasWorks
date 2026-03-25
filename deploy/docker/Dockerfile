@@ -77,7 +77,7 @@ RUN sed -i 's/\r$//' /entrypoint.sh \
     && ctb-tile --version >/tmp/ctb-version.txt \
     && gdalinfo --version >/tmp/gdal-version.txt
 
-EXPOSE 8000
+EXPOSE 18000
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD []
