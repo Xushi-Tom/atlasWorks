@@ -485,8 +485,9 @@ def deleteTaskSnapshot(task_id):
         conn = _get_connection()
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM tf_build_jobs WHERE id = %s", (str(task_id),))
+            deleted_rows = cursor.rowcount
         conn.commit()
-        return True
+        return deleted_rows > 0
     except Exception as exc:
         if conn:
             conn.rollback()

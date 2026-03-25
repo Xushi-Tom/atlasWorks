@@ -219,35 +219,48 @@ def stopTask(taskId):
 def deleteTask(taskId):
     try:
         logMessage(f"收到删除任务请求: {taskId}", "INFO")
+        deleted_from_memory = False
+        deleted_from_database = False
+
         with taskLock:
-            if taskId not in taskStatus:
-                logMessage(f"删除任务失败: 任务不存在 {taskId}", "WARNING")
-                return jsonify({"error": "任务不存在"}), 404
+            task_info = taskStatus.get(taskId)
+            if task_info is not None:
+                if task_info.get("status") == "running":
+                    stopTaskProcess(taskId)
+                    task_info["status"] = "stopped"
+                    task_info["message"] = "任务已停止并删除"
+                    logMessage(f"正在运行的任务 {taskId} 已标记为停止", "INFO")
 
-            if taskStatus[taskId].get("status") == "running":
-                stopTaskProcess(taskId)
-                taskStatus[taskId]["status"] = "stopped"
-                taskStatus[taskId]["message"] = "任务已停止并删除"
-                logMessage(f"正在运行的任务 {taskId} 已标记为停止", "INFO")
+                try:
+                    if taskId in taskProcesses:
+                        process_or_thread = taskProcesses[taskId]
+                        if hasattr(process_or_thread, "terminate"):
+                            process_or_thread.terminate()
+                        del taskProcesses[taskId]
+                        logMessage(f"任务进程已终止: {taskId}", "INFO")
+                except Exception as exc:
+                    logMessage(f"终止任务进程时出错: {taskId}, 错误: {str(exc)}", "WARNING")
 
-            try:
-                if taskId in taskProcesses:
-                    process_or_thread = taskProcesses[taskId]
-                    if hasattr(process_or_thread, "terminate"):
-                        process_or_thread.terminate()
-                    del taskProcesses[taskId]
-                    logMessage(f"任务进程已终止: {taskId}", "INFO")
-            except Exception as exc:
-                logMessage(f"终止任务进程时出错: {taskId}, 错误: {str(exc)}", "WARNING")
+                del taskStatus[taskId]
+                deleted_from_memory = True
 
-            del taskStatus[taskId]
-            deleteTaskSnapshot(taskId)
+        # 列表会合并内存与数据库任务，因此删除时需要同时覆盖数据库快照。
+        deleted_from_database = deleteTaskSnapshot(taskId)
 
-        logMessage(f"任务删除成功: {taskId}", "INFO")
+        if not deleted_from_memory and not deleted_from_database:
+            logMessage(f"删除任务失败: 任务不存在 {taskId}", "WARNING")
+            return jsonify({"error": "任务不存在"}), 404
+
+        logMessage(
+            f"任务删除成功: {taskId} (memory={deleted_from_memory}, database={deleted_from_database})",
+            "INFO",
+        )
         return jsonify({
             "success": True,
             "message": "任务已删除",
             "taskId": taskId,
+            "deletedFromMemory": deleted_from_memory,
+            "deletedFromDatabase": deleted_from_database,
         })
     except Exception as exc:
         logMessage(f"删除任务异常: {taskId}, 错误: {str(exc)}", "ERROR")
