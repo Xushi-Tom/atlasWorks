@@ -370,7 +370,7 @@ watch(themeMode, value => {
     <div class="desktop-shell">
         <div class="desktop-workspace">
             <main ref="canvasRef" class="desktop-canvas">
-                <div class="desktop-watermark">terra forge</div>
+                <div class="desktop-watermark">AtlasWorks</div>
                 <section class="desktop-shortcuts">
                     <button
                         v-for="app in shortcutApps"
@@ -378,7 +378,7 @@ watch(themeMode, value => {
                         class="desktop-shortcut"
                         :class="{ opened: isAppOpened(app.section) }"
                         type="button"
-                        @click="openWindow(app.section)"
+                        @dblclick="openWindow(app.section)"
                     >
                         <span class="desktop-shortcut-token">{{ app.token }}</span>
                         <span class="desktop-shortcut-label">{{ app.label }}</span>
