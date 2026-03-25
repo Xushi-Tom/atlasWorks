@@ -1,0 +1,98 @@
+# GeoTiler - 地理瓦片工具
+# 基于cesium-terrain-builder，增强GDAL地图切片功能
+# 支持CTB地形切片 + GDAL地图切片的统一镜像
+
+# 第一阶段：获取CTB源码
+FROM debian:buster-slim AS fetch
+WORKDIR /ctbtemp
+
+# 安装基本工具
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# 获取CTB源码
+RUN git clone -b master-quantized-mesh --depth 1 \
+    https://github.com/ahuarte47/cesium-terrain-builder.git
+
+# 第二阶段：构建CTB
+FROM debian:buster-slim AS build
+WORKDIR /ctbtemp
+
+# 复制CTB源码
+COPY --from=fetch /ctbtemp/cesium-terrain-builder /ctbtemp/cesium-terrain-builder
+WORKDIR /ctbtemp/cesium-terrain-builder
+
+# 安装构建工具
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    cmake \
+    build-essential \
+    libgdal-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# 构建CTB
+RUN mkdir build && \
+    cd build && \
+    cmake .. && \
+    make install
+
+# 第三阶段：运行时环境
+FROM debian:buster-slim
+LABEL maintainer="TerraForge Team"
+LABEL description="GeoTiler - 地理瓦片处理工具，支持CTB地形切片和GDAL地图切片"
+
+# 复制CTB二进制文件和库
+COPY --from=build /usr/local/include/ctb /usr/local/include/ctb
+COPY --from=build /usr/local/lib/libctb.so /usr/local/lib/libctb.so
+COPY --from=build /usr/local/bin/ctb-* /usr/local/bin/
+
+# 安装运行时依赖
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gdal-bin \
+    python3 \
+    python3-gdal \
+    python3-pip \
+    python3-setuptools \
+    curl \
+    wget && \
+    ldconfig && \
+    rm -rf /var/lib/apt/lists/*
+
+# 安装必要的Python包
+RUN pip3 install --no-cache-dir pillow
+
+# 确保gdal2tiles.py可用
+RUN if [ ! -f /usr/bin/gdal2tiles.py ] && [ -f /usr/share/gdal/gdal2tiles.py ]; then \
+      ln -s /usr/share/gdal/gdal2tiles.py /usr/bin/gdal2tiles.py && \
+      chmod +x /usr/bin/gdal2tiles.py; \
+    elif [ ! -f /usr/bin/gdal2tiles.py ]; then \
+      echo "正在下载gdal2tiles.py..." && \
+      wget https://raw.githubusercontent.com/OSGeo/gdal/v2.4.0/gdal/swig/python/scripts/gdal2tiles.py -O /usr/bin/gdal2tiles.py && \
+      chmod +x /usr/bin/gdal2tiles.py; \
+    fi
+
+# 验证GDAL版本和gdal2tiles.py
+RUN gdal-config --version && \
+    python3 -c "from osgeo import gdal; print('GDAL Python版本:', gdal.__version__)" && \
+    ls -la /usr/bin/gdal2tiles.py || true
+
+# 设置环境变量
+ENV GDAL_CACHEMAX=4096
+ENV GDAL_NUM_THREADS=ALL_CPUS
+ENV GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
+ENV CPL_VSIL_CURL_CACHE_SIZE=268435456
+
+# 创建数据目录
+WORKDIR /data
+RUN mkdir -p /data/input /data/output /data/temp
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD gdal-config --version && ctb-tile --version || exit 1
+
+# 默认命令
+CMD ["sh", "-c", "echo 'GeoTiler - 地理瓦片工具'; echo 'CTB版本:'; ctb-tile --version; echo 'GDAL版本:'; gdal-config --version; echo '使用方法:'; echo '  CTB地形切片: ctb-tile [参数]'; echo '  GDAL地图切片: gdal2tiles.py [参数]'"]

@@ -21,8 +21,8 @@ services:
   atlasworks-api:
     image: atlasworks:release-2.0.0
     build:
-      context: ..
-      dockerfile: atlasWorks/deploy/docker/Dockerfile
+      context: .
+      dockerfile: deploy/docker/Dockerfile
     container_name: atlasworks-api
     restart: unless-stopped
     depends_on:

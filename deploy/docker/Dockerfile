@@ -66,9 +66,9 @@ WORKDIR /app
 RUN mkdir -p /app/dataSource /app/tiles /app/log /app/logs \
     && chmod -R 777 /app
 
-COPY atlasWorks/backend/ /app/
-COPY atlasWorks/frontend/dist/ /app/static/
-COPY atlasWorks/deploy/docker/entrypoint.sh /entrypoint.sh
+COPY backend/ /app/
+COPY frontend/dist/ /app/static/
+COPY deploy/docker/entrypoint.sh /entrypoint.sh
 
 RUN sed -i 's/\r$//' /entrypoint.sh \
     && chmod +x /app/app.py /entrypoint.sh \
