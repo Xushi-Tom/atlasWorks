@@ -46,8 +46,7 @@ onMounted(load);
         <div class="section-header">
             <div>
                 <h2>系统仪表盘</h2>
-                <!-- 从任务、资源与目录视角快速掌握 AtlasWorks 当前运行状态。 -->
-                <p class="section-subtitle">从任务、资源与目录视角快速掌握 terra forge 当前运行状态。</p>
+                <p class="section-subtitle">从任务、资源与目录视角快速掌握 AtlasWorks 当前运行状态。</p>
             </div>
             <div class="tool-actions">
                 <button class="btn btn-secondary" type="button" @click="load">刷新</button>

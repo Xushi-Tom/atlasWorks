@@ -73,8 +73,7 @@ function openSubsection(section, subsection) {
         <div class="console-sidebar-head">
             <div v-if="!collapsed" class="console-sidebar-brand">
                 <span class="console-sidebar-kicker">Operations Grid</span>
-                <!-- AtlasWorks Command Surface -->
-                <strong>terra forge Command Surface</strong>
+                <strong>AtlasWorks Command Surface</strong>
                 <p>面向地理数据接入、切片生产、资产发布与运行治理，统一承载全链路生产调度。</p>
             </div>
             <div v-else class="console-sidebar-rail-mark" aria-hidden="true">TF</div>
