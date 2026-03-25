@@ -22,7 +22,22 @@ CORS(
             "origins": "*",
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             "allow_headers": ["Content-Type", "Authorization"],
-        }
+        },
+        r"/published": {
+            "origins": "*",
+            "methods": ["GET", "HEAD", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization", "Range"],
+        },
+        r"/published/*": {
+            "origins": "*",
+            "methods": ["GET", "HEAD", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization", "Range"],
+        },
+        r"/wmts": {
+            "origins": "*",
+            "methods": ["GET", "HEAD", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"],
+        },
     },
 )
 app.config["JSON_AS_ASCII"] = False
@@ -105,7 +120,7 @@ if __name__ == "__main__":
     logMessage(f"瓦片目录: {config['tilesDir']}")
     logMessage(f"日志目录: {config['logDir']}")
 
-    port = int(os.environ.get("PORT", config.get("port", 8000)))
+    port = int(os.environ.get("PORT", config.get("port", 18000)))
     host = os.environ.get("HOST", config.get("host", "0.0.0.0"))
     debug = config.get("debug", False)
 

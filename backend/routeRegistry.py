@@ -4,7 +4,7 @@
 from flask import request
 
 from apiDocs import getOpenApiSpec, getSwaggerUi
-from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, servePublishedPath, updatePublication
+from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, servePublishedPath, serveWmts, updatePublication
 from dataSourceOps import getDataSourceInfo, getDataSourceWorkspaceInfo, listDataSources, recommendConfig, resolveDataSourceFiles
 from fileSplitOps import splitLargeFile
 from indexedTilesOps import createIndexedTiles, deleteNodataTiles, scanNodataTiles
@@ -81,6 +81,7 @@ def registerRoutes(app):
     app.add_url_rule("/api/publications/<publicationId>", endpoint="publication_detail", view_func=handlePublicationDetail, methods=["GET", "PUT", "DELETE"])
     app.add_url_rule("/published", endpoint="published_root", view_func=servePublishedPath, defaults={"relative_path": ""}, methods=["GET"])
     app.add_url_rule("/published/<path:relative_path>", endpoint="published_asset", view_func=servePublishedPath, methods=["GET"])
+    app.add_url_rule("/wmts", endpoint="wmts_service", view_func=serveWmts, methods=["GET", "OPTIONS"])
 
     app.add_url_rule("/api/config/recommend", endpoint="recommend_config", view_func=recommendConfig, methods=["POST"])
     app.add_url_rule("/api/cache/info", endpoint="get_cache_info", view_func=getCacheInfo, methods=["GET"])

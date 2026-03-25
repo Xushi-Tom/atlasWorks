@@ -5,9 +5,10 @@ import json
 import os
 import socket
 from datetime import datetime
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
+import xml.etree.ElementTree as ET
 
-from flask import jsonify, request, send_from_directory
+from flask import Response, jsonify, request, send_from_directory
 
 from config import config, taskLock, taskStatus
 from db import (
@@ -25,6 +26,61 @@ from utils import logMessage, validateWorkspacePath
 
 
 PUBLICATIONS_DIRNAME = "_publications"
+WMTS_DEFAULT_MATRIX_SET = "GoogleMapsCompatible"
+WMTS_SUPPORTED_MATRIX_SET = {"googlemapscompatible", "epsg:3857", "epsg3857", "webmercatorquad"}
+WMTS_TOP_LEFT_CORNER = "-20037508.342789244 20037508.342789244"
+WMTS_INITIAL_SCALE_DENOMINATOR = 559082264.0287178
+WMTS_MIN_ZOOM = 0
+WMTS_MAX_ZOOM = 22
+
+
+def _mime_from_extension(extension):
+    ext = str(extension or "").strip().lower()
+    mapping = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+    return mapping.get(ext)
+
+
+def _extension_from_mime(mime_type):
+    mime = str(mime_type or "").strip().lower().split(";")[0]
+    mapping = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+    }
+    return mapping.get(mime)
+
+
+def _wmts_parameters():
+    normalized = {}
+    for key, value in request.args.items():
+        normalized[str(key).strip().lower()] = str(value or "").strip()
+    return normalized
+
+
+def _wmts_param(name, default=""):
+    params = _wmts_parameters()
+    return params.get(str(name or "").strip().lower(), default)
+
+
+def _wmts_error(message, exception_code="InvalidParameterValue", locator="", status_code=400):
+    ns = "http://www.opengis.net/ows/1.1"
+    ET.register_namespace("", ns)
+
+    report = ET.Element(f"{{{ns}}}ExceptionReport", attrib={"version": "1.0.0"})
+    exception = ET.SubElement(report, f"{{{ns}}}Exception", attrib={"exceptionCode": str(exception_code)})
+    if locator:
+        exception.set("locator", str(locator))
+    text = ET.SubElement(exception, f"{{{ns}}}ExceptionText")
+    text.text = str(message)
+
+    payload = ET.tostring(report, encoding="utf-8", xml_declaration=True)
+    return Response(payload, status=status_code, content_type="application/xml; charset=utf-8")
 
 
 def _safe_json(value, fallback=None):
@@ -156,15 +212,20 @@ def _public_base_url():
     except (TypeError, ValueError):
         explicit_port = 0
 
+    configured_base_host = str(config.get("publicBaseHost") or "").strip()
+    if configured_base_host:
+        target_port = explicit_port or int(config.get("port") or 18000)
+        return _build_host_url(target_scheme, configured_base_host, target_port)
+
     if mode in {"container_ip", "container", "ip"}:
         target_host = _detect_container_ip() or request_host
-        target_port = explicit_port or int(config.get("port") or 8000)
+        target_port = explicit_port or int(config.get("port") or 18000)
         return _build_host_url(target_scheme, target_host, target_port)
 
     if mode == "auto" and _is_loopback_host(request_host):
         target_host = _detect_container_ip()
         if target_host:
-            target_port = explicit_port or int(config.get("port") or 8000)
+            target_port = explicit_port or int(config.get("port") or 18000)
             return _build_host_url(target_scheme, target_host, target_port)
 
     if explicit_port:
@@ -205,7 +266,7 @@ def _find_tile_template_info(full_path):
     return None
 
 
-def _build_publication_access_payload(publish_path, publish_method=None):
+def _build_publication_access_payload(publish_path, publish_method=None, publish_type=None, publication_id=None):
     public_base = _public_base_url()
     browser_url = _build_access_url(publish_path)
     access_url = browser_url
@@ -223,14 +284,43 @@ def _build_publication_access_payload(publish_path, publish_method=None):
         }
 
     publish_method = str(publish_method or "").strip().lower()
+    publish_type = str(publish_type or "").strip().lower()
     _, full_path = _resolve_tiles_path(normalized_path)
-    tile_info = _find_tile_template_info(full_path) if publish_method in {"tms", "xyz"} else None
+    enable_tile_template = publish_method in {"wmts", "tms", "xyz", "quantized-mesh", "cesium-terrain", "terrain"} or publish_type == "terrain"
+    tile_info = _find_tile_template_info(full_path) if enable_tile_template else None
+
+    if publish_method == "wmts":
+        layer_identifier = str(publication_id or normalized_path).strip()
+        tile_extension = (tile_info or {}).get("extension") or ".png"
+        tile_mime = _mime_from_extension(tile_extension) or "image/png"
+
+        capabilities_url = (
+            f"{public_base}/wmts?SERVICE=WMTS&REQUEST=GetCapabilities"
+            "&VERSION=1.0.0"
+        )
+        if layer_identifier:
+            encoded_layer = quote(layer_identifier, safe="")
+            access_url = (
+                f"{public_base}/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+                f"&LAYER={encoded_layer}&STYLE=default&TILEMATRIXSET={WMTS_DEFAULT_MATRIX_SET}"
+                f"&TILEMATRIX={{z}}&TILEROW={{y}}&TILECOL={{x}}&FORMAT={tile_mime}"
+            )
+            sample_zoom = (tile_info or {}).get("zoom", "0")
+            sample_x = (tile_info or {}).get("x", "0")
+            sample_y = (tile_info or {}).get("y", "0")
+            sample_url = (
+                f"{public_base}/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+                f"&LAYER={encoded_layer}&STYLE=default&TILEMATRIXSET={WMTS_DEFAULT_MATRIX_SET}"
+                f"&TILEMATRIX={sample_zoom}&TILEROW={sample_y}&TILECOL={sample_x}&FORMAT={tile_mime}"
+            )
+        launch_url = capabilities_url
 
     if tile_info:
         tile_template_url = f"{public_base}/published/{normalized_path}/{{z}}/{{x}}/{{y}}{tile_info['extension']}"
         sample_url = f"{public_base}/published/{normalized_path}/{tile_info['zoom']}/{tile_info['x']}/{tile_info['y']}{tile_info['extension']}"
-        access_url = tile_template_url
-        launch_url = sample_url or browser_url
+        if publish_method != "wmts":
+            access_url = tile_template_url
+            launch_url = sample_url or browser_url
 
     return {
         "browserUrl": browser_url,
@@ -247,7 +337,12 @@ def _augment_publication_response(payload):
     response = dict(payload)
     metadata = response.get("metadata") or {}
     publish_path = response.get("publishPath") or metadata.get("workspacePath")
-    access_payload = _build_publication_access_payload(publish_path, metadata.get("publishMethod"))
+    access_payload = _build_publication_access_payload(
+        publish_path,
+        metadata.get("publishMethod"),
+        response.get("publishType"),
+        response.get("publicationId") or response.get("id"),
+    )
     for key, value in access_payload.items():
         existing_value = response.get(key)
         response[key] = existing_value if existing_value else value
@@ -525,7 +620,12 @@ def _publication_record_to_response(record):
     if not isinstance(record, dict):
         return None
     metadata = record.get("metadata") or {}
-    computed_access_payload = _build_publication_access_payload(record.get("publishPath"), metadata.get("publishMethod"))
+    computed_access_payload = _build_publication_access_payload(
+        record.get("publishPath"),
+        metadata.get("publishMethod"),
+        record.get("publishType"),
+        record.get("id"),
+    )
     response = _augment_publication_response({
         "publicationId": record.get("id"),
         "artifactId": record.get("artifactId"),
@@ -546,8 +646,12 @@ def _publication_record_to_response(record):
 
     stored_base = str(record.get("publicBaseUrl") or "").strip()
     computed_base = str(computed_access_payload.get("publicBaseUrl") or "").strip()
+    stored_access = str(record.get("accessUrl") or "").strip()
+    computed_access = str(computed_access_payload.get("accessUrl") or "").strip()
     should_refresh_urls = any(not record.get(key) for key in ("browserUrl", "accessUrl", "launchUrl", "sampleUrl", "publicBaseUrl"))
     if not should_refresh_urls and computed_base and stored_base and stored_base != computed_base:
+        should_refresh_urls = True
+    if not should_refresh_urls and stored_access and computed_access and stored_access != computed_access:
         should_refresh_urls = True
 
     if should_refresh_urls:
@@ -686,7 +790,12 @@ def createPublication():
         artifact = prepared["artifact"]
 
         descriptor_path = _write_publication_descriptor(descriptor, alias)
-        access_payload = _build_publication_access_payload(publish_path, descriptor["metadata"].get("publishMethod"))
+        access_payload = _build_publication_access_payload(
+            publish_path,
+            descriptor["metadata"].get("publishMethod"),
+            publish_type,
+            publication_id,
+        )
 
         persisted = upsertPublicationRecord(
             publication_id=publication_id,
@@ -771,7 +880,12 @@ def updatePublication(publication_id=None, publicationId=None):
             **descriptor["metadata"],
             "descriptorPath": descriptor_path,
         }
-        access_payload = _build_publication_access_payload(prepared["publishPath"], descriptor["metadata"].get("publishMethod"))
+        access_payload = _build_publication_access_payload(
+            prepared["publishPath"],
+            descriptor["metadata"].get("publishMethod"),
+            prepared["publishType"],
+            prepared["publicationId"],
+        )
 
         persisted = upsertPublicationRecord(
             publication_id=prepared["publicationId"],
@@ -928,3 +1042,250 @@ def servePublishedPath(relative_path=""):
     except Exception as exc:
         logMessage(f"读取发布资源失败 {relative_path}: {exc}", "ERROR")
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+def _collect_publication_items(limit=500):
+    publications = {}
+
+    for record in listPublicationRecords(limit=limit):
+        response = _publication_record_to_response(record)
+        if not response:
+            continue
+        publication_id = response.get("publicationId")
+        if publication_id:
+            publications[publication_id] = response
+
+    for record in _scan_publication_files(limit=limit * 2):
+        publication_id = record.get("id")
+        if not publication_id:
+            continue
+        publications.setdefault(
+            publication_id,
+            _augment_publication_response({
+                "publicationId": record.get("id"),
+                "artifactId": record.get("artifactId"),
+                "publishType": record.get("publishType"),
+                "publishPath": record.get("publishPath"),
+                "alias": record.get("alias"),
+                "status": record.get("status"),
+                "metadata": record.get("metadata", {}),
+                "publishedAt": record.get("publishedAt"),
+                "createdAt": record.get("createdAt"),
+                "descriptorPath": record.get("descriptorPath"),
+            }),
+        )
+
+    return list(publications.values())
+
+
+def _collect_wmts_layers():
+    layers = []
+    for publication in _collect_publication_items(limit=500):
+        metadata = publication.get("metadata") or {}
+        publish_method = str(metadata.get("publishMethod") or "").strip().lower()
+        if publish_method != "wmts":
+            continue
+
+        enabled = metadata.get("enabled")
+        if enabled is None:
+            enabled = str(publication.get("status") or "").strip().lower() in {"enabled", "published", "active"}
+        if not bool(enabled):
+            continue
+
+        publication_id = str(publication.get("publicationId") or publication.get("id") or "").strip()
+        if not publication_id:
+            continue
+
+        publish_path = publication.get("publishPath") or metadata.get("workspacePath")
+        normalized_path, full_path = _resolve_tiles_path(publish_path)
+        tile_info = _find_tile_template_info(full_path)
+        if not tile_info:
+            continue
+
+        extension = str(tile_info.get("extension") or "").strip().lower()
+        mime_type = _mime_from_extension(extension)
+        if not mime_type:
+            continue
+
+        layers.append({
+            "id": publication_id,
+            "alias": str(publication.get("alias") or publication_id),
+            "publishPath": normalized_path,
+            "extension": extension,
+            "mimeType": mime_type,
+            "sampleZoom": str(tile_info.get("zoom") or "0"),
+            "sampleX": str(tile_info.get("x") or "0"),
+            "sampleY": str(tile_info.get("y") or "0"),
+        })
+
+    layers.sort(key=lambda item: item.get("id", ""))
+    return layers
+
+
+def _find_wmts_layer(layer_name, layers):
+    token = str(layer_name or "").strip().lower()
+    if not token:
+        return None
+    for layer in layers:
+        layer_id = str(layer.get("id") or "").strip().lower()
+        alias = str(layer.get("alias") or "").strip().lower()
+        publish_path = str(layer.get("publishPath") or "").strip().lower()
+        if token in {layer_id, alias, publish_path}:
+            return layer
+    return None
+
+
+def _parse_wmts_matrix(value):
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("缺少参数 TILEMATRIX")
+    if raw.isdigit():
+        return int(raw)
+
+    parts = [segment for segment in raw.split(":") if segment]
+    if parts and parts[-1].isdigit():
+        return int(parts[-1])
+    raise ValueError("参数 TILEMATRIX 非法")
+
+
+def _build_wmts_capabilities(layers):
+    namespaces = {
+        "": "http://www.opengis.net/wmts/1.0",
+        "ows": "http://www.opengis.net/ows/1.1",
+        "xlink": "http://www.w3.org/1999/xlink",
+    }
+    ET.register_namespace("", namespaces[""])
+    ET.register_namespace("ows", namespaces["ows"])
+    ET.register_namespace("xlink", namespaces["xlink"])
+
+    base_url = f"{_public_base_url().rstrip('/')}/wmts"
+    capabilities = ET.Element(
+        f"{{{namespaces['']}}}Capabilities",
+        attrib={"version": "1.0.0"},
+    )
+
+    service_identification = ET.SubElement(capabilities, f"{{{namespaces['ows']}}}ServiceIdentification")
+    ET.SubElement(service_identification, f"{{{namespaces['ows']}}}Title").text = "terra forge WMTS Service"
+    ET.SubElement(service_identification, f"{{{namespaces['ows']}}}ServiceType").text = "OGC WMTS"
+    ET.SubElement(service_identification, f"{{{namespaces['ows']}}}ServiceTypeVersion").text = "1.0.0"
+
+    operations = ET.SubElement(capabilities, f"{{{namespaces['ows']}}}OperationsMetadata")
+    for operation_name in ("GetCapabilities", "GetTile"):
+        operation = ET.SubElement(operations, f"{{{namespaces['ows']}}}Operation", attrib={"name": operation_name})
+        dcp = ET.SubElement(operation, f"{{{namespaces['ows']}}}DCP")
+        http = ET.SubElement(dcp, f"{{{namespaces['ows']}}}HTTP")
+        ET.SubElement(http, f"{{{namespaces['ows']}}}Get", attrib={f"{{{namespaces['xlink']}}}href": f"{base_url}?"})
+
+    contents = ET.SubElement(capabilities, f"{{{namespaces['']}}}Contents")
+    for layer in layers:
+        layer_node = ET.SubElement(contents, f"{{{namespaces['']}}}Layer")
+        ET.SubElement(layer_node, f"{{{namespaces['ows']}}}Title").text = layer["alias"]
+        ET.SubElement(layer_node, f"{{{namespaces['ows']}}}Identifier").text = layer["id"]
+
+        style = ET.SubElement(layer_node, f"{{{namespaces['']}}}Style", attrib={"isDefault": "true"})
+        ET.SubElement(style, f"{{{namespaces['ows']}}}Identifier").text = "default"
+        ET.SubElement(layer_node, f"{{{namespaces['']}}}Format").text = layer["mimeType"]
+
+        resource_url = (
+            f"{base_url}?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+            f"&LAYER={quote(layer['id'], safe='')}&STYLE=default&TILEMATRIXSET={WMTS_DEFAULT_MATRIX_SET}"
+            f"&TILEMATRIX={{TileMatrix}}&TILEROW={{TileRow}}&TILECOL={{TileCol}}&FORMAT={layer['mimeType']}"
+        )
+        ET.SubElement(
+            layer_node,
+            f"{{{namespaces['']}}}ResourceURL",
+            attrib={"format": layer["mimeType"], "resourceType": "tile", "template": resource_url},
+        )
+
+        matrix_link = ET.SubElement(layer_node, f"{{{namespaces['']}}}TileMatrixSetLink")
+        ET.SubElement(matrix_link, f"{{{namespaces['']}}}TileMatrixSet").text = WMTS_DEFAULT_MATRIX_SET
+
+    tile_matrix_set = ET.SubElement(contents, f"{{{namespaces['']}}}TileMatrixSet")
+    ET.SubElement(tile_matrix_set, f"{{{namespaces['ows']}}}Identifier").text = WMTS_DEFAULT_MATRIX_SET
+    ET.SubElement(tile_matrix_set, f"{{{namespaces['ows']}}}SupportedCRS").text = "urn:ogc:def:crs:EPSG::3857"
+
+    for zoom in range(WMTS_MIN_ZOOM, WMTS_MAX_ZOOM + 1):
+        matrix = ET.SubElement(tile_matrix_set, f"{{{namespaces['']}}}TileMatrix")
+        ET.SubElement(matrix, f"{{{namespaces['ows']}}}Identifier").text = str(zoom)
+        ET.SubElement(matrix, f"{{{namespaces['']}}}ScaleDenominator").text = f"{WMTS_INITIAL_SCALE_DENOMINATOR / (2 ** zoom):.12f}"
+        ET.SubElement(matrix, f"{{{namespaces['']}}}TopLeftCorner").text = WMTS_TOP_LEFT_CORNER
+        ET.SubElement(matrix, f"{{{namespaces['']}}}TileWidth").text = "256"
+        ET.SubElement(matrix, f"{{{namespaces['']}}}TileHeight").text = "256"
+        ET.SubElement(matrix, f"{{{namespaces['']}}}MatrixWidth").text = str(2 ** zoom)
+        ET.SubElement(matrix, f"{{{namespaces['']}}}MatrixHeight").text = str(2 ** zoom)
+
+    payload = ET.tostring(capabilities, encoding="utf-8", xml_declaration=True)
+    return Response(payload, status=200, content_type="application/xml; charset=utf-8")
+
+
+def _serve_wmts_tile(layers):
+    layer_name = _wmts_param("LAYER")
+    if not layer_name:
+        return _wmts_error("缺少参数 LAYER", locator="LAYER")
+
+    tile_matrix_set = _wmts_param("TILEMATRIXSET", WMTS_DEFAULT_MATRIX_SET)
+    if str(tile_matrix_set).strip().lower() not in WMTS_SUPPORTED_MATRIX_SET:
+        return _wmts_error("参数 TILEMATRIXSET 不受支持", locator="TILEMATRIXSET")
+
+    try:
+        zoom = _parse_wmts_matrix(_wmts_param("TILEMATRIX"))
+    except ValueError as exc:
+        return _wmts_error(str(exc), locator="TILEMATRIX")
+
+    try:
+        tile_row = int(_wmts_param("TILEROW"))
+        tile_col = int(_wmts_param("TILECOL"))
+    except (TypeError, ValueError):
+        return _wmts_error("参数 TILEROW 或 TILECOL 非法", locator="TILEROW/TILECOL")
+
+    if zoom < WMTS_MIN_ZOOM or zoom > WMTS_MAX_ZOOM or tile_row < 0 or tile_col < 0:
+        return _wmts_error("瓦片坐标超出范围", exception_code="TileOutOfRange", locator="TILEMATRIX/TILEROW/TILECOL", status_code=404)
+
+    layer = _find_wmts_layer(layer_name, layers)
+    if not layer:
+        return _wmts_error("图层不存在", exception_code="LayerNotDefined", locator="LAYER", status_code=404)
+
+    style = _wmts_param("STYLE", "default").strip().lower()
+    if style not in {"", "default"}:
+        return _wmts_error("参数 STYLE 不受支持", locator="STYLE")
+
+    request_format = _wmts_param("FORMAT")
+    if request_format:
+        requested_extension = _extension_from_mime(request_format)
+        if not requested_extension:
+            return _wmts_error("参数 FORMAT 不受支持", locator="FORMAT")
+        if requested_extension != layer["extension"]:
+            return _wmts_error("请求 FORMAT 与图层格式不匹配", locator="FORMAT")
+
+    max_index = 2 ** zoom
+    if tile_row >= max_index or tile_col >= max_index:
+        return _wmts_error("瓦片坐标超出范围", exception_code="TileOutOfRange", locator="TILEROW/TILECOL", status_code=404)
+
+    tile_relative_path = f"{layer['publishPath']}/{zoom}/{tile_col}/{tile_row}{layer['extension']}"
+    _, tile_full_path = _resolve_tiles_path(tile_relative_path)
+    if not os.path.exists(tile_full_path):
+        return _wmts_error("瓦片不存在", exception_code="TileOutOfRange", locator="TILEMATRIX/TILEROW/TILECOL", status_code=404)
+
+    parent_dir = os.path.dirname(tile_full_path)
+    filename = os.path.basename(tile_full_path)
+    return send_from_directory(parent_dir, filename, mimetype=layer["mimeType"])
+
+
+def serveWmts():
+    try:
+        service = _wmts_param("SERVICE", "WMTS").strip().upper()
+        if service and service != "WMTS":
+            return _wmts_error("参数 SERVICE 必须为 WMTS", locator="SERVICE")
+
+        operation = _wmts_param("REQUEST", "GetCapabilities").strip().lower()
+        layers = _collect_wmts_layers()
+        if operation == "getcapabilities":
+            return _build_wmts_capabilities(layers)
+        if operation == "gettile":
+            return _serve_wmts_tile(layers)
+        return _wmts_error("参数 REQUEST 不受支持，仅支持 GetCapabilities/GetTile", locator="REQUEST")
+    except ValueError as exc:
+        return _wmts_error(str(exc))
+    except Exception as exc:
+        logMessage(f"WMTS 服务异常: {exc}", "ERROR")
+        return _wmts_error(str(exc), exception_code="NoApplicableCode", status_code=500)
