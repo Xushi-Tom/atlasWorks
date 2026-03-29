@@ -63,6 +63,17 @@ const projectionOptions = [
     { value: 'EPSG:4326', label: 'WGS84 经纬度 (EPSG:4326)' },
     { value: 'EPSG:4490', label: 'CGCS2000 (EPSG:4490)' }
 ];
+const memoryOptions = [
+    { value: '2g', label: '2 GB' },
+    { value: '4g', label: '4 GB' },
+    { value: '8g', label: '8 GB' },
+    { value: '12g', label: '12 GB' },
+    { value: '16g', label: '16 GB' },
+    { value: '24g', label: '24 GB' },
+    { value: '32g', label: '32 GB' },
+    { value: '48g', label: '48 GB' },
+    { value: '64g', label: '64 GB' }
+];
 const dataFormatOptions = [
     { value: 'xyz', label: 'XYZ 目录瓦片' },
     { value: 'tms', label: 'TMS 目录瓦片' }
@@ -109,14 +120,6 @@ function applyBandRange(maxBandCount) {
 async function refreshBandOptions(showToast = false) {
     const folderPaths = normalizeListInput(form.folderPaths);
     const filePatterns = normalizeListInput(form.filePatterns);
-    const hasRemoteSource = filePatterns.some(isHttpSourcePattern);
-
-    if (!folderPaths.length && !hasRemoteSource) {
-        applyBandRange(16);
-        bandHint.value = '未选择数据源文件夹（且未提供网络地址），当前为手动波段选择（1-16）。';
-        if (showToast) pushToast('请先选择数据源文件夹或填写网络地址', 'warning');
-        return;
-    }
 
     if (!filePatterns.length) {
         applyBandRange(16);
@@ -131,7 +134,8 @@ async function refreshBandOptions(showToast = false) {
             filePatterns,
             maxFiles: 200
         });
-        const commonBandCount = Number.parseInt(response?.bandSummary?.commonBandCount, 10);
+        const payload = response?.data || {};
+        const commonBandCount = Number.parseInt(payload?.bandSummary?.commonBandCount, 10);
 
         if (!Number.isFinite(commonBandCount) || commonBandCount <= 0) {
             applyBandRange(16);
@@ -141,9 +145,9 @@ async function refreshBandOptions(showToast = false) {
         }
 
         applyBandRange(commonBandCount);
-        bandHint.value = response.totalMatched === 1
+        bandHint.value = payload.totalMatched === 1
             ? `已读取 1 个文件，可用波段数：${commonBandCount}。`
-            : `已匹配 ${response.totalMatched} 个文件，按最小公共波段数 ${commonBandCount} 生成下拉。${response.truncated ? ' 当前仅统计前 200 个匹配文件。' : ''}`;
+            : `已匹配 ${payload.totalMatched} 个文件，按最小公共波段数 ${commonBandCount} 生成下拉。${payload.truncated ? ' 当前仅统计前 200 个匹配文件。' : ''}`;
 
         if (showToast) {
             pushToast(`已按最小公共波段数 ${commonBandCount} 更新下拉`, 'success');
@@ -200,10 +204,11 @@ async function requestRecommendation() {
 
     try {
         recommendationSourceFile.value = sourceFile;
-        recommendationData.value = await api.recommendConfig({
+        const response = await api.recommendConfig({
             sourceFile,
             tileType: 'map'
         });
+        recommendationData.value = response?.data || null;
         recommendationVisible.value = true;
     } catch (error) {
         pushToast(`智能推荐失败: ${error.message}`, 'error', 5000);
@@ -230,9 +235,8 @@ function applyRecommendation(recommendations) {
 
 async function submit() {
     const filePatterns = normalizeListInput(form.filePatterns);
-    const hasRemoteSource = filePatterns.some(isHttpSourcePattern);
-    if ((!form.folderPaths && !hasRemoteSource) || !form.outputPath) {
-        pushToast('请填写输出目录，并提供数据源目录或网络地址', 'warning');
+    if (!form.outputPath || !filePatterns.length) {
+        pushToast('请填写输出目录，并提供文件模式、具体文件或网络地址', 'warning');
         return;
     }
 
@@ -274,7 +278,7 @@ async function submit() {
         if (result?.success === false) {
             pushToast(result.message || '地图切片参数校验失败', 'warning', 5000);
         } else {
-            pushToast(`地图切片任务已启动: ${result.taskId}`, 'success');
+            pushToast(`地图切片任务已启动: ${result?.data?.taskId}`, 'success');
         }
         emit('navigate', { section: 'tasks' });
     } catch (error) {
@@ -321,12 +325,13 @@ onBeforeUnmount(() => {
                             <div class="form-group">
                                 <label>数据源目录</label>
                                 <div class="path-field">
-                                    <input v-model="form.folderPaths" type="text" placeholder="多个目录用逗号分隔">
+                                    <input v-model="form.folderPaths" type="text" placeholder="多个目录用逗号分隔，可留空">
                                     <div class="path-field-actions">
                                         <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择数据源目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</button>
                                         <button class="btn btn-secondary" type="button" @click="clearField('folderPaths')">清空</button>
                                     </div>
                                 </div>
+                                <p class="workbench-note form-inline-help">可留空。留空时会默认从数据源根目录开始匹配。</p>
                             </div>
                             <div class="form-group">
                                 <label>文件匹配模式</label>
@@ -391,7 +396,9 @@ onBeforeUnmount(() => {
                                 </div>
                                 <div class="form-group">
                                     <label>最大内存</label>
-                                    <input v-model="form.maxMemory" type="text" placeholder="例如 8g">
+                                    <select v-model="form.maxMemory">
+                                        <option v-for="option in memoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                                    </select>
                                 </div>
                             </div>
                             <div class="form-row">

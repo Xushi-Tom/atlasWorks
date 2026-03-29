@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 
 import { api } from '../services/api';
-import { formatBytes } from '../utils/formatters';
+import { formatBytes, formatDateTime } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
 
 const ARCHIVE_EXTENSIONS = ['.zip', '.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.7z'];
@@ -11,6 +11,7 @@ const browser = ref({ directories: [], files: [] });
 const currentPath = ref('');
 const selectedFile = ref(null);
 const detailVisible = ref(false);
+const previewLoadFailed = ref(false);
 const uploadVisible = ref(false);
 const folderVisible = ref(false);
 const newFolderName = ref('');
@@ -39,8 +40,9 @@ function isArchiveName(name = '') {
 async function loadDirectory(path = currentPath.value) {
     try {
         const response = await api.browseResults(path);
-        browser.value = response || { directories: [], files: [] };
-        currentPath.value = response?.currentPath || path || '';
+        const data = response?.data || {};
+        browser.value = data || { directories: [], files: [] };
+        currentPath.value = data?.currentPath || path || '';
     } catch (error) {
         pushToast(`工作空间加载失败: ${error.message}`, 'error', 4500);
     }
@@ -48,11 +50,30 @@ async function loadDirectory(path = currentPath.value) {
 
 async function showFileDetails(file) {
     try {
-        selectedFile.value = await api.getWorkspaceFileInfo(file.path);
+        const response = await api.getWorkspaceFileInfo(file.path);
+        selectedFile.value = response?.data || null;
+        previewLoadFailed.value = false;
         detailVisible.value = true;
     } catch (error) {
         pushToast(`文件详情加载失败: ${error.message}`, 'error', 4500);
     }
+}
+
+function closeDetailModal() {
+    detailVisible.value = false;
+    previewLoadFailed.value = false;
+}
+
+function resolvePreviewUrl(fileInfo) {
+    const previewUrl = String(fileInfo?.previewUrl || '').trim();
+    if (previewUrl) {
+        return previewUrl.startsWith('http') ? previewUrl : `${window.location.origin}${previewUrl}`;
+    }
+    const extension = String(fileInfo?.extension || '').toLowerCase();
+    if (extension === '.png' || extension === '.jpg' || extension === '.jpeg') {
+        return api.getWorkspaceFileUrl(fileInfo?.path || '');
+    }
+    return '';
 }
 
 function openUploadModal() {
@@ -235,11 +256,11 @@ onMounted(async () => {
         </div>
 
         <Teleport to="body">
-            <div v-if="detailVisible" class="modal modal-overlay modal-overlay-active" @click.self="detailVisible = false">
+            <div v-if="detailVisible" class="modal modal-overlay modal-overlay-active" @click.self="closeDetailModal">
                 <div class="modal-content datasource-detail-content">
                     <div class="modal-header">
                         <h3>工作空间文件详情</h3>
-                        <button class="message-close" type="button" @click="detailVisible = false">×</button>
+                        <button class="message-close" type="button" @click="closeDetailModal">×</button>
                     </div>
                     <div class="modal-body">
                         <div v-if="selectedFile" class="info-list">
@@ -253,16 +274,29 @@ onMounted(async () => {
                             </div>
                             <div class="info-row">
                                 <span class="info-label">更新时间</span>
-                                <span class="info-value">{{ selectedFile.lastModified || '-' }}</span>
+                                <span class="info-value">{{ formatDateTime(selectedFile.lastModified || selectedFile.modifiedTime) || '-' }}</span>
                             </div>
                             <div class="info-row">
                                 <span class="info-label">元数据</span>
                                 <span class="info-value">{{ selectedFile.metadata?.bandCount ? `${selectedFile.metadata.bandCount} 波段` : '普通文件' }}</span>
                             </div>
                         </div>
+                        <div v-if="resolvePreviewUrl(selectedFile)" class="datasource-preview-card workspace-preview-card">
+                            <div class="datasource-preview-head">图片预览</div>
+                            <div class="datasource-preview-frame workspace-preview-frame">
+                                <img
+                                    v-if="!previewLoadFailed"
+                                    :src="resolvePreviewUrl(selectedFile)"
+                                    :alt="selectedFile?.name || 'preview'"
+                                    class="datasource-preview-image workspace-preview-image"
+                                    @error="previewLoadFailed = true"
+                                >
+                                <div v-else class="message warning">图片加载失败</div>
+                            </div>
+                        </div>
                     </div>
                     <div class="modal-footer">
-                        <button class="btn btn-secondary" type="button" @click="detailVisible = false">关闭</button>
+                        <button class="btn btn-secondary" type="button" @click="closeDetailModal">关闭</button>
                     </div>
                 </div>
             </div>
@@ -320,3 +354,17 @@ onMounted(async () => {
 
     </section>
 </template>
+
+<style scoped>
+.workspace-preview-card {
+    margin-top: 18px;
+}
+
+.workspace-preview-frame {
+    min-height: 320px;
+}
+
+.workspace-preview-image {
+    max-height: 520px;
+}
+</style>

@@ -60,8 +60,9 @@ async function load(path = '') {
         const response = props.source === 'workspace'
             ? await api.browseResults(path)
             : await api.browseDatasources(path);
-        browser.value = response || { directories: [], datasources: [] };
-        currentPath.value = response?.currentPath || path || '';
+        const data = response?.data || {};
+        browser.value = data || { directories: [], datasources: [] };
+        currentPath.value = data?.currentPath || path || '';
     } catch (error) {
         browser.value = { directories: [], datasources: [] };
         pushToast(`路径加载失败: ${error.message}`, 'error', 4500);

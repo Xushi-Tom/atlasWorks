@@ -40,6 +40,17 @@ const recommendationVisible = ref(false);
 const recommendationSourceFile = ref('');
 const recommendationData = ref(null);
 const apiDocsUrl = `${window.location.origin}/api/docs`;
+const memoryOptions = [
+    { value: '2g', label: '2 GB' },
+    { value: '4g', label: '4 GB' },
+    { value: '8g', label: '8 GB' },
+    { value: '12g', label: '12 GB' },
+    { value: '16g', label: '16 GB' },
+    { value: '24g', label: '24 GB' },
+    { value: '32g', label: '32 GB' },
+    { value: '48g', label: '48 GB' },
+    { value: '64g', label: '64 GB' }
+];
 
 function isHttpSourcePattern(value) {
     const text = String(value || '').trim().toLowerCase();
@@ -101,10 +112,11 @@ async function requestRecommendation() {
 
     try {
         recommendationSourceFile.value = sourceFile;
-        recommendationData.value = await api.recommendConfig({
+        const response = await api.recommendConfig({
             sourceFile,
             tileType: 'terrain'
         });
+        recommendationData.value = response?.data || null;
         recommendationVisible.value = true;
     } catch (error) {
         pushToast(`智能推荐失败: ${error.message}`, 'error', 5000);
@@ -125,9 +137,8 @@ function applyRecommendation(recommendations) {
 
 async function submit() {
     const filePatterns = normalizeListInput(form.filePatterns);
-    const hasRemoteSource = filePatterns.some(isHttpSourcePattern);
-    if (!form.outputPath || (!form.folderPaths && !hasRemoteSource)) {
-        pushToast('请填写输出目录，并提供数据源目录或网络地址', 'warning');
+    if (!form.outputPath || !filePatterns.length) {
+        pushToast('请填写输出目录，并提供文件模式、具体文件或网络地址', 'warning');
         return;
     }
 
@@ -154,7 +165,7 @@ async function submit() {
         };
 
         const result = await api.createTerrainTiles(payload);
-        pushToast(`地形切片任务已启动: ${result.taskId}`, 'success');
+        pushToast(`地形切片任务已启动: ${result?.data?.taskId}`, 'success');
         emit('navigate', { section: 'tasks' });
     } catch (error) {
         pushToast(`地形切片失败: ${error.message}`, 'error', 5000);
@@ -190,12 +201,13 @@ async function submit() {
                             <div class="form-group">
                                 <label>数据源目录</label>
                                 <div class="path-field">
-                                    <input v-model="form.folderPaths" type="text" placeholder="多个目录用逗号分隔">
+                                    <input v-model="form.folderPaths" type="text" placeholder="多个目录用逗号分隔，可留空">
                                     <div class="path-field-actions">
                                         <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择地形数据源目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</button>
                                         <button class="btn btn-secondary" type="button" @click="clearField('folderPaths')">清空</button>
                                     </div>
                                 </div>
+                                <p class="workbench-note form-inline-help">可留空。留空时会默认从数据源根目录开始匹配。</p>
                             </div>
                             <div class="form-group">
                                 <label>文件匹配模式</label>
@@ -267,7 +279,9 @@ async function submit() {
                                 </div>
                                 <div class="form-group">
                                     <label>最大内存</label>
-                                    <input v-model="form.maxMemory" type="text" placeholder="例如 8g">
+                                    <select v-model="form.maxMemory">
+                                        <option v-for="option in memoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                                    </select>
                                 </div>
                             </div>
                             <div class="form-group">

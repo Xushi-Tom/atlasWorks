@@ -18,6 +18,20 @@ class AtlasWorksApi {
         this.baseURL = API_BASE_URL;
     }
 
+    normalizeJsonEnvelope(payload, status) {
+        if (payload && typeof payload === 'object' && 'success' in payload && 'message' in payload && 'data' in payload) {
+            return payload;
+        }
+        const success = status >= 200 && status < 400;
+        return {
+            success,
+            code: success ? 'OK' : `HTTP_${status}`,
+            message: success ? 'ok' : (payload?.error || payload?.message || `HTTP ${status}`),
+            data: payload,
+            meta: {}
+        };
+    }
+
     async request(url, options = {}) {
         const fullUrl = url.startsWith('http') ? url : `${this.baseURL}${url}`;
         const defaultOptions = {
@@ -33,10 +47,15 @@ class AtlasWorksApi {
 
         if (isJson) {
             const payload = await response.json();
+            const normalized = this.normalizeJsonEnvelope(payload, response.status);
             if (!response.ok) {
-                throw new Error(payload?.error || payload?.message || `HTTP ${response.status}`);
+                const error = new Error(normalized?.message || `HTTP ${response.status}`);
+                error.payload = normalized;
+                error.status = response.status;
+                error.code = normalized?.code;
+                throw error;
             }
-            return payload;
+            return normalized;
         }
 
         if (!response.ok) {
@@ -111,6 +130,10 @@ class AtlasWorksApi {
         return this.get(`/api/datasources/info/${encodePathSegments(filename)}`, { tileType });
     }
 
+    getDatasourceFileUrl(filename) {
+        return `${this.baseURL}/api/datasources/raw/${encodePathSegments(filename)}`;
+    }
+
     async resolveDatasourceFiles(params) {
         return this.post('/api/datasources/resolve', params);
     }
@@ -160,6 +183,10 @@ class AtlasWorksApi {
         });
     }
 
+    getWorkspaceFileUrl(path) {
+        return `${this.baseURL}/api/workspace/raw/${encodePathSegments(path)}`;
+    }
+
     async getWorkspaceInfo() {
         return this.get('/api/workspace/info');
     }
@@ -196,8 +223,8 @@ class AtlasWorksApi {
         });
     }
 
-    async getAllTasks() {
-        return this.get('/api/tasks');
+    async getAllTasks(params = {}) {
+        return this.get('/api/tasks', params);
     }
 
     async getTaskStatus(taskId) {
@@ -280,12 +307,12 @@ class AtlasWorksApi {
         return this.post('/api/tile/convert', params);
     }
 
-    async listArtifacts() {
-        return this.get('/api/artifacts');
+    async listArtifacts(params = {}) {
+        return this.get('/api/artifacts', params);
     }
 
-    async listPublications() {
-        return this.get('/api/publications');
+    async listPublications(params = {}) {
+        return this.get('/api/publications', params);
     }
 
     async createPublication(params) {
@@ -304,8 +331,8 @@ class AtlasWorksApi {
         return this.delete(`/api/publications/${encodeURIComponent(publicationId)}`);
     }
 
-    async getRoutes() {
-        return this.get('/api/routes');
+    async getRoutes(params = {}) {
+        return this.get('/api/routes', params);
     }
 
     async getCacheInfo() {

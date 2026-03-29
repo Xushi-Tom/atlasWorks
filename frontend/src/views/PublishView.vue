@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
 import PathPickerModal from '../components/PathPickerModal.vue';
 import { api } from '../services/api';
@@ -21,7 +21,6 @@ const form = reactive({
     taskId: '',
     workspacePath: '',
     alias: '',
-    publicationId: '',
     publishType: 'imagery',
     publishMethod: 'wmts',
     enabled: true,
@@ -30,12 +29,14 @@ const form = reactive({
 });
 
 const createVisible = ref(false);
-const detailVisible = ref(false);
 const keyword = ref('');
 const publications = ref([]);
 const tasks = ref([]);
 const editingPublicationId = ref('');
-const currentPublication = ref(null);
+const currentPage = ref(1);
+const pageSize = ref(10);
+const totalPublications = ref(0);
+let loadTimer = null;
 
 const publishMethodCatalog = {
     imagery: [
@@ -104,25 +105,6 @@ const publishableTasks = computed(() => {
 const selectedTask = computed(() => publishableTasks.value.find(task => task.taskId === form.taskId) || null);
 const modalTitle = computed(() => editingPublicationId.value ? '编辑发布' : '创建发布');
 
-const filteredPublications = computed(() => {
-    const needle = String(keyword.value || '').trim().toLowerCase();
-    return [...publications.value]
-        .filter(item => {
-            if (!needle) return true;
-            return [
-                item.publicationId,
-                item.alias,
-                item.publishPath,
-                item.metadata?.workspacePath,
-                item.metadata?.taskId,
-                item.metadata?.publishMethod,
-                getPublishTypeLabel(item.publishType),
-                getPublicationStatusLabel(item.status)
-            ].some(value => String(value || '').toLowerCase().includes(needle));
-        })
-        .sort((a, b) => String(b.publishedAt || b.createdAt || '').localeCompare(String(a.publishedAt || a.createdAt || '')));
-});
-
 function isPublicationEnabled(item) {
     return Boolean(item?.metadata?.enabled ?? (item?.status === 'enabled' || item?.status === 'published'));
 }
@@ -167,12 +149,44 @@ function getPublishMethodLabel(publishType, publishMethod) {
     return option?.label || publishMethod || '-';
 }
 
+async function copyText(text) {
+    const value = String(text || '').trim();
+    if (!value) return false;
+
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        return true;
+    }
+
+    const textArea = document.createElement('textarea');
+    textArea.value = value;
+    textArea.setAttribute('readonly', 'readonly');
+    textArea.style.position = 'absolute';
+    textArea.style.left = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return copied;
+}
+
+async function copyPublicationUrl(url) {
+    try {
+        const copied = await copyText(url);
+        if (!copied) {
+            throw new Error('复制失败');
+        }
+        pushToast('发布地址已复制', 'success');
+    } catch (error) {
+        pushToast(`复制失败: ${error.message}`, 'error', 4000);
+    }
+}
+
 function resetForm() {
     form.sourceMode = 'task';
     form.taskId = '';
     form.workspacePath = '';
     form.alias = '';
-    form.publicationId = '';
     form.publishType = 'imagery';
     form.publishMethod = 'wmts';
     form.enabled = true;
@@ -207,18 +221,12 @@ function editPublication(item) {
     form.taskId = item.metadata?.taskId || '';
     form.workspacePath = normalizeWorkspacePath(item.metadata?.workspacePath || item.publishPath || '');
     form.alias = item.alias || '';
-    form.publicationId = item.publicationId || '';
     form.publishType = item.publishType || 'imagery';
     form.publishMethod = item.metadata?.publishMethod || 'wmts';
     form.enabled = isPublicationEnabled(item);
     form.visibility = item.metadata?.visibility || 'private';
     form.note = item.metadata?.note || '';
     createVisible.value = true;
-}
-
-function openPublicationDetail(item) {
-    currentPublication.value = item || null;
-    detailVisible.value = true;
 }
 
 async function togglePublicationStatus(item, explicitEnabled = null) {
@@ -286,8 +294,16 @@ watch(() => form.taskId, value => {
 
 async function loadPublications() {
     try {
-        const response = await api.listPublications();
-        publications.value = response?.publications || [];
+        const response = await api.listPublications({
+            page: currentPage.value,
+            pageSize: pageSize.value,
+            keyword: String(keyword.value || '').trim() || undefined
+        });
+        const data = response?.data || {};
+        publications.value = data.publications || [];
+        totalPublications.value = Number(data.total || 0);
+        currentPage.value = Number(data.page || currentPage.value);
+        pageSize.value = Number(data.pageSize || pageSize.value);
     } catch (error) {
         pushToast(`发布记录加载失败: ${error.message}`, 'error', 4500);
     }
@@ -295,8 +311,12 @@ async function loadPublications() {
 
 async function loadTasks() {
     try {
-        const response = await api.getAllTasks();
-        tasks.value = Object.values(response?.tasks || {});
+        const response = await api.getAllTasks({
+            page: 1,
+            pageSize: 500,
+            status: 'completed'
+        });
+        tasks.value = Object.values(response?.data?.tasks || {});
     } catch (error) {
         pushToast(`可发布任务加载失败: ${error.message}`, 'error', 4500);
     }
@@ -318,7 +338,6 @@ async function submitPublication() {
         workspacePath: form.sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
         publishPath: form.sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
         alias: form.alias || undefined,
-        publicationId: form.publicationId || undefined,
         publishType: form.publishType,
         publishMethod: form.publishMethod || undefined,
         enabled: form.enabled,
@@ -350,6 +369,39 @@ async function submitPublication() {
 onMounted(async () => {
     await Promise.all([loadPublications(), loadTasks()]);
 });
+
+function handlePageChange(page) {
+    currentPage.value = page;
+    loadPublications();
+}
+
+function handlePageSizeChange(size) {
+    pageSize.value = size;
+    currentPage.value = 1;
+    loadPublications();
+}
+
+function scheduleLoad() {
+    if (loadTimer) {
+        window.clearTimeout(loadTimer);
+    }
+    loadTimer = window.setTimeout(() => {
+        loadTimer = null;
+        loadPublications();
+    }, 250);
+}
+
+watch(keyword, () => {
+    currentPage.value = 1;
+    scheduleLoad();
+});
+
+onBeforeUnmount(() => {
+    if (loadTimer) {
+        window.clearTimeout(loadTimer);
+        loadTimer = null;
+    }
+});
 </script>
 
 <template>
@@ -359,7 +411,7 @@ onMounted(async () => {
                 <h2>发布中心</h2>
                 <p class="section-subtitle">统一管理发布记录，支持按任务生成发布、手动目录发布、启停切换与生命周期维护。</p>
             </div>
-            <div class="tool-actions">
+            <div class="tool-actions publish-header-actions">
                 <el-button @click="loadPublications">刷新</el-button>
                 <el-button type="primary" @click="openCreateModal">创建发布</el-button>
             </div>
@@ -367,14 +419,13 @@ onMounted(async () => {
 
         <div class="app-scroll">
             <div class="content-stack">
-                <div class="card publish-list-shell">
-                    <div class="card-header task-filter-panel task-filter-panel-simple">
-                        <el-input v-model="keyword" clearable placeholder="发布 ID / 别名 / 路径 / 任务 / 发布方式" />
+                <div class="card publish-list-shell data-panel">
+                    <div class="card-header task-filter-panel task-filter-panel-simple data-toolbar">
+                        <el-input v-model="keyword" clearable placeholder="发布名称 / 路径 / 任务 / 发布方式" />
                     </div>
 
-                    <div class="card-body publish-table">
-                        <el-table class="publish-data-table" :data="filteredPublications" stripe border height="100%">
-                            <el-table-column prop="publicationId" label="发布 ID" min-width="220" />
+                    <div class="card-body publish-table data-table-shell">
+                        <el-table class="publish-data-table" :data="publications" stripe border height="100%">
                             <el-table-column prop="alias" label="发布名称" min-width="160">
                                 <template #default="{ row }">
                                     {{ row.alias || '-' }}
@@ -387,7 +438,26 @@ onMounted(async () => {
                             </el-table-column>
                             <el-table-column label="发布地址" min-width="300">
                                 <template #default="{ row }">
-                                    <a v-if="row.accessUrl" :href="row.accessUrl" target="_blank" rel="noreferrer">{{ row.accessUrl }}</a>
+                                    <div v-if="row.accessUrl" class="publish-address-cell">
+                                        <a
+                                            class="publish-address-link"
+                                            :href="row.accessUrl"
+                                            :title="row.accessUrl"
+                                            target="_blank"
+                                            rel="noreferrer"
+                                        >{{ row.accessUrl }}</a>
+                                        <button
+                                            class="publish-copy-button"
+                                            type="button"
+                                            :title="`复制地址: ${row.accessUrl}`"
+                                            @click="copyPublicationUrl(row.accessUrl)"
+                                        >
+                                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                <path d="M9 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
+                                                <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+                                            </svg>
+                                        </button>
+                                    </div>
                                     <span v-else>-</span>
                                 </template>
                             </el-table-column>
@@ -406,7 +476,7 @@ onMounted(async () => {
                                     {{ formatDateTime(row.publishedAt || row.createdAt) }}
                                 </template>
                             </el-table-column>
-                            <el-table-column label="操作" width="330" fixed="right">
+                            <el-table-column label="操作" width="260" fixed="right">
                                 <template #default="{ row }">
                                     <div class="publish-table-actions">
                                         <el-switch
@@ -416,13 +486,24 @@ onMounted(async () => {
                                             inline-prompt
                                             @change="value => togglePublicationStatus(row, value)"
                                         />
-                                        <el-button size="small" @click="openPublicationDetail(row)">详情</el-button>
                                         <el-button size="small" @click="editPublication(row)">编辑</el-button>
                                         <el-button size="small" type="danger" @click="removePublication(row)">删除</el-button>
                                     </div>
                                 </template>
                             </el-table-column>
                         </el-table>
+                        <div class="publish-list-pagination">
+                            <el-pagination
+                                :current-page="currentPage"
+                                :page-size="pageSize"
+                                :page-sizes="[10, 20, 50, 100]"
+                                :total="totalPublications"
+                                background
+                                layout="total, sizes, prev, pager, next, jumper"
+                                @current-change="handlePageChange"
+                                @size-change="handlePageSizeChange"
+                            />
+                        </div>
                     </div>
                 </div>
             </div>
@@ -438,7 +519,7 @@ onMounted(async () => {
                 </el-form-item>
 
                 <el-form-item v-if="form.sourceMode === 'task'" label="任务结果">
-                    <el-select v-model="form.taskId" filterable placeholder="请选择已完成任务" popper-class="publish-select-popper">
+                    <el-select v-model="form.taskId" filterable placeholder="请选择已完成任务">
                         <el-option v-for="task in publishableTasks" :key="task.taskId" :label="`${task.taskId} / ${getTaskResultPath(task)}`" :value="task.taskId" />
                     </el-select>
                     <div v-if="selectedTask" class="publish-source-preview">
@@ -459,12 +540,8 @@ onMounted(async () => {
                     <el-input v-model="form.alias" placeholder="例如 imagery-release-v1" />
                 </el-form-item>
 
-                <el-form-item label="发布 ID">
-                    <el-input v-model="form.publicationId" placeholder="为空则自动生成" />
-                </el-form-item>
-
                 <el-form-item label="发布类型">
-                    <el-select v-model="form.publishType" popper-class="publish-select-popper">
+                    <el-select v-model="form.publishType">
                         <el-option label="地图 / 遥感" value="imagery" />
                         <el-option label="地图 / 电子地图" value="electronic-map" />
                         <el-option label="地形" value="terrain" />
@@ -474,13 +551,13 @@ onMounted(async () => {
                 </el-form-item>
 
                 <el-form-item label="发布方式">
-                    <el-select v-model="form.publishMethod" popper-class="publish-select-popper">
+                    <el-select v-model="form.publishMethod">
                         <el-option v-for="option in publishMethodOptions" :key="option.value" :label="option.label" :value="option.value" />
                     </el-select>
                 </el-form-item>
 
                 <el-form-item label="可见性">
-                    <el-select v-model="form.visibility" popper-class="publish-select-popper">
+                    <el-select v-model="form.visibility">
                         <el-option label="私有" value="private" />
                         <el-option label="内部" value="internal" />
                         <el-option label="公开" value="public" />
@@ -499,62 +576,6 @@ onMounted(async () => {
             <template #footer>
                 <el-button @click="createVisible = false">取消</el-button>
                 <el-button type="primary" @click="submitPublication">{{ editingPublicationId ? '保存修改' : '创建发布' }}</el-button>
-            </template>
-        </el-dialog>
-
-        <el-dialog v-model="detailVisible" class="publish-detail-dialog" title="发布详情" width="760px" destroy-on-close>
-            <div v-if="currentPublication" class="publish-detail-grid">
-                <div class="detail-item">
-                    <span class="detail-label">发布 ID</span>
-                    <span class="detail-value">{{ currentPublication.publicationId || '-' }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">发布名称</span>
-                    <span class="detail-value">{{ currentPublication.alias || '-' }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">发布类型</span>
-                    <span class="detail-value">{{ getPublishTypeLabel(currentPublication.publishType) }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">发布方式</span>
-                    <span class="detail-value">{{ getPublishMethodLabel(currentPublication.publishType, currentPublication.metadata?.publishMethod) }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">可见性</span>
-                    <span class="detail-value">{{ getVisibilityLabel(currentPublication.metadata?.visibility) }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">状态</span>
-                    <span class="detail-value">{{ getPublicationStatusLabel(currentPublication.status) }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">启用状态</span>
-                    <span class="detail-value">{{ isPublicationEnabled(currentPublication) ? '启用' : '停用' }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">发布时间</span>
-                    <span class="detail-value">{{ formatDateTime(currentPublication.publishedAt || currentPublication.createdAt) }}</span>
-                </div>
-                <div class="detail-item detail-item-full">
-                    <span class="detail-label">发布地址</span>
-                    <span class="detail-value detail-break">{{ currentPublication.accessUrl || currentPublication.publishPath || '-' }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">任务 ID</span>
-                    <span class="detail-value">{{ currentPublication.metadata?.taskId || '-' }}</span>
-                </div>
-                <div class="detail-item">
-                    <span class="detail-label">工作目录</span>
-                    <span class="detail-value detail-break">{{ currentPublication.metadata?.workspacePath || '-' }}</span>
-                </div>
-                <div class="detail-item detail-item-full">
-                    <span class="detail-label">发布说明</span>
-                    <span class="detail-value detail-break">{{ currentPublication.metadata?.note || '-' }}</span>
-                </div>
-            </div>
-            <template #footer>
-                <el-button @click="detailVisible = false">关闭</el-button>
             </template>
         </el-dialog>
 
@@ -577,49 +598,151 @@ onMounted(async () => {
     min-height: 520px;
 }
 
+.publish-list-pagination {
+    display: flex;
+    justify-content: flex-end;
+    padding: 16px 18px 18px;
+    border-top: 1px solid rgba(145, 160, 180, 0.12);
+}
+
 .publish-table-actions {
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
-.publish-table-actions :deep(.el-button) {
-    min-width: 58px;
-    padding-inline: 12px;
+.publish-list-shell {
+    border: 1px solid rgba(145, 160, 180, 0.14);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
+        linear-gradient(160deg, rgba(8, 16, 28, 0.92), rgba(10, 19, 32, 0.96));
+    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.16);
 }
 
-.publish-detail-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+.publish-list-shell.data-panel {
+    border-radius: 30px;
+    border-color: rgba(129, 150, 181, 0.16);
+    background:
+        radial-gradient(circle at top right, rgba(92, 132, 190, 0.1), transparent 26%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
+        linear-gradient(160deg, rgba(7, 14, 24, 0.98), rgba(8, 15, 26, 0.95));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 26px 54px rgba(0, 0, 0, 0.22);
 }
 
-.detail-item {
-    padding: 10px 12px;
+.publish-list-shell :deep(.el-input__wrapper) {
+    background: rgba(6, 14, 24, 0.9) !important;
+    border-radius: 14px !important;
+    box-shadow:
+        inset 0 0 0 1px rgba(82, 112, 147, 0.3) !important,
+        0 10px 24px rgba(0, 0, 0, 0.08) !important;
+}
+
+.publish-list-shell :deep(.el-input__wrapper.is-focus) {
+    box-shadow:
+        inset 0 0 0 1px rgba(103, 240, 255, 0.26) !important,
+        0 0 0 4px rgba(31, 164, 255, 0.08) !important;
+}
+
+.publish-list-shell :deep(.el-input__inner),
+.publish-list-shell :deep(.el-input__icon) {
+    color: var(--tf-text) !important;
+}
+
+.publish-list-shell :deep(.el-input__inner::placeholder) {
+    color: var(--tf-text-dim) !important;
+}
+
+.publish-list-shell :deep(.el-table) {
+    color: var(--tf-text) !important;
+    border: 1px solid rgba(108, 134, 168, 0.14) !important;
+    border-radius: 26px !important;
+    overflow: hidden !important;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
+        linear-gradient(150deg, rgba(10, 17, 29, 0.96), rgba(9, 15, 25, 0.92)) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.03),
+        0 16px 30px rgba(0, 0, 0, 0.14) !important;
+}
+
+.publish-list-shell :deep(.el-table::before),
+.publish-list-shell :deep(.el-table__inner-wrapper::before) {
+    display: none !important;
+}
+
+.publish-list-shell :deep(.el-table__header-wrapper) {
+    background: linear-gradient(180deg, rgba(31, 43, 63, 0.96), rgba(25, 35, 52, 0.92)) !important;
+}
+
+.publish-list-shell :deep(.el-table__header-wrapper th.el-table__cell) {
+    background: transparent !important;
+    border-bottom-color: rgba(108, 134, 168, 0.16) !important;
+    color: #dbe7f4 !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.02em !important;
+    padding-top: 18px !important;
+    padding-bottom: 18px !important;
+}
+
+.publish-list-shell :deep(.el-table__body td.el-table__cell) {
+    border-bottom-color: rgba(108, 134, 168, 0.1) !important;
+    padding-top: 18px !important;
+    padding-bottom: 18px !important;
+}
+
+.publish-list-shell :deep(.el-table__body tr.el-table__row > td.el-table__cell),
+.publish-list-shell :deep(.el-table__fixed-body-wrapper tr.el-table__row > td.el-table__cell) {
+    background: rgba(11, 20, 33, 0.82) !important;
+}
+
+.publish-list-shell :deep(.el-table--striped .el-table__body tr.el-table__row--striped > td.el-table__cell) {
+    background: rgba(15, 25, 40, 0.86) !important;
+}
+
+.publish-list-shell :deep(.el-table__body tr.el-table__row:hover > td.el-table__cell),
+.publish-list-shell :deep(.el-table__fixed-body-wrapper tr.el-table__row:hover > td.el-table__cell) {
+    background: rgba(20, 33, 50, 0.94) !important;
+}
+
+.publish-list-shell :deep(.el-table__fixed),
+.publish-list-shell :deep(.el-table__fixed-right),
+.publish-list-shell :deep(.el-table__fixed-right-patch) {
+    background: rgba(11, 19, 31, 0.96) !important;
+}
+
+.publish-list-shell :deep(.el-table__fixed-right::before),
+.publish-list-shell :deep(.el-table__fixed::before) {
+    background: linear-gradient(180deg, rgba(108, 134, 168, 0.16), rgba(108, 134, 168, 0.04)) !important;
+}
+
+.publish-table-actions :deep(.el-button),
+.publish-header-actions :deep(.el-button) {
+    min-width: 62px;
+    padding-inline: 14px;
     border-radius: 10px;
-    border: 1px solid rgba(74, 195, 255, 0.18);
-    background: rgba(6, 18, 32, 0.75);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    font-weight: 700;
 }
 
-.detail-item-full {
-    grid-column: 1 / -1;
+.publish-header-actions :deep(.el-button--primary),
+.publish-table-actions :deep(.el-button--primary) {
+    border-color: rgba(196, 205, 216, 0.16);
+    background: linear-gradient(135deg, rgba(142, 169, 201, 0.96), rgba(88, 109, 137, 0.92));
+    color: #08111b;
+    box-shadow: 0 10px 24px rgba(44, 56, 74, 0.26);
 }
 
-.detail-label {
-    font-size: 12px;
-    color: var(--tf-text-dim);
+.publish-table-actions :deep(.el-button--danger) {
+    border-color: rgba(233, 171, 183, 0.16);
+    background: linear-gradient(135deg, rgba(201, 103, 120, 0.94), rgba(138, 59, 76, 0.9));
 }
 
-.detail-value {
-    color: var(--tf-text);
-    font-size: 14px;
-}
-
-.detail-break {
-    word-break: break-all;
+.publish-header-actions :deep(.el-button:not(.el-button--primary):not(.el-button--danger)),
+.publish-table-actions :deep(.el-button:not(.el-button--primary):not(.el-button--danger)) {
+    border-color: rgba(156, 170, 188, 0.16);
+    background: linear-gradient(135deg, rgba(34, 44, 58, 0.96), rgba(22, 29, 39, 0.94));
+    color: #dce6f1;
 }
 
 .path-field {
@@ -651,7 +774,56 @@ onMounted(async () => {
     text-decoration: underline;
 }
 
-.task-filter-panel :deep(.el-input__wrapper),
+.publish-address-cell {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.publish-address-link {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.publish-copy-button {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(103, 240, 255, 0.16);
+    border-radius: 10px;
+    background: rgba(10, 24, 39, 0.72);
+    color: var(--tf-text-soft);
+    cursor: pointer;
+    transition:
+        background 0.18s ease,
+        border-color 0.18s ease,
+        color 0.18s ease,
+        transform 0.18s ease;
+}
+
+.publish-copy-button:hover {
+    background: rgba(19, 38, 58, 0.94);
+    border-color: rgba(103, 240, 255, 0.26);
+    color: var(--tf-text);
+    transform: translateY(-1px);
+}
+
+.publish-copy-button svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
 .publish-editor-form :deep(.el-input__wrapper),
 .publish-editor-form :deep(.el-textarea__inner),
 .publish-editor-form :deep(.el-select__wrapper) {
@@ -659,79 +831,69 @@ onMounted(async () => {
     box-shadow: 0 0 0 1px rgba(74, 195, 255, 0.22) inset;
 }
 
-.task-filter-panel :deep(.el-input__inner),
 .publish-editor-form :deep(.el-input__inner),
 .publish-editor-form :deep(.el-textarea__inner),
 .publish-editor-form :deep(.el-select__selected-item) {
     color: var(--tf-text);
 }
 
-.task-filter-panel :deep(.el-input__inner::placeholder),
 .publish-editor-form :deep(.el-input__inner::placeholder),
 .publish-editor-form :deep(.el-textarea__inner::placeholder) {
     color: var(--tf-text-dim);
 }
 
-.publish-list-shell :deep(.el-table) {
-    --el-table-header-bg-color: rgba(13, 34, 60, 0.95);
-    --el-table-tr-bg-color: rgba(8, 22, 38, 0.84);
-    --el-table-striped-bg-color: rgba(15, 38, 63, 0.66);
-    --el-table-row-hover-bg-color: rgba(31, 164, 255, 0.14);
-    --el-table-border-color: rgba(74, 195, 255, 0.24);
-    --el-table-text-color: var(--tf-text);
-    --el-table-header-text-color: #bfe8ff;
-    --el-table-bg-color: rgba(6, 14, 26, 0.84);
-    color: var(--tf-text);
-    border-radius: 10px;
-    overflow: hidden;
-}
-
-.publish-list-shell :deep(.el-table__header-wrapper th.el-table__cell) {
-    font-weight: 600;
-    letter-spacing: 0.02em;
-}
-
-.publish-list-shell :deep(.el-table__body tr td.el-table__cell) {
-    border-bottom-color: rgba(74, 195, 255, 0.18);
-}
-
-.publish-list-shell :deep(.el-table__body tr.el-table__row > td.el-table__cell) {
-    background: rgba(6, 18, 32, 0.86);
-}
-
-.publish-list-shell :deep(.el-table--striped .el-table__body tr.el-table__row--striped > td.el-table__cell) {
-    background: rgba(13, 31, 52, 0.82);
-}
-
-.publish-list-shell :deep(.el-table__body tr.el-table__row:hover > td.el-table__cell) {
-    background: rgba(31, 164, 255, 0.16) !important;
-}
-
-.publish-list-shell :deep(.el-table__fixed-right),
-.publish-list-shell :deep(.el-table__fixed-right .el-table__fixed-header-wrapper),
-.publish-list-shell :deep(.el-table__fixed-right .el-table__fixed-body-wrapper),
-.publish-list-shell :deep(.el-table__fixed-right-patch) {
-    background: #061220 !important;
-}
-
-.publish-list-shell :deep(.el-table__fixed-right th.el-table__cell) {
-    background: #0d223c !important;
-}
-
-.publish-list-shell :deep(.el-table__fixed-right .el-table__body tr.el-table__row > td.el-table__cell) {
-    background: #061220 !important;
-}
-
-.publish-list-shell :deep(.el-table__fixed-right .el-table__body tr.el-table__row--striped > td.el-table__cell) {
-    background: #0d1f34 !important;
-}
-
-.publish-list-shell :deep(.el-table__fixed-right .el-table__body tr.el-table__row:hover > td.el-table__cell) {
-    background: #12314d !important;
-}
-
 .publish-list-shell :deep(.el-switch__label) {
     color: var(--tf-text-soft);
+}
+
+.publish-list-shell :deep(.el-tag) {
+    border-radius: 999px;
+    font-weight: 700;
+    padding-inline: 10px;
+}
+
+.publish-list-pagination :deep(.el-pagination) {
+    gap: 8px;
+}
+
+.publish-list-pagination :deep(.btn-prev),
+.publish-list-pagination :deep(.btn-next),
+.publish-list-pagination :deep(.el-pager li) {
+    min-width: 38px;
+    height: 38px;
+    border: 1px solid rgba(108, 134, 168, 0.14) !important;
+    border-radius: 12px;
+    background: rgba(16, 27, 42, 0.92) !important;
+    color: var(--tf-text) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.publish-list-pagination :deep(.el-pager li.is-active) {
+    border-color: rgba(103, 240, 255, 0.2) !important;
+    background: linear-gradient(135deg, rgba(75, 133, 214, 0.96), rgba(62, 111, 176, 0.92)) !important;
+    color: #f5fbff !important;
+}
+
+.publish-list-pagination :deep(.el-pagination__total),
+.publish-list-pagination :deep(.el-pagination__jump),
+.publish-list-pagination :deep(.el-pagination__sizes),
+.publish-list-pagination :deep(.el-pagination__goto) {
+    color: var(--tf-text-soft) !important;
+}
+
+.publish-list-pagination :deep(.el-select .el-select__wrapper),
+.publish-list-pagination :deep(.el-input .el-input__wrapper) {
+    min-height: 38px;
+    border-radius: 12px;
+    background: rgba(16, 27, 42, 0.92) !important;
+    box-shadow: inset 0 0 0 1px rgba(108, 134, 168, 0.18) !important;
+}
+
+.publish-list-pagination :deep(.el-select__selected-item),
+.publish-list-pagination :deep(.el-input__inner),
+.publish-list-pagination :deep(.el-select__caret),
+.publish-list-pagination :deep(.el-input__icon) {
+    color: var(--tf-text) !important;
 }
 
 :deep(.publish-editor-dialog.el-dialog) {
@@ -801,52 +963,9 @@ onMounted(async () => {
     --el-switch-off-color: rgba(74, 195, 255, 0.34);
 }
 
-:deep(.publish-detail-dialog.el-dialog) {
-    background: linear-gradient(160deg, rgba(4, 14, 26, 0.96), rgba(9, 24, 42, 0.97));
-    border: 1px solid rgba(74, 195, 255, 0.3);
-    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.5);
-}
-
-:deep(.publish-detail-dialog .el-dialog__header) {
-    border-bottom: 1px solid rgba(74, 195, 255, 0.2);
-    margin-right: 0;
-}
-
-:deep(.publish-detail-dialog .el-dialog__title),
-:deep(.publish-detail-dialog .el-dialog__close) {
-    color: var(--tf-text);
-}
-
-:global(.publish-select-popper.el-popper) {
-    background: linear-gradient(170deg, rgba(6, 16, 30, 0.98), rgba(8, 24, 42, 0.98));
-    border: 1px solid rgba(74, 195, 255, 0.28);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
-}
-
-:global(.publish-select-popper .el-select-dropdown__item) {
-    color: var(--tf-text-soft);
-    font-weight: 500;
-}
-
-:global(.publish-select-popper .el-select-dropdown__item.is-hovering),
-:global(.publish-select-popper .el-select-dropdown__item:hover) {
-    background: rgba(31, 164, 255, 0.2);
-    color: var(--tf-text);
-}
-
-:global(.publish-select-popper .el-select-dropdown__item.is-selected) {
-    color: #7dd8ff;
-    background: rgba(31, 164, 255, 0.25);
-    font-weight: 700;
-}
-
 @media (max-width: 960px) {
     .publish-table-actions {
         flex-wrap: wrap;
-    }
-
-    .publish-detail-grid {
-        grid-template-columns: 1fr;
     }
 
     .path-field {

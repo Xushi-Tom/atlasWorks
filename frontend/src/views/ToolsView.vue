@@ -7,7 +7,8 @@ import { normalizeListInput } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
 
 const props = defineProps({
-    activeSubsection: { type: String, required: true }
+    activeSubsection: { type: String, default: 'toolNodataTiles' },
+    standaloneMode: { type: Boolean, default: false }
 });
 
 const emit = defineEmits(['update:activeSubsection']);
@@ -62,9 +63,13 @@ const tabMeta = {
 
 const currentTab = ref(props.activeSubsection);
 watch(() => props.activeSubsection, value => {
-    currentTab.value = value;
+    currentTab.value = value || tabs[0].id;
 });
-watch(currentTab, value => emit('update:activeSubsection', value));
+watch(currentTab, value => {
+    if (!props.standaloneMode) {
+        emit('update:activeSubsection', value);
+    }
+});
 
 const picker = reactive({
     visible: false,
@@ -117,6 +122,9 @@ const resultText = reactive({
 });
 
 const artifacts = ref([]);
+const artifactCurrentPage = ref(1);
+const artifactPageSize = ref(10);
+const artifactTotal = ref(0);
 
 const currentMeta = computed(() => tabMeta[currentTab.value] || tabMeta.toolNodataTiles);
 
@@ -160,7 +168,7 @@ async function runNodata(action) {
                 transparencyThreshold: Number(forms.nodataThreshold),
                 includeDetails: forms.nodataIncludeDetails
             });
-        setResult('nodata', response);
+        setResult('nodata', response?.data || response);
         pushToast(action === 'scan' ? '透明瓦片扫描完成' : '透明瓦片清理完成', 'success');
     } catch (error) {
         setResult('nodata', `执行失败: ${error.message}`);
@@ -184,7 +192,7 @@ async function runLayerJson() {
             threads: Number(forms.layerJsonThreads),
             maxMemory: forms.layerJsonMaxMemory
         });
-        setResult('layerJson', response);
+        setResult('layerJson', response?.data || response);
         pushToast(response?.message || '地形元数据修复完成', 'success');
     } catch (error) {
         setResult('layerJson', `处理失败: ${error.message}`);
@@ -199,7 +207,7 @@ async function runTerrainDecompress() {
     }
     try {
         const response = await api.decompressTerrain({ folderPath: forms.terrainDecompressFolder });
-        setResult('terrainDecompress', response);
+        setResult('terrainDecompress', response?.data || response);
         pushToast(response?.message || '地形数据解压完成', 'success');
     } catch (error) {
         setResult('terrainDecompress', `解压失败: ${error.message}`);
@@ -219,7 +227,7 @@ async function runPreflight() {
             heightBand: forms.preflightHeightBand === '' ? null : Number(forms.preflightHeightBand),
             maxFiles: Number(forms.preflightMaxFiles)
         });
-        setResult('preflight', response);
+        setResult('preflight', response?.data || response);
         pushToast(response?.success ? '生产预检完成' : '预检完成，请关注告警项', response?.success ? 'success' : 'warning');
     } catch (error) {
         setResult('preflight', `预检失败: ${error.message}`);
@@ -240,7 +248,7 @@ async function runTileConvert() {
             targetFormat: forms.tileConvertTargetFormat,
             overwrite: forms.tileConvertOverwrite
         });
-        setResult('tileConvert', response);
+        setResult('tileConvert', response?.data || response);
         pushToast(response?.message || '结构转换任务已提交', 'success');
     } catch (error) {
         setResult('tileConvert', `转换失败: ${error.message}`);
@@ -263,8 +271,8 @@ async function runSplit() {
             maxFileSize: Number(forms.splitMaxFileSize),
             namingPattern: forms.splitNamingPattern
         });
-        setResult('split', response);
-        pushToast(response?.skipSplit ? '当前文件无需切分' : (response?.message || '切分任务已提交'), response?.skipSplit ? 'info' : 'success');
+        setResult('split', response?.data || response);
+        pushToast(response?.data?.skipSplit ? '当前文件无需切分' : (response?.message || '切分任务已提交'), response?.data?.skipSplit ? 'info' : 'success');
     } catch (error) {
         setResult('split', `切分失败: ${error.message}`);
         pushToast(`切分失败: ${error.message}`, 'error', 5000);
@@ -273,11 +281,29 @@ async function runSplit() {
 
 async function loadArtifacts() {
     try {
-        const artifactResponse = await api.listArtifacts();
-        artifacts.value = artifactResponse?.artifacts || [];
+        const artifactResponse = await api.listArtifacts({
+            page: artifactCurrentPage.value,
+            pageSize: artifactPageSize.value
+        });
+        const data = artifactResponse?.data || {};
+        artifacts.value = data.artifacts || [];
+        artifactTotal.value = Number(data.total || 0);
+        artifactCurrentPage.value = Number(data.page || artifactCurrentPage.value);
+        artifactPageSize.value = Number(data.pageSize || artifactPageSize.value);
     } catch (error) {
         pushToast(`成果索引加载失败: ${error.message}`, 'error', 4500);
     }
+}
+
+function handleArtifactPageChange(page) {
+    artifactCurrentPage.value = page;
+    loadArtifacts();
+}
+
+function handleArtifactPageSizeChange(size) {
+    artifactPageSize.value = size;
+    artifactCurrentPage.value = 1;
+    loadArtifacts();
 }
 
 watch(currentTab, value => {
@@ -308,7 +334,7 @@ onMounted(() => {
                 <button v-if="currentTab === 'toolArtifacts'" class="btn btn-secondary" type="button" @click="loadArtifacts">刷新索引</button>
             </div>
         </div>
-        <div class="view-subnav">
+        <div v-if="!standaloneMode" class="view-subnav">
             <div class="subnav-tabs">
                 <button
                     v-for="tab in tabs"
@@ -642,19 +668,32 @@ onMounted(() => {
                         </div>
                     </div>
                     <div v-if="artifacts.length" class="artifact-list">
-                        <div v-for="item in artifacts" :key="item.artifactId" class="task-list-row">
-                            <div class="task-list-main">
-                                <div class="task-list-title-row">
+                        <div v-for="item in artifacts" :key="item.artifactId" class="artifact-record-item">
+                            <div class="artifact-record-head">
+                                <div class="artifact-record-title">
                                     <strong>{{ item.artifactId }}</strong>
-                                    <span class="status-chip">{{ item.jobType || 'artifact' }}</span>
+                                    <span class="status-chip">{{ item.artifactType || item.jobType || 'artifact' }}</span>
                                 </div>
-                                <div class="task-list-meta">
-                                    <span>任务：{{ item.taskId || '-' }}</span>
-                                    <span>类型：{{ item.type || item.jobType || '-' }}</span>
-                                    <span>时间：{{ item.createdAt || item.timestamp || '-' }}</span>
-                                </div>
-                                <div class="task-list-message">{{ item.outputPath || item.alias || '-' }}</div>
+                                <span class="artifact-record-version">{{ item.version || 'v1' }}</span>
                             </div>
+                            <div class="artifact-record-meta">
+                                <span>任务：{{ item.buildJobId || item.taskId || '-' }}</span>
+                                <span>格式：{{ item.format || '-' }}</span>
+                                <span>时间：{{ item.createdAt || item.timestamp || '-' }}</span>
+                                </div>
+                            <div class="artifact-record-path">{{ item.outputPath || item.alias || '-' }}</div>
+                        </div>
+                        <div class="tool-list-pagination soft-pagination">
+                            <el-pagination
+                                :current-page="artifactCurrentPage"
+                                :page-size="artifactPageSize"
+                                :page-sizes="[10, 20, 50, 100]"
+                                :total="artifactTotal"
+                                background
+                                layout="total, sizes, prev, pager, next, jumper"
+                                @current-change="handleArtifactPageChange"
+                                @size-change="handleArtifactPageSizeChange"
+                            />
                         </div>
                     </div>
                     <div v-else class="message info">当前没有可展示的成果索引</div>
@@ -674,3 +713,74 @@ onMounted(() => {
         />
     </section>
 </template>
+
+<style scoped>
+.tool-list-pagination {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 16px;
+}
+
+.artifact-record-item {
+    padding: 18px 20px;
+    border: 1px solid rgba(120, 150, 186, 0.14);
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
+        linear-gradient(145deg, rgba(10, 19, 33, 0.92), rgba(8, 15, 27, 0.88));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.03),
+        0 10px 24px rgba(0, 0, 0, 0.14);
+}
+
+.artifact-record-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 12px;
+}
+
+.artifact-record-title {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.artifact-record-title strong {
+    color: var(--tf-text);
+    word-break: break-all;
+}
+
+.artifact-record-version {
+    flex: 0 0 auto;
+    color: var(--tf-text-dim);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.artifact-record-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    margin-bottom: 12px;
+    color: var(--tf-text-soft);
+    font-size: 13px;
+}
+
+.artifact-record-path {
+    color: var(--tf-text);
+    line-height: 1.7;
+    word-break: break-all;
+}
+
+@media (max-width: 900px) {
+    .artifact-record-head {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+</style>

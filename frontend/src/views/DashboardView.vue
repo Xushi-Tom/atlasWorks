@@ -28,9 +28,9 @@ async function load() {
             api.getSystemInfo(),
             api.getAllTasks()
         ]);
-        health.value = healthResponse;
-        systemInfo.value = systemResponse;
-        tasks.value = Object.values(tasksResponse?.tasks || {});
+        health.value = healthResponse?.data || null;
+        systemInfo.value = systemResponse?.data || null;
+        tasks.value = Object.values(tasksResponse?.data?.tasks || {});
     } catch (error) {
         pushToast(`仪表盘加载失败: ${error.message}`, 'error', 4500);
     } finally {

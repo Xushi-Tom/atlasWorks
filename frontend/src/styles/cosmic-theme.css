@@ -223,34 +223,71 @@ body.tf-app.tf-theme-light::after {
 }
 
 .tf-app .btn {
-    border-color: rgba(74, 195, 255, 0.18);
+    border-color: rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    transition:
+        transform 0.18s ease,
+        box-shadow 0.18s ease,
+        border-color 0.18s ease,
+        background 0.18s ease,
+        color 0.18s ease;
+}
+
+.tf-app .btn:hover {
+    transform: translateY(-1px);
+}
+
+.tf-app .btn:active {
+    transform: translateY(0);
 }
 
 .tf-app .btn-primary {
     background:
-        linear-gradient(135deg, rgba(103, 240, 255, 0.88), rgba(31, 164, 255, 0.82)),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent);
-    color: #02111e;
+        linear-gradient(135deg, rgba(136, 164, 198, 0.96), rgba(90, 112, 140, 0.92)),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.14), transparent);
+    border-color: rgba(188, 202, 220, 0.22);
+    color: #08111b;
     box-shadow:
-        0 10px 28px rgba(18, 120, 211, 0.32),
-        0 0 0 1px rgba(255, 255, 255, 0.14) inset;
+        0 10px 24px rgba(40, 52, 70, 0.26),
+        0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+}
+
+.tf-app .btn-primary:hover {
+    box-shadow:
+        0 14px 28px rgba(40, 52, 70, 0.3),
+        0 0 0 1px rgba(255, 255, 255, 0.12) inset;
 }
 
 .tf-app .btn-secondary {
     background:
-        linear-gradient(135deg, rgba(12, 28, 48, 0.96), rgba(10, 22, 39, 0.92));
-    border-color: rgba(74, 195, 255, 0.22);
-    color: var(--tf-text);
+        linear-gradient(135deg, rgba(24, 35, 50, 0.96), rgba(14, 21, 32, 0.94));
+    border-color: rgba(148, 163, 184, 0.22);
+    color: #d9e4f0;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14);
+}
+
+.tf-app .btn-secondary:hover {
+    border-color: rgba(186, 199, 216, 0.28);
+    background:
+        linear-gradient(135deg, rgba(33, 46, 64, 0.98), rgba(18, 28, 41, 0.96));
 }
 
 .tf-app .btn-danger {
-    background: linear-gradient(135deg, rgba(255, 102, 127, 0.88), rgba(189, 44, 89, 0.84));
+    background: linear-gradient(135deg, rgba(206, 96, 112, 0.92), rgba(142, 49, 70, 0.88));
+    border-color: rgba(255, 170, 182, 0.18);
+    color: #fff7f8;
 }
 
 .tf-app .btn-ghost-danger {
-    color: #ff9fb0;
-    background: rgba(69, 21, 32, 0.26);
-    border-color: rgba(255, 102, 127, 0.22);
+    color: #ffb4bf;
+    background: rgba(80, 36, 47, 0.24);
+    border-color: rgba(214, 110, 130, 0.2);
+}
+
+.tf-app .btn-ghost-danger:hover {
+    background: rgba(102, 43, 57, 0.34);
 }
 
 .tf-app .refresh-interval-select:focus,
@@ -896,6 +933,7 @@ body.tf-app.tf-theme-light .directory-path-text {
     justify-content: center;
     padding: 34px 24px;
     z-index: 10020;
+    backdrop-filter: blur(10px);
 }
 
 .tf-app .picker-modal-overlay-top {
@@ -904,6 +942,8 @@ body.tf-app.tf-theme-light .directory-path-text {
 
 .tf-app .modal-overlay-active .modal-content {
     margin: 0;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    box-shadow: 0 28px 60px rgba(0, 0, 0, 0.42);
 }
 
 .tf-app .picker-modal-content,
@@ -1601,11 +1641,214 @@ body.tf-app.tf-theme-light .directory-path-text {
     min-height: 0;
 }
 
+.tf-app .data-panel {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(120, 150, 186, 0.14);
+    border-radius: 28px;
+    background:
+        radial-gradient(circle at top right, rgba(127, 162, 211, 0.08), transparent 24%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
+        linear-gradient(155deg, rgba(8, 16, 28, 0.96), rgba(7, 14, 24, 0.92));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 22px 48px rgba(0, 0, 0, 0.18);
+}
+
+.tf-app .data-panel::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(135deg, rgba(103, 240, 255, 0.05), transparent 18%, transparent 82%, rgba(31, 164, 255, 0.04));
+}
+
+.tf-app .data-panel > * {
+    position: relative;
+    z-index: 1;
+}
+
 .tf-app .task-filter-panel {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: end;
     gap: 24px;
+}
+
+.tf-app .data-toolbar {
+    padding: 28px 30px 22px;
+    background:
+        linear-gradient(180deg, rgba(20, 36, 58, 0.6), rgba(11, 21, 36, 0.38)),
+        linear-gradient(90deg, rgba(103, 240, 255, 0.04), transparent 30%, transparent 70%, rgba(31, 164, 255, 0.04));
+    border-bottom: 1px solid rgba(120, 150, 186, 0.12);
+}
+
+.tf-app .data-toolbar .el-input__wrapper,
+.tf-app .data-toolbar .el-range-editor.el-input__wrapper,
+.tf-app .data-toolbar .el-select__wrapper {
+    background: rgba(3, 12, 24, 0.64);
+    border-radius: 14px;
+    box-shadow:
+        inset 0 0 0 1px rgba(84, 118, 156, 0.28),
+        0 10px 20px rgba(0, 0, 0, 0.08);
+}
+
+.tf-app .data-toolbar .el-input__wrapper.is-focus,
+.tf-app .data-toolbar .el-range-editor.el-input__wrapper.is-active,
+.tf-app .data-toolbar .el-select__wrapper.is-focused {
+    box-shadow:
+        inset 0 0 0 1px rgba(103, 240, 255, 0.26),
+        0 0 0 4px rgba(31, 164, 255, 0.08);
+}
+
+.tf-app .data-toolbar .el-input__inner,
+.tf-app .data-toolbar .el-range-input,
+.tf-app .data-toolbar .el-range-separator,
+.tf-app .data-toolbar .el-select__selected-item,
+.tf-app .data-toolbar .el-input__icon {
+    color: var(--tf-text);
+}
+
+.tf-app .data-toolbar .el-input__inner::placeholder,
+.tf-app .data-toolbar .el-range-input::placeholder {
+    color: var(--tf-text-dim);
+}
+
+.tf-app .data-table-shell {
+    padding: 22px 24px 16px;
+}
+
+.tf-app .data-table-shell .el-table {
+    --el-table-header-bg-color: transparent;
+    --el-table-tr-bg-color: rgba(10, 18, 31, 0.74);
+    --el-table-striped-bg-color: rgba(13, 23, 38, 0.8);
+    --el-table-row-hover-bg-color: rgba(126, 157, 194, 0.08);
+    --el-table-border-color: rgba(114, 140, 174, 0.12);
+    --el-table-text-color: var(--tf-text);
+    --el-table-header-text-color: #dbe7f4;
+    --el-table-bg-color: transparent;
+    color: var(--tf-text);
+    border: 1px solid rgba(120, 150, 186, 0.12);
+    border-radius: 24px;
+    overflow: hidden;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
+        linear-gradient(145deg, rgba(9, 16, 28, 0.9), rgba(7, 13, 23, 0.84));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.03),
+        0 14px 30px rgba(0, 0, 0, 0.12);
+}
+
+.tf-app .data-table-shell .el-table::before,
+.tf-app .data-table-shell .el-table__inner-wrapper::before {
+    display: none;
+}
+
+.tf-app .data-table-shell .el-table__header-wrapper {
+    background: linear-gradient(180deg, rgba(31, 44, 65, 0.9), rgba(26, 37, 55, 0.86));
+}
+
+.tf-app .data-table-shell .el-table__header-wrapper th.el-table__cell {
+    border-bottom-color: rgba(120, 150, 186, 0.14);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding-top: 18px;
+    padding-bottom: 18px;
+}
+
+.tf-app .data-table-shell .el-table__header-wrapper th.el-table__cell:first-child {
+    border-top-left-radius: 24px;
+}
+
+.tf-app .data-table-shell .el-table__header-wrapper th.el-table__cell:last-child {
+    border-top-right-radius: 24px;
+}
+
+.tf-app .data-table-shell .el-table__body td.el-table__cell {
+    border-bottom-color: rgba(114, 140, 174, 0.1);
+    padding-top: 16px;
+    padding-bottom: 16px;
+}
+
+.tf-app .data-table-shell .el-table__body tr.el-table__row > td.el-table__cell,
+.tf-app .data-table-shell .el-table__fixed-body-wrapper tr.el-table__row > td.el-table__cell {
+    background: rgba(10, 18, 31, 0.78);
+    transition: background 0.18s ease;
+}
+
+.tf-app .data-table-shell .el-table--striped .el-table__body tr.el-table__row--striped > td.el-table__cell {
+    background: rgba(14, 24, 39, 0.82);
+}
+
+.tf-app .data-table-shell .el-table__body tr.el-table__row:hover > td.el-table__cell,
+.tf-app .data-table-shell .el-table__fixed-body-wrapper tr.el-table__row:hover > td.el-table__cell {
+    background: rgba(20, 33, 50, 0.9) !important;
+}
+
+.tf-app .data-table-shell .el-table__fixed-right::before,
+.tf-app .data-table-shell .el-table__fixed::before {
+    background: linear-gradient(180deg, rgba(120, 150, 186, 0.14), rgba(120, 150, 186, 0.03));
+}
+
+.tf-app .data-table-shell .el-table__cell .cell {
+    line-height: 1.55;
+}
+
+.tf-app .soft-pagination {
+    padding-top: 18px;
+}
+
+.tf-app .soft-pagination .el-pagination {
+    --el-pagination-bg-color: transparent;
+    --el-pagination-text-color: var(--tf-text-soft);
+    --el-pagination-button-color: var(--tf-text);
+    --el-pagination-button-bg-color: rgba(17, 28, 43, 0.86);
+    --el-pagination-button-disabled-bg-color: rgba(17, 28, 43, 0.4);
+    --el-pagination-hover-color: var(--tf-text);
+    gap: 8px;
+}
+
+.tf-app .soft-pagination .btn-prev,
+.tf-app .soft-pagination .btn-next,
+.tf-app .soft-pagination .el-pager li {
+    min-width: 38px;
+    height: 38px;
+    border: 1px solid rgba(120, 150, 186, 0.12);
+    border-radius: 12px;
+    background: rgba(17, 28, 43, 0.86);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.tf-app .soft-pagination .el-pager li.is-active {
+    border-color: rgba(103, 240, 255, 0.2);
+    background: linear-gradient(135deg, rgba(74, 132, 212, 0.92), rgba(60, 109, 173, 0.88));
+    color: #f5fbff;
+}
+
+.tf-app .soft-pagination .btn-prev:hover,
+.tf-app .soft-pagination .btn-next:hover,
+.tf-app .soft-pagination .el-pager li:hover {
+    background: rgba(26, 41, 61, 0.94);
+}
+
+.tf-app .soft-pagination .el-pagination__total,
+.tf-app .soft-pagination .el-pagination__jump,
+.tf-app .soft-pagination .el-pagination__sizes {
+    color: var(--tf-text-soft);
+}
+
+.tf-app .soft-pagination .el-select .el-select__wrapper,
+.tf-app .soft-pagination .el-input .el-input__wrapper {
+    min-height: 38px;
+    border-radius: 12px;
+    background: rgba(17, 28, 43, 0.86);
+    box-shadow: inset 0 0 0 1px rgba(120, 150, 186, 0.16);
+}
+
+.tf-app .soft-pagination .el-select .el-select__selected-item,
+.tf-app .soft-pagination .el-input .el-input__inner,
+.tf-app .soft-pagination .el-pagination__goto {
+    color: var(--tf-text);
 }
 
 .tf-app .task-filter-panel-list {
@@ -2055,6 +2298,59 @@ body.tf-app.tf-theme-light .directory-path-text {
 
 .tf-app .datasource-detail-content {
     width: min(860px, calc(100vw - 48px));
+}
+
+.tf-app .datasource-detail-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 0.86fr) minmax(0, 1.14fr);
+    gap: 18px;
+    align-items: start;
+}
+
+.tf-app .datasource-preview-card {
+    display: grid;
+    gap: 12px;
+    padding: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 18px;
+    background: rgba(7, 16, 28, 0.8);
+}
+
+.tf-app .datasource-preview-head {
+    color: #eff6ff;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.tf-app .datasource-preview-frame {
+    min-height: 260px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    border-radius: 16px;
+    background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+        rgba(4, 12, 22, 0.92);
+}
+
+.tf-app .datasource-preview-image {
+    display: block;
+    max-width: 100%;
+    max-height: 360px;
+    object-fit: contain;
+    border-radius: 12px;
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+}
+
+@media (max-width: 900px) {
+    .tf-app .datasource-detail-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .tf-app .datasource-preview-frame {
+        min-height: 220px;
+    }
 }
 
 .tf-app .datasource-import-content {

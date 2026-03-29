@@ -13,6 +13,7 @@ const selectedFile = ref(null);
 const detailVisible = ref(false);
 const importVisible = ref(false);
 const folderVisible = ref(false);
+const previewLoadFailed = ref(false);
 const newFolderName = ref('');
 const importState = ref({
     overwrite: false
@@ -39,8 +40,9 @@ function isArchiveName(name = '') {
 async function loadLibrary(path = currentPath.value) {
     try {
         const response = await api.browseDatasources(path);
-        browser.value = response || { directories: [], datasources: [] };
-        currentPath.value = response?.currentPath || path || '';
+        const data = response?.data || {};
+        browser.value = data || { directories: [], datasources: [] };
+        currentPath.value = data?.currentPath || path || '';
     } catch (error) {
         pushToast(`数据源加载失败: ${error.message}`, 'error', 4500);
     }
@@ -48,7 +50,9 @@ async function loadLibrary(path = currentPath.value) {
 
 async function showFileDetails(file) {
     try {
-        selectedFile.value = await api.getDatasourceInfo(file.path);
+        const response = await api.getDatasourceInfo(file.path);
+        selectedFile.value = response?.data || null;
+        previewLoadFailed.value = false;
         detailVisible.value = true;
     } catch (error) {
         pushToast(`获取文件详情失败: ${error.message}`, 'error', 4500);
@@ -57,6 +61,19 @@ async function showFileDetails(file) {
 
 function closeDetailModal() {
     detailVisible.value = false;
+    previewLoadFailed.value = false;
+}
+
+function resolvePreviewUrl(fileInfo) {
+    const previewUrl = String(fileInfo?.previewUrl || '').trim();
+    if (previewUrl) {
+        return previewUrl.startsWith('http') ? previewUrl : `${window.location.origin}${previewUrl}`;
+    }
+    const extension = String(fileInfo?.extension || '').toLowerCase();
+    if (extension === '.png' || extension === '.jpg' || extension === '.jpeg') {
+        return api.getDatasourceFileUrl(fileInfo?.path || '');
+    }
+    return '';
 }
 
 function openImportModal() {
@@ -245,60 +262,75 @@ onMounted(async () => {
                         <button class="message-close" type="button" @click="closeDetailModal">×</button>
                     </div>
                     <div class="modal-body">
-                        <div v-if="selectedFile" class="info-list">
-                            <div class="info-row">
-                                <span class="info-label">文件名</span>
-                                <span class="info-value">{{ selectedFile.name || '-' }}</span>
+                        <div v-if="selectedFile" class="datasource-detail-layout">
+                            <div v-if="resolvePreviewUrl(selectedFile)" class="datasource-preview-card">
+                                <div class="datasource-preview-head">图片预览</div>
+                                <div class="datasource-preview-frame">
+                                    <img
+                                        v-if="!previewLoadFailed"
+                                        :src="resolvePreviewUrl(selectedFile)"
+                                        :alt="selectedFile.name || 'preview'"
+                                        class="datasource-preview-image"
+                                        @error="previewLoadFailed = true"
+                                    >
+                                    <div v-else class="placeholder-text">图片预览加载失败</div>
+                                </div>
                             </div>
-                            <div class="info-row">
-                                <span class="info-label">路径</span>
-                                <span class="info-value">{{ selectedFile.path || '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">格式</span>
-                                <span class="info-value">{{ selectedFile.format || '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">大小</span>
-                                <span class="info-value">{{ selectedFile.sizeFormatted || formatBytes(selectedFile.size) }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">更新时间</span>
-                                <span class="info-value">{{ formatDateTime(selectedFile.lastModified || selectedFile.modifiedTime) }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">波段数</span>
-                                <span class="info-value">{{ selectedFile.metadata?.bandCount ?? '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">栅格尺寸</span>
-                                <span class="info-value">{{ selectedFile.metadata?.rasterSize?.width ?? '-' }} × {{ selectedFile.metadata?.rasterSize?.height ?? '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">投影</span>
-                                <span class="info-value">{{ selectedFile.metadata?.srs || '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">驱动</span>
-                                <span class="info-value">{{ selectedFile.metadata?.driverLongName || selectedFile.metadata?.driver || '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">数据类型</span>
-                                <span class="info-value">{{ selectedFile.metadata?.dataType || '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">NoData</span>
-                                <span class="info-value">{{ selectedFile.metadata?.nodata ?? '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">压缩</span>
-                                <span class="info-value">{{ selectedFile.metadata?.compression || '-' }}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">地理范围</span>
-                                <span class="info-value">
-                                    {{ selectedFile.geoBounds ? `${selectedFile.geoBounds.west}, ${selectedFile.geoBounds.south}, ${selectedFile.geoBounds.east}, ${selectedFile.geoBounds.north}` : '-' }}
-                                </span>
+                            <div class="info-list">
+                                <div class="info-row">
+                                    <span class="info-label">文件名</span>
+                                    <span class="info-value">{{ selectedFile.name || '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">路径</span>
+                                    <span class="info-value">{{ selectedFile.path || '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">格式</span>
+                                    <span class="info-value">{{ selectedFile.format || '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">大小</span>
+                                    <span class="info-value">{{ selectedFile.sizeFormatted || formatBytes(selectedFile.size) }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">更新时间</span>
+                                    <span class="info-value">{{ formatDateTime(selectedFile.lastModified || selectedFile.modifiedTime) }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">波段数</span>
+                                    <span class="info-value">{{ selectedFile.metadata?.bandCount ?? '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">栅格尺寸</span>
+                                    <span class="info-value">{{ selectedFile.metadata?.rasterSize?.width ?? '-' }} × {{ selectedFile.metadata?.rasterSize?.height ?? '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">投影</span>
+                                    <span class="info-value">{{ selectedFile.metadata?.srs || '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">驱动</span>
+                                    <span class="info-value">{{ selectedFile.metadata?.driverLongName || selectedFile.metadata?.driver || '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">数据类型</span>
+                                    <span class="info-value">{{ selectedFile.metadata?.dataType || '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">NoData</span>
+                                    <span class="info-value">{{ selectedFile.metadata?.nodata ?? '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">压缩</span>
+                                    <span class="info-value">{{ selectedFile.metadata?.compression || '-' }}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="info-label">地理范围</span>
+                                    <span class="info-value">
+                                        {{ selectedFile.geoBounds ? `${selectedFile.geoBounds.west}, ${selectedFile.geoBounds.south}, ${selectedFile.geoBounds.east}, ${selectedFile.geoBounds.north}` : '-' }}
+                                    </span>
+                                </div>
                             </div>
                         </div>
                     </div>
