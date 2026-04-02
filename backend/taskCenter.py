@@ -4,11 +4,12 @@
 import re
 from datetime import datetime
 
-from flask import jsonify
+from flask import jsonify, request
 
 from config import taskLock, taskProcesses, taskStatus
-from db import deleteTaskSnapshot
+from db import countTableRows, deleteTaskSnapshot
 from db import fetchTaskSnapshot, listTaskEvents, listTaskSnapshots, pruneTaskSnapshots
+from pagination import paginate_items, parse_pagination_args
 from taskState import normalizeTaskRecord
 from utils import logMessage, stopTaskProcess
 
@@ -81,6 +82,64 @@ def buildSimplifiedTaskInfo(taskId, taskInfo):
     }
 
 
+def _parse_datetime_value(value, end_of_day=False):
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None
+
+    candidates = [raw_value]
+    if len(raw_value) == 10 and raw_value.count("-") == 2:
+        suffix = "23:59:59" if end_of_day else "00:00:00"
+        candidates.insert(0, f"{raw_value} {suffix}")
+
+    for candidate in candidates:
+        normalized = candidate.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone().replace(tzinfo=None)
+            return parsed.replace(microsecond=0)
+        except ValueError:
+            pass
+
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(candidate, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _matches_task_filters(task, keyword="", date_from=None, date_to=None, status_filter=""):
+    task_start = _parse_datetime_value(task.get("startTime"))
+    if date_from and (task_start is None or task_start < date_from):
+        return False
+    if date_to and (task_start is None or task_start > date_to):
+        return False
+
+    normalized_status = str(task.get("status") or "").strip().lower()
+    if status_filter and normalized_status != status_filter:
+        return False
+
+    normalized_keyword = str(keyword or "").strip().lower()
+    if not normalized_keyword:
+        return True
+
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    search_pool = [
+        task.get("taskId"),
+        task.get("status"),
+        task.get("currentStage"),
+        task.get("message"),
+        result.get("outputPath"),
+        result.get("mergedOutputPath"),
+        result.get("artifactId"),
+        result.get("artifactType"),
+        result.get("method"),
+    ]
+    return any(normalized_keyword in str(item or "").lower() for item in search_pool)
+
+
 def getTaskStatus(taskId):
     try:
         logMessage(f"收到任务状态查询请求: {taskId}", "INFO")
@@ -147,6 +206,12 @@ def listTaskEventStream(taskId):
 
 
 def listTasks():
+    page, page_size = parse_pagination_args(request.args, default_page_size=10, max_page_size=500)
+    keyword = request.args.get("keyword", "")
+    status_filter = str(request.args.get("status", "")).strip().lower()
+    date_from = _parse_datetime_value(request.args.get("dateFrom"))
+    date_to = _parse_datetime_value(request.args.get("dateTo"), end_of_day=True)
+
     with taskLock:
         in_memory_tasks = {
             task_id: buildSimplifiedTaskInfo(task_id, task_info)
@@ -154,7 +219,8 @@ def listTasks():
         }
 
     persisted_tasks = {}
-    for task_info in listTaskSnapshots(limit=50):
+    persisted_count = countTableRows("tf_build_jobs")
+    for task_info in listTaskSnapshots(limit=max(50, persisted_count or 0)):
         task_id = task_info.get("taskId") if isinstance(task_info, dict) else None
         if task_id:
             persisted_tasks[task_id] = buildSimplifiedTaskInfo(task_id, task_info)
@@ -169,12 +235,24 @@ def listTasks():
         except Exception:
             return 0
 
-    sorted_task_ids = sorted(merged_tasks.keys(), key=extract_timestamp, reverse=True)[:50]
-    tasks_with_ids = {task_id: merged_tasks[task_id] for task_id in sorted_task_ids}
+    sorted_task_ids = sorted(merged_tasks.keys(), key=extract_timestamp, reverse=True)
+    filtered_tasks = [
+        merged_tasks[task_id]
+        for task_id in sorted_task_ids
+        if _matches_task_filters(
+            merged_tasks[task_id],
+            keyword=keyword,
+            date_from=date_from,
+            date_to=date_to,
+            status_filter=status_filter,
+        )
+    ]
+    paged_tasks, pagination = paginate_items(filtered_tasks, page, page_size)
+    tasks_with_ids = {task["taskId"]: task for task in paged_tasks if task.get("taskId")}
 
     return jsonify({
         "tasks": tasks_with_ids,
-        "count": len(tasks_with_ids),
+        **pagination,
     })
 
 

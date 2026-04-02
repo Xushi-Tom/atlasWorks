@@ -76,7 +76,7 @@ services:
       # 发布地址完整覆盖（为空则按其他策略计算）
       ATLASWORKS_PUBLIC_BASE_URL: ${ATLASWORKS_PUBLIC_BASE_URL:-}
       # 发布地址主机固定值（当前固定为宿主机 IP）
-      ATLASWORKS_PUBLIC_BASE_HOST: 10.110.80.57
+      ATLASWORKS_PUBLIC_BASE_HOST: 192.168.144.57
       # 发布地址模式（默认按请求主机）
       ATLASWORKS_PUBLIC_BASE_MODE: ${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
       # 发布地址端口

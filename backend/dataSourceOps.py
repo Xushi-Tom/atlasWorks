@@ -6,11 +6,13 @@ import math
 import os
 import subprocess
 import hashlib
+import ipaddress
+import tempfile
 from datetime import datetime
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
-from flask import jsonify, request
+from flask import jsonify, request, send_file
 
 from config import config
 from utils import formatFileSize, logMessage
@@ -45,6 +47,77 @@ def _sanitize_download_name(name):
     return cleaned.strip().strip(".") or "remote_source"
 
 
+def _parse_host_aliases(raw_text):
+    alias_mapping = {}
+    for segment in str(raw_text or "").split(","):
+        item = segment.strip()
+        if not item or "=" not in item:
+            continue
+        source_host, target_host = item.split("=", 1)
+        source = source_host.strip().lower()
+        target = target_host.strip()
+        if source and target:
+            alias_mapping[source] = target
+    return alias_mapping
+
+
+def _replace_url_host(url, new_host):
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return None
+    host_text = str(new_host or "").strip()
+    if not host_text:
+        return None
+    host_part = host_text
+    if ":" in host_part and not host_part.startswith("["):
+        host_part = f"[{host_part}]"
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo = f"{userinfo}:{parsed.password}"
+        userinfo = f"{userinfo}@"
+    netloc = f"{userinfo}{host_part}"
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    return parsed._replace(netloc=netloc).geturl()
+
+
+def _is_private_or_loopback_host(host_value):
+    try:
+        ip_obj = ipaddress.ip_address(str(host_value or "").strip())
+        return ip_obj.is_private or ip_obj.is_loopback
+    except ValueError:
+        return False
+
+
+def _build_download_url_candidates(url):
+    parsed = urlparse(url)
+    host = str(parsed.hostname or "").strip()
+    if not host:
+        return [url]
+
+    candidates = [url]
+    host_key = host.lower()
+
+    alias_mapping = _parse_host_aliases(config.get("remoteSourceHostAliases"))
+    alias_target = alias_mapping.get(host_key)
+    if alias_target:
+        aliased_url = _replace_url_host(url, alias_target)
+        if aliased_url and aliased_url not in candidates:
+            candidates.append(aliased_url)
+
+    docker_fallback_enabled = bool(config.get("remoteSourceDockerHostFallback", True))
+    docker_fallback_host = str(config.get("remoteSourceDockerHostFallbackHost") or "host.docker.internal").strip()
+    should_try_docker_fallback = host_key in {"localhost", "127.0.0.1", "::1"} or _is_private_or_loopback_host(host)
+    if docker_fallback_enabled and docker_fallback_host and should_try_docker_fallback:
+        docker_fallback_url = _replace_url_host(url, docker_fallback_host)
+        if docker_fallback_url and docker_fallback_url not in candidates:
+            candidates.append(docker_fallback_url)
+
+    return candidates
+
+
 def _download_remote_source(url, data_source_dir):
     url = str(url or "").strip()
     if not isHttpSource(url):
@@ -66,29 +139,95 @@ def _download_remote_source(url, data_source_dir):
         relative_path = os.path.relpath(target_path, data_source_dir)
         return relative_path.replace("\\", "/")
 
-    request_obj = Request(url, headers={"User-Agent": "AtlasWorks/2.0"})
-    try:
-        with urlopen(request_obj, timeout=45) as response:
-            with open(target_path, "wb") as target_file:
-                while True:
-                    chunk = response.read(1024 * 256)
-                    if not chunk:
-                        break
-                    target_file.write(chunk)
-        if os.path.getsize(target_path) <= 0:
-            raise RuntimeError("远程文件下载后为空")
-        relative_path = os.path.relpath(target_path, data_source_dir)
-        normalized_relative_path = relative_path.replace("\\", "/")
-        logMessage(f"远程数据源下载成功: {url} -> {normalized_relative_path}", "INFO")
-        return normalized_relative_path
-    except Exception as exc:
-        try:
-            if os.path.exists(target_path):
-                os.remove(target_path)
-        except OSError:
-            pass
-        logMessage(f"远程数据源下载失败: {url} - {exc}", "WARNING")
+    timeout_seconds = normalizeInt(config.get("remoteSourceTimeoutSeconds"), 45, 5, 900)
+    retry_count = normalizeInt(config.get("remoteSourceRetryCount"), 1, 0, 10)
+    candidate_urls = _build_download_url_candidates(url)
+    attempt_errors = []
+
+    for candidate_url in candidate_urls:
+        for attempt_index in range(retry_count + 1):
+            request_obj = Request(candidate_url, headers={"User-Agent": "AtlasWorks/2.0"})
+            try:
+                with urlopen(request_obj, timeout=timeout_seconds) as response:
+                    with open(target_path, "wb") as target_file:
+                        while True:
+                            chunk = response.read(1024 * 256)
+                            if not chunk:
+                                break
+                            target_file.write(chunk)
+                if os.path.getsize(target_path) <= 0:
+                    raise RuntimeError("远程文件下载后为空")
+
+                relative_path = os.path.relpath(target_path, data_source_dir)
+                normalized_relative_path = relative_path.replace("\\", "/")
+                if candidate_url != url:
+                    logMessage(f"远程数据源地址回退成功: {url} -> {candidate_url}", "INFO")
+                logMessage(f"远程数据源下载成功: {candidate_url} -> {normalized_relative_path}", "INFO")
+                return normalized_relative_path
+            except Exception as exc:
+                attempt_errors.append(f"{candidate_url} [第{attempt_index + 1}次]: {exc}")
+                try:
+                    if os.path.exists(target_path):
+                        os.remove(target_path)
+                except OSError:
+                    pass
+
+    details = "; ".join(attempt_errors) if attempt_errors else "未知错误"
+    logMessage(f"远程数据源下载失败: {url} - {details}", "WARNING")
+    return None
+
+
+def _download_remote_source_to_temp(url):
+    url = str(url or "").strip()
+    if not isHttpSource(url):
         return None
+
+    parsed_url = urlparse(url)
+    raw_name = unquote(os.path.basename(parsed_url.path or ""))
+    safe_name = _sanitize_download_name(raw_name or "remote_source")
+    stem, ext = os.path.splitext(safe_name)
+    url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:10]
+    final_name = f"{stem}_{url_hash}{ext}" if ext else f"{stem}_{url_hash}"
+
+    temp_dir = tempfile.mkdtemp(prefix="atlasworks-remote-info-")
+    temp_path = os.path.join(temp_dir, final_name)
+
+    timeout_seconds = normalizeInt(config.get("remoteSourceTimeoutSeconds"), 45, 5, 900)
+    retry_count = normalizeInt(config.get("remoteSourceRetryCount"), 1, 0, 10)
+    candidate_urls = _build_download_url_candidates(url)
+    attempt_errors = []
+
+    for candidate_url in candidate_urls:
+        for attempt_index in range(retry_count + 1):
+            request_obj = Request(candidate_url, headers={"User-Agent": "AtlasWorks/2.0"})
+            try:
+                with urlopen(request_obj, timeout=timeout_seconds) as response:
+                    with open(temp_path, "wb") as target_file:
+                        while True:
+                            chunk = response.read(1024 * 256)
+                            if not chunk:
+                                break
+                            target_file.write(chunk)
+                if os.path.getsize(temp_path) <= 0:
+                    raise RuntimeError("远程文件下载后为空")
+                if candidate_url != url:
+                    logMessage(f"远程详情地址回退成功: {url} -> {candidate_url}", "INFO")
+                return temp_path
+            except Exception as exc:
+                attempt_errors.append(f"{candidate_url} [第{attempt_index + 1}次]: {exc}")
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except OSError:
+                    pass
+
+    details = "; ".join(attempt_errors) if attempt_errors else "未知错误"
+    logMessage(f"远程详情下载失败: {url} - {details}", "WARNING")
+    try:
+        os.rmdir(temp_dir)
+    except OSError:
+        pass
+    return None
 
 
 def normalizeInt(value, defaultValue, minValue=None, maxValue=None):
@@ -470,17 +609,47 @@ def getDataSourceWorkspaceInfo():
 
 
 def getDataSourceInfo(filename):
+    remote_temp_file = None
     try:
         logMessage(f"收到文件信息请求: {filename}", "INFO")
-        normalized_filename = str(filename or "").replace("\\", "/").strip("/")
+        source_text = str(filename or "").strip()
+        is_remote_http = isHttpSource(source_text)
+        normalized_filename = source_text.replace("\\", "/").strip("/")
         data_source_dir = os.path.abspath(config["dataSourceDir"])
-        file_path = os.path.abspath(os.path.join(data_source_dir, normalized_filename))
-        if os.path.commonpath([data_source_dir, file_path]) != data_source_dir:
-            return jsonify({"error": "路径不允许访问"}), 403
-        if not os.path.exists(file_path):
-            return jsonify({"error": "文件不存在"}), 404
+
+        if is_remote_http:
+            remote_temp_file = _download_remote_source_to_temp(source_text)
+            if not remote_temp_file:
+                return jsonify({"error": "远程文件下载失败"}), 404
+            file_path = remote_temp_file
+            normalized_filename = source_text
+        else:
+            file_path = os.path.abspath(os.path.join(data_source_dir, normalized_filename))
+            if os.path.commonpath([data_source_dir, file_path]) != data_source_dir:
+                return jsonify({"error": "路径不允许访问"}), 403
+            if not os.path.exists(file_path):
+                return jsonify({"error": "文件不存在"}), 404
 
         extension = os.path.splitext(file_path)[1].lower()
+        if extension in {".png", ".jpg", ".jpeg"}:
+            stat_info = os.stat(file_path)
+            image_payload = {
+                "name": os.path.basename(file_path),
+                "path": normalized_filename,
+                "fullPath": file_path,
+                "format": extension.lstrip(".") or "file",
+                "size": stat_info.st_size,
+                "sizeFormatted": formatFileSize(stat_info.st_size),
+                "lastModified": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
+                "modifiedTime": stat_info.st_mtime,
+                "extension": extension,
+                "metadata": {
+                    "previewType": "image" if not is_remote_http else "remote-image",
+                },
+            }
+            if not is_remote_http:
+                image_payload["previewUrl"] = f"/api/datasources/raw/{normalized_filename}"
+            return jsonify(image_payload)
         if extension not in config.get("supportedFormats", []):
             stat_info = os.stat(file_path)
             return jsonify({
@@ -525,6 +694,35 @@ def getDataSourceInfo(filename):
         return jsonify(file_info)
     except Exception as exc:
         logMessage(f"文件信息请求处理失败: {filename}, 错误: {exc}", "ERROR")
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        if remote_temp_file:
+            try:
+                if os.path.exists(remote_temp_file):
+                    os.remove(remote_temp_file)
+                temp_dir = os.path.dirname(remote_temp_file)
+                if temp_dir and os.path.isdir(temp_dir):
+                    os.rmdir(temp_dir)
+            except OSError:
+                pass
+
+
+def serveDataSourceFile(filename):
+    try:
+        normalized_filename = str(filename or "").replace("\\", "/").strip("/")
+        data_source_dir = os.path.abspath(config["dataSourceDir"])
+        file_path = os.path.abspath(os.path.join(data_source_dir, normalized_filename))
+        if os.path.commonpath([data_source_dir, file_path]) != data_source_dir:
+            return jsonify({"error": "路径不允许访问"}), 403
+        if not os.path.exists(file_path) or not os.path.isfile(file_path):
+            return jsonify({"error": "文件不存在"}), 404
+
+        extension = os.path.splitext(file_path)[1].lower()
+        if extension not in {".png", ".jpg", ".jpeg"}:
+            return jsonify({"error": "仅支持图片预览"}), 400
+        return send_file(file_path, conditional=True)
+    except Exception as exc:
+        logMessage(f"数据源文件预览失败: {filename}, 错误: {exc}", "ERROR")
         return jsonify({"error": str(exc)}), 500
 
 
@@ -578,7 +776,7 @@ def recommendConfig():
 
 def resolveDataSourceFiles():
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         folder_paths = data.get("folderPaths", [])
         file_patterns = data.get("filePatterns", [])
         max_files = normalizeInt(data.get("maxFiles"), 200, 1, 2000)

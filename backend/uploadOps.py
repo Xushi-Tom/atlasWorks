@@ -130,7 +130,7 @@ def _extract_7z_to_dir(archive_path: str, output_dir: str):
 def extractArchiveFile():
     """解压已存在的数据源或工作空间压缩文件到其所在目录。"""
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         rel_path = _normalize_relpath(data.get("path", ""))
         target_type = str(data.get("targetType", "datasource")).strip().lower() or "datasource"
         overwrite = bool(data.get("overwrite", False))

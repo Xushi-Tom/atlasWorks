@@ -4,6 +4,7 @@
 import json
 import os
 import socket
+import uuid
 from datetime import datetime
 from urllib.parse import quote, unquote, urlsplit
 import xml.etree.ElementTree as ET
@@ -13,6 +14,7 @@ from flask import Response, jsonify, request, send_from_directory
 from config import config, taskLock, taskStatus
 from db import (
     appendJobEvent,
+    countTableRows,
     deletePublicationRecord,
     fetchArtifactRecord,
     fetchPublicationRecord,
@@ -22,6 +24,7 @@ from db import (
     listPublicationRecords,
     upsertPublicationRecord,
 )
+from pagination import paginate_items, parse_pagination_args
 from utils import logMessage, validateWorkspacePath
 
 
@@ -87,6 +90,25 @@ def _safe_json(value, fallback=None):
     if value is None:
         return fallback
     return value
+
+
+def _safe_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _first_defined(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _first_non_blank(*values):
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def _load_manifest(manifest_path):
@@ -351,12 +373,22 @@ def _augment_publication_response(payload):
     response["metadata"] = metadata
     if str(response.get("status") or "").lower() == "published":
         response["status"] = "enabled" if metadata.get("enabled", True) else "disabled"
+    # Surface common publication fields at top-level for simpler API usage.
+    response["publishMethod"] = response.get("publishMethod") or metadata.get("publishMethod")
+    response["visibility"] = response.get("visibility") or metadata.get("visibility")
+    response["note"] = response.get("note") or metadata.get("note")
+    response["enabled"] = bool(metadata.get("enabled", True))
+    response["customMetadata"] = _safe_dict(response.get("customMetadata") or metadata.get("customMetadata"))
     response["publicationId"] = response.get("publicationId") or response.get("id")
     return response
 
 
 def _publication_descriptor_dir(alias):
     return os.path.join(config["tilesDir"], PUBLICATIONS_DIRNAME, str(alias or "").strip() or "publication")
+
+
+def _generate_publication_id():
+    return str(uuid.uuid4())
 
 
 def _cleanup_publication_descriptor(publication):
@@ -433,15 +465,25 @@ def _resolve_task_publication_source(task_id):
 
 
 def _prepare_publication_payload(data, existing_publication=None):
+    data = _safe_dict(data)
     existing_publication = existing_publication or {}
-    existing_metadata = existing_publication.get("metadata") or {}
+    existing_metadata = _safe_dict(existing_publication.get("metadata"))
+    existing_custom_metadata = _safe_dict(existing_metadata.get("customMetadata"))
 
-    task_id = str(data.get("taskId", existing_metadata.get("taskId") or "")).strip()
-    artifact_id = str(data.get("artifactId", existing_publication.get("artifactId") or "")).strip()
+    task_id = _first_non_blank(
+        data.get("taskId"),
+        existing_metadata.get("taskId"),
+    )
+    artifact_id = _first_non_blank(
+        data.get("artifactId"),
+        existing_publication.get("artifactId"),
+    )
     workspace_path = _normalize_relative_path(
-        data.get(
-            "workspacePath",
-            data.get("sourcePath", existing_publication.get("publishPath") or existing_metadata.get("workspacePath") or "")
+        _first_non_blank(
+            data.get("workspacePath"),
+            data.get("sourcePath"),
+            existing_publication.get("publishPath"),
+            existing_metadata.get("workspacePath"),
         )
     )
     artifact = None
@@ -460,7 +502,7 @@ def _prepare_publication_payload(data, existing_publication=None):
 
     workspace_path = workspace_path or _normalize_relative_path(artifact.get("outputPath") if artifact else "")
     if not workspace_path:
-        return None, ("缺少参数: taskId、artifactId 或 workspacePath", 400)
+        return None, ("缺少参数: taskId、artifactId、workspacePath 或 sourcePath", 400)
 
     is_valid_workspace_path, full_workspace_path = validateWorkspacePath(workspace_path)
     if not is_valid_workspace_path:
@@ -468,12 +510,43 @@ def _prepare_publication_payload(data, existing_publication=None):
     if not os.path.exists(full_workspace_path):
         return None, ("目标工作空间路径不存在", 404)
 
-    publish_type = str(data.get("publishType", existing_publication.get("publishType") or "imagery")).strip() or "imagery"
+    source_mode_input = _first_non_blank(
+        data.get("sourceMode"),
+        existing_metadata.get("sourceMode"),
+        existing_custom_metadata.get("sourceMode"),
+    ).lower()
+    if source_mode_input not in {"task", "manual", "artifact"}:
+        if task_id:
+            source_mode_input = "task"
+        elif artifact_id:
+            source_mode_input = "artifact"
+        else:
+            source_mode_input = "manual"
+
+    publish_type = _first_non_blank(
+        data.get("publishType"),
+        existing_publication.get("publishType"),
+        "imagery",
+    )
     default_alias = artifact_id or task_id or os.path.basename(workspace_path.rstrip("/")) or "publication"
-    alias = str(data.get("alias", existing_publication.get("alias") or default_alias)).strip() or default_alias
-    publication_id = str(data.get("publicationId", existing_publication.get("publicationId") or existing_publication.get("id") or f"publication-{alias}")).strip() or f"publication-{alias}"
+    alias = _first_non_blank(
+        data.get("alias"),
+        existing_publication.get("alias"),
+        default_alias,
+    )
+    incoming_publication_id = _first_non_blank(
+        data.get("publicationId"),
+    )
+    existing_publication_id = str(existing_publication.get("publicationId") or existing_publication.get("id") or "").strip()
+    publication_id = incoming_publication_id or existing_publication_id or _generate_publication_id()
     default_publish_path = workspace_path or (artifact.get("outputPath") if artifact else "") or ""
-    publish_path_input = _normalize_relative_path(data.get("publishPath", existing_publication.get("publishPath", default_publish_path)))
+    publish_path_input = _normalize_relative_path(
+        _first_non_blank(
+            data.get("publishPath"),
+            existing_publication.get("publishPath"),
+            default_publish_path,
+        )
+    )
     publish_path = publish_path_input or default_publish_path
 
     is_valid_publish_path, full_publish_path = validateWorkspacePath(publish_path)
@@ -482,16 +555,30 @@ def _prepare_publication_payload(data, existing_publication=None):
     if not os.path.exists(full_publish_path):
         return None, ("发布目录不存在", 404)
 
-    publish_method = data.get("publishMethod")
-    if publish_method is None:
-        publish_method = existing_metadata.get("publishMethod") or _safe_json(data.get("metadata"), {}).get("publishMethod")
-    visibility = data.get("visibility", existing_metadata.get("visibility", "private"))
-    note = data.get("note", existing_metadata.get("note"))
-    enabled_input = data.get("enabled", existing_metadata.get("enabled"))
+    publish_method = _first_defined(
+        data.get("publishMethod"),
+        existing_metadata.get("publishMethod"),
+    )
+    publish_method = str(publish_method).strip() if publish_method is not None else None
+    visibility = _first_defined(
+        data.get("visibility"),
+        existing_metadata.get("visibility"),
+        "private",
+    )
+    note = _first_defined(
+        data.get("note"),
+        existing_metadata.get("note"),
+    )
+    enabled_input = _first_defined(
+        data.get("enabled"),
+        existing_metadata.get("enabled"),
+    )
     enabled = True if enabled_input is None else str(enabled_input).strip().lower() not in {"0", "false", "no", "off", "disabled"}
-    custom_metadata = dict(existing_metadata.get("customMetadata") or {})
-    custom_metadata.update(_safe_json(data.get("metadata"), {}) or {})
+    incoming_custom_metadata = _safe_dict(data.get("customMetadata"))
+    custom_metadata = dict(existing_custom_metadata)
+    custom_metadata.update(incoming_custom_metadata)
     custom_metadata.pop("enabled", None)
+    custom_metadata["sourceMode"] = source_mode_input
 
     published_at = datetime.now().isoformat()
     descriptor = {
@@ -508,6 +595,7 @@ def _prepare_publication_payload(data, existing_publication=None):
             "manifestPath": artifact.get("manifestPath") if artifact else existing_metadata.get("manifestPath"),
             "workspacePath": workspace_path or None,
             "taskId": task_id or None,
+            "sourceMode": source_mode_input,
             "publishMethod": publish_method,
             "visibility": visibility,
             "note": note,
@@ -556,7 +644,7 @@ def _manifest_summary(manifest, manifest_path=None):
     }
 
 
-def _scan_manifest_files(limit=100):
+def _scan_manifest_files(limit=None):
     tiles_dir = config["tilesDir"]
     manifests = []
     if not os.path.exists(tiles_dir):
@@ -571,12 +659,12 @@ def _scan_manifest_files(limit=100):
             manifests.append(_manifest_summary(manifest, manifest_path=manifest_path))
         except Exception as exc:
             logMessage(f"读取 manifest 失败: {manifest_path} - {exc}", "WARNING")
-        if len(manifests) >= limit:
+        if limit is not None and len(manifests) >= limit:
             break
     return manifests
 
 
-def _scan_publication_files(limit=100):
+def _scan_publication_files(limit=None):
     publications_dir = os.path.join(config["tilesDir"], PUBLICATIONS_DIRNAME)
     records = []
     if not os.path.exists(publications_dir):
@@ -593,7 +681,7 @@ def _scan_publication_files(limit=100):
             records.append(publication)
         except Exception as exc:
             logMessage(f"读取 publication 失败: {descriptor_path} - {exc}", "WARNING")
-        if len(records) >= limit:
+        if limit is not None and len(records) >= limit:
             break
     return records
 
@@ -702,11 +790,13 @@ def _resolve_artifact(artifact_id):
 
 def listArtifacts():
     try:
-        limit = max(1, min(int(request.args.get("limit", 50)), 200))
+        page, page_size = parse_pagination_args(request.args, default_page_size=10, max_page_size=200)
         artifact_type = request.args.get("artifactType")
+        keyword = str(request.args.get("keyword", "")).strip().lower()
 
         artifacts = {}
-        for record in listArtifactRecords(limit=limit):
+        artifact_record_count = countTableRows("tf_artifacts")
+        for record in listArtifactRecords(limit=max(50, artifact_record_count or 0)):
             response = _artifact_record_to_response(record)
             if not response:
                 continue
@@ -714,7 +804,7 @@ def listArtifacts():
                 continue
             artifacts[response["artifactId"]] = response
 
-        for summary in _scan_manifest_files(limit=limit * 2):
+        for summary in _scan_manifest_files():
             artifact_id = summary.get("artifactId")
             if not artifact_id:
                 continue
@@ -723,13 +813,27 @@ def listArtifacts():
             artifacts.setdefault(artifact_id, summary)
 
         items = list(artifacts.values())
+        if keyword:
+            items = [
+                item for item in items
+                if any(
+                    keyword in str(field or "").lower()
+                    for field in (
+                        item.get("artifactId"),
+                        item.get("artifactType"),
+                        item.get("format"),
+                        item.get("outputPath"),
+                        item.get("buildJobId"),
+                    )
+                )
+            ]
         items.sort(key=lambda item: str(item.get("createdAt") or item.get("generatedAt") or ""), reverse=True)
-        items = items[:limit]
+        paged_items, pagination = paginate_items(items, page, page_size)
 
         return jsonify({
             "success": True,
-            "count": len(items),
-            "artifacts": items,
+            "artifacts": paged_items,
+            **pagination,
         })
     except Exception as exc:
         logMessage(f"列出产物失败: {exc}", "ERROR")
@@ -773,7 +877,7 @@ def createPublication():
             message, status_code = db_error
             return jsonify({"success": False, "error": message}), status_code
 
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         prepared, error = _prepare_publication_payload(data)
         if error:
             message, status_code = error
@@ -810,6 +914,7 @@ def createPublication():
                 "manifestPath": artifact.get("manifestPath") if artifact else None,
                 "workspacePath": workspace_path or None,
                 "taskId": task_id or None,
+                "sourceMode": descriptor["metadata"].get("sourceMode"),
                 "publishMethod": descriptor["metadata"].get("publishMethod"),
                 "visibility": descriptor["metadata"].get("visibility", "private"),
                 "note": descriptor["metadata"].get("note"),
@@ -841,13 +946,16 @@ def createPublication():
                 },
             )
 
+        publication_response = _get_publication_snapshot(publication_id) or _augment_publication_response({
+            **descriptor,
+            "descriptorPath": descriptor_path,
+            "publicationId": publication_id,
+        })
+
         logMessage(f"发布记录已创建: {publication_id} -> {artifact_id or task_id or workspace_path}", "INFO")
         return jsonify({
             "success": True,
-            "publication": _augment_publication_response({
-                **descriptor,
-                "descriptorPath": descriptor_path,
-            }),
+            "publication": publication_response,
         })
     except Exception as exc:
         logMessage(f"创建发布记录失败: {exc}", "ERROR")
@@ -866,7 +974,7 @@ def updatePublication(publication_id=None, publicationId=None):
         if not existing_publication:
             return jsonify({"error": "发布记录不存在"}), 404
 
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         data["publicationId"] = str(data.get("publicationId", publication_id)).strip() or publication_id
 
         prepared, error = _prepare_publication_payload(data, existing_publication=existing_publication)
@@ -908,14 +1016,16 @@ def updatePublication(publication_id=None, publicationId=None):
         if publication_id != prepared["publicationId"]:
             deletePublicationRecord(publication_id)
 
+        publication_response = _get_publication_snapshot(prepared["publicationId"]) or _augment_publication_response({
+            **descriptor,
+            "descriptorPath": descriptor_path,
+            "publicationId": prepared["publicationId"],
+        })
+
         logMessage(f"发布记录已更新: {publication_id} -> {prepared['publicationId']}", "INFO")
         return jsonify({
             "success": True,
-            "publication": _augment_publication_response({
-                **descriptor,
-                "descriptorPath": descriptor_path,
-                "publicationId": prepared["publicationId"],
-            }),
+            "publication": publication_response,
         })
     except Exception as exc:
         logMessage(f"更新发布记录失败 {publication_id}: {exc}", "ERROR")
@@ -924,16 +1034,20 @@ def updatePublication(publication_id=None, publicationId=None):
 
 def listPublications():
     try:
-        limit = max(1, min(int(request.args.get("limit", 50)), 200))
+        page, page_size = parse_pagination_args(request.args, default_page_size=10, max_page_size=200)
+        keyword = str(request.args.get("keyword", "")).strip().lower()
+        publish_type = str(request.args.get("publishType", "")).strip().lower()
+        status_filter = str(request.args.get("status", "")).strip().lower()
         publications = {}
 
-        for record in listPublicationRecords(limit=limit):
+        publication_record_count = countTableRows("tf_publications")
+        for record in listPublicationRecords(limit=max(50, publication_record_count or 0)):
             response = _publication_record_to_response(record)
             if not response:
                 continue
             publications[response["publicationId"]] = response
 
-        for record in _scan_publication_files(limit=limit * 2):
+        for record in _scan_publication_files():
             publication_id = record.get("id")
             if not publication_id:
                 continue
@@ -954,12 +1068,34 @@ def listPublications():
             )
 
         items = list(publications.values())
+        if publish_type:
+            items = [item for item in items if str(item.get("publishType") or "").strip().lower() == publish_type]
+        if status_filter:
+            items = [item for item in items if str(item.get("status") or "").strip().lower() == status_filter]
+        if keyword:
+            items = [
+                item for item in items
+                if any(
+                    keyword in str(field or "").lower()
+                    for field in (
+                        item.get("publicationId"),
+                        item.get("alias"),
+                        item.get("publishPath"),
+                        item.get("accessUrl"),
+                        (item.get("metadata") or {}).get("workspacePath"),
+                        (item.get("metadata") or {}).get("taskId"),
+                        (item.get("metadata") or {}).get("publishMethod"),
+                        item.get("publishType"),
+                        item.get("status"),
+                    )
+                )
+            ]
         items.sort(key=lambda item: str(item.get("publishedAt") or item.get("createdAt") or ""), reverse=True)
-        items = items[:limit]
+        paged_items, pagination = paginate_items(items, page, page_size)
         return jsonify({
             "success": True,
-            "count": len(items),
-            "publications": items,
+            "publications": paged_items,
+            **pagination,
         })
     except Exception as exc:
         logMessage(f"列出发布记录失败: {exc}", "ERROR")

@@ -6,7 +6,7 @@ import shutil
 import urllib.parse
 from datetime import datetime
 
-from flask import jsonify, request
+from flask import jsonify, request, send_file
 
 from config import config
 from dataSourceOps import getFileInfo
@@ -31,7 +31,7 @@ def _delete_path(item_path, validator, item_kind):
 
 def createDatasourceFolder():
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         folder_path = data.get("folderPath", "")
         if not folder_path:
             return jsonify({"error": "缺少参数: folderPath"}), 400
@@ -96,7 +96,7 @@ def deleteDatasourceFile(filePath):
 
 def createWorkspaceFolder():
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         folder_path = data.get("folderPath", "")
         if not folder_path:
             return jsonify({"error": "缺少参数: folderPath"}), 400
@@ -167,7 +167,7 @@ def deleteWorkspaceFolder(folderPath):
 
 def renameWorkspaceFolder(folderPath):
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         new_name = data.get("newName", "")
         if not new_name:
             return jsonify({"error": "缺少参数: newName"}), 400
@@ -196,7 +196,7 @@ def renameWorkspaceFolder(folderPath):
 
 def renameWorkspaceFile(filePath):
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         new_name = data.get("newName", "")
         if not new_name:
             return jsonify({"error": "缺少参数: newName"}), 400
@@ -227,7 +227,7 @@ def renameWorkspaceFile(filePath):
 
 def moveWorkspaceItem():
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         source_path = data.get("sourcePath", "")
         target_path = data.get("targetPath", "")
         if not source_path or not target_path:
@@ -438,6 +438,44 @@ def getFileDetails():
         if not os.path.isfile(full_path):
             return jsonify({"error": "路径不是文件"}), 400
 
-        return jsonify(getFileInfo(full_path))
+        normalized_path = str(file_path or "").replace("\\", "/").strip("/")
+        extension = os.path.splitext(full_path)[1].lower()
+        if browse_type == "results" and extension in {".png", ".jpg", ".jpeg"}:
+            stat_info = os.stat(full_path)
+            return jsonify({
+                "name": os.path.basename(full_path),
+                "path": normalized_path,
+                "fullPath": full_path,
+                "format": extension.lstrip(".") or "file",
+                "size": stat_info.st_size,
+                "sizeFormatted": formatFileSize(stat_info.st_size),
+                "lastModified": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
+                "modifiedTime": stat_info.st_mtime,
+                "extension": extension,
+                "previewUrl": f"/api/workspace/raw/{urllib.parse.quote(normalized_path, safe='/')}",
+                "metadata": {
+                    "previewType": "image",
+                },
+            })
+
+        return jsonify(getFileInfo(full_path, normalized_path))
     except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+def serveWorkspaceFile(filename):
+    try:
+        normalized_filename = str(filename or "").replace("\\", "/").strip("/")
+        is_valid, full_path = validateWorkspacePath(normalized_filename)
+        if not is_valid:
+            return jsonify({"error": full_path}), 403
+        if not os.path.exists(full_path) or not os.path.isfile(full_path):
+            return jsonify({"error": "文件不存在"}), 404
+
+        extension = os.path.splitext(full_path)[1].lower()
+        if extension not in {".png", ".jpg", ".jpeg"}:
+            return jsonify({"error": "仅支持图片预览"}), 400
+        return send_file(full_path, conditional=True)
+    except Exception as exc:
+        logMessage(f"工作空间文件预览失败: {filename}, 错误: {exc}", "ERROR")
         return jsonify({"error": str(exc)}), 500

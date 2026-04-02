@@ -5,7 +5,7 @@ from flask import request
 
 from apiDocs import getOpenApiSpec, getSwaggerUi
 from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, servePublishedPath, serveWmts, updatePublication
-from dataSourceOps import getDataSourceInfo, getDataSourceWorkspaceInfo, listDataSources, recommendConfig, resolveDataSourceFiles
+from dataSourceOps import getDataSourceInfo, getDataSourceWorkspaceInfo, listDataSources, recommendConfig, resolveDataSourceFiles, serveDataSourceFile
 from fileSplitOps import splitLargeFile
 from indexedTilesOps import createIndexedTiles, deleteNodataTiles, scanNodataTiles
 from preflight import runPreflightCheck
@@ -14,7 +14,7 @@ from taskCenter import cleanupTasks, deleteTask, getTaskStatus, listTaskEventStr
 from terrainOps import createTerrainTiles, decompressTerrain, updateLayerJson
 from tileAdminOps import convertTileFormat, getCacheInfo
 from uploadOps import extractArchiveFile, uploadFolderFiles, uploadSingleFile, uploadZipArchive
-from workspaceOps import browseDirectory, createDatasourceFolder, createWorkspaceFolder, deleteDatasourceFile, deleteDatasourceFolder, deleteWorkspaceFile, deleteWorkspaceFolder, getFileDetails, getWorkspaceInfo, moveWorkspaceItem, renameWorkspaceFile, renameWorkspaceFolder
+from workspaceOps import browseDirectory, createDatasourceFolder, createWorkspaceFolder, deleteDatasourceFile, deleteDatasourceFolder, deleteWorkspaceFile, deleteWorkspaceFolder, getFileDetails, getWorkspaceInfo, moveWorkspaceItem, renameWorkspaceFile, renameWorkspaceFolder, serveWorkspaceFile
 
 
 def handlePublications():
@@ -45,6 +45,8 @@ def registerRoutes(app):
     app.add_url_rule("/api/datasources/<path:subpath>", endpoint="list_data_sources_subpath_alias", view_func=listDataSources, methods=["GET"])
     app.add_url_rule("/api/dataSources/info/<path:filename>", endpoint="get_data_source_info", view_func=getDataSourceInfo, methods=["GET"])
     app.add_url_rule("/api/datasources/info/<path:filename>", endpoint="get_data_source_info_alias", view_func=getDataSourceInfo, methods=["GET"])
+    app.add_url_rule("/api/dataSources/raw/<path:filename>", endpoint="get_data_source_file", view_func=serveDataSourceFile, methods=["GET"])
+    app.add_url_rule("/api/datasources/raw/<path:filename>", endpoint="get_data_source_file_alias", view_func=serveDataSourceFile, methods=["GET"])
     app.add_url_rule("/api/dataSources/workspace", endpoint="get_data_source_workspace", view_func=getDataSourceWorkspaceInfo, methods=["GET"])
     app.add_url_rule("/api/datasources/workspace", endpoint="get_data_source_workspace_alias", view_func=getDataSourceWorkspaceInfo, methods=["GET"])
     app.add_url_rule("/api/dataSources/resolve", endpoint="resolve_data_source_files", view_func=resolveDataSourceFiles, methods=["POST"])
@@ -61,6 +63,7 @@ def registerRoutes(app):
 
     app.add_url_rule("/api/results", endpoint="browse_results", view_func=browseDirectory, methods=["GET"])
     app.add_url_rule("/api/fileDetails", endpoint="get_file_details", view_func=getFileDetails, methods=["GET"])
+    app.add_url_rule("/api/workspace/raw/<path:filename>", endpoint="get_workspace_file", view_func=serveWorkspaceFile, methods=["GET"])
 
     app.add_url_rule("/api/tile/terrain", endpoint="create_terrain_tiles", view_func=createTerrainTiles, methods=["POST"])
     app.add_url_rule("/api/tile/indexedTiles", endpoint="create_indexed_tiles", view_func=createIndexedTiles, methods=["POST"])

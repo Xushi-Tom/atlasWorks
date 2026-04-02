@@ -9,11 +9,11 @@ from flask import jsonify, request
 
 from config import config, taskLock, taskStatus
 from db import checkDatabaseHealth, countTableRows
+from pagination import paginate_items, parse_pagination_args
 from utils import logMessage
 
 
 def healthCheck():
-    logMessage("收到健康检查请求", "INFO")
     database_health = checkDatabaseHealth()
     service_status = "healthy"
     if database_health.get("enabled") and database_health.get("status") not in {"healthy", "disabled"}:
@@ -39,7 +39,6 @@ def healthCheck():
             "taskEvents": countTableRows("tf_job_events") if database_health.get("enabled") else 0,
         },
     }
-    logMessage("健康检查响应正常", "INFO")
     return jsonify(response)
 
 
@@ -104,6 +103,8 @@ def systemInfo():
 
 def listApiRoutes():
     try:
+        page, page_size = parse_pagination_args(request.args, default_page_size=10, max_page_size=200)
+        keyword = str(request.args.get("keyword", "")).strip().lower()
         routes = [
             {"path": "/api/health", "methods": ["GET"], "description": "健康检查", "category": "系统监控", "logic": "返回服务健康状态、时间戳和版本信息"},
             {"path": "/api/dataSources", "methods": ["GET"], "description": "获取数据源列表", "category": "数据源管理", "logic": "浏览根目录或指定子目录的TIF文件，支持地理范围筛选"},
@@ -134,6 +135,11 @@ def listApiRoutes():
             {"path": "/api/artifacts/<artifactId>/manifest", "methods": ["GET"], "description": "获取产物 manifest", "category": "产物管理", "logic": "读取指定产物目录中的 manifest.json 内容"},
             {"path": "/api/publications", "methods": ["GET", "POST"], "description": "管理发布记录", "category": "发布管理", "logic": "列出或创建产物发布记录，形成基础发布台账"},
             {"path": "/api/publications/<publicationId>", "methods": ["GET"], "description": "获取发布详情", "category": "发布管理", "logic": "查看指定发布记录的目标产物、别名和发布路径"},
+            {"path": "/api/publications/<publicationId>", "methods": ["PUT"], "description": "更新发布记录", "category": "发布管理", "logic": "更新指定发布记录的发布方式、启用状态、别名和元数据"},
+            {"path": "/api/publications/<publicationId>", "methods": ["DELETE"], "description": "删除发布记录", "category": "发布管理", "logic": "删除指定发布记录及其落盘描述文件"},
+            {"path": "/published", "methods": ["GET"], "description": "浏览发布根目录", "category": "发布管理", "logic": "浏览已发布目录的根节点或入口资源"},
+            {"path": "/published/<path:relative_path>", "methods": ["GET"], "description": "访问发布资源", "category": "发布管理", "logic": "读取已发布目录下的目录索引、静态文件或瓦片资源"},
+            {"path": "/wmts", "methods": ["GET"], "description": "WMTS 服务", "category": "发布管理", "logic": "提供 WMTS GetCapabilities 与 GetTile 接口，用于访问已发布 WMTS 图层"},
             {"path": "/api/config/recommend", "methods": ["POST"], "description": "推荐配置", "category": "配置管理", "logic": "根据文件特征和系统资源推荐最优切片配置"},
             {"path": "/api/cache/info", "methods": ["GET"], "description": "获取缓存信息", "category": "配置管理", "logic": "扫描瓦片输出目录，返回元数据、索引文件和实际瓦片数量等缓存情况"},
             {"path": "/api/system/info", "methods": ["GET"], "description": "系统信息", "category": "系统监控", "logic": "返回系统资源使用情况、任务统计和性能指标"},
@@ -145,6 +151,7 @@ def listApiRoutes():
             {"path": "/api/workspace/file/<path:filePath>/rename", "methods": ["PUT"], "description": "重命名工作空间文件", "category": "工作空间管理", "logic": "重命名指定的工作空间文件"},
             {"path": "/api/workspace/move", "methods": ["PUT"], "description": "移动工作空间项目", "category": "工作空间管理", "logic": "移动工作空间中的文件或文件夹到新位置"},
             {"path": "/api/workspace/info", "methods": ["GET"], "description": "获取工作空间信息", "category": "工作空间管理", "logic": "获取工作空间统计信息：总大小、文件数、目录数等"},
+            {"path": "/api/workspace/raw/<path:filename>", "methods": ["GET"], "description": "预览工作空间图片", "category": "工作空间管理", "logic": "返回工作空间中的 PNG/JPG/JPEG 原图供前端弹窗直接预览"},
             {"path": "/api/tiles/nodata/scan", "methods": ["POST"], "description": "扫描包含透明（nodata）值的PNG瓦片", "category": "瓦片管理", "logic": "扫描指定目录中包含透明或nodata值的PNG瓦片"},
             {"path": "/api/tiles/nodata/delete", "methods": ["POST"], "description": "删除包含透明（nodata）值的PNG瓦片", "category": "瓦片管理", "logic": "删除扫描到的透明或nodata瓦片文件"},
             {"path": "/api/terrain/layer", "methods": ["POST"], "description": "更新地形瓦片的layer.json文件", "category": "地形处理", "logic": "修复和更新地形瓦片的layer.json元数据文件"},
@@ -154,12 +161,28 @@ def listApiRoutes():
             {"path": "/api/docs", "methods": ["GET"], "description": "在线接口文档", "category": "API文档", "logic": "Swagger 风格在线文档页面，可直接调试接口"},
         ]
 
-        categories = list(set(route["category"] for route in routes))
+        if keyword:
+            routes = [
+                route for route in routes
+                if any(
+                    keyword in str(field or "").lower()
+                    for field in (
+                        route.get("path"),
+                        route.get("category"),
+                        route.get("description"),
+                        route.get("logic"),
+                        ", ".join(route.get("methods", [])),
+                    )
+                )
+            ]
+
+        paged_routes, pagination = paginate_items(routes, page, page_size)
+        categories = sorted(set(route["category"] for route in routes))
         return jsonify({
             "success": True,
-            "routes": routes,
-            "total": len(routes),
+            "routes": paged_routes,
             "categories": categories,
+            **pagination,
             "stats": {
                 "totalRoutes": len(routes),
                 "byCategory": {category: len([r for r in routes if r["category"] == category]) for category in categories},

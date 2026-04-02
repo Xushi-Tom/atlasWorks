@@ -394,6 +394,42 @@ def safeJoin(baseDir: str, *paths: str) -> str:
     return candidate
 
 
+def resolveTilesOutputPath(outputPathValue, folderPrefix: str) -> tuple:
+    """
+    解析产物输出目录。
+    如果未传 outputPath，则自动生成:
+    tilesDir/YYYYMMDD/<folderPrefix>-HHMMSS[-NN]
+    """
+    baseDir = os.path.abspath(config["tilesDir"])
+    normalizedPrefix = re.sub(r"[^a-z0-9_-]+", "-", str(folderPrefix or "output").strip().lower()).strip("-") or "output"
+
+    if isinstance(outputPathValue, list):
+        outputParts = [str(part or "").strip().strip("/\\") for part in outputPathValue if str(part or "").strip().strip("/\\")]
+        if outputParts:
+            return safeJoin(baseDir, *outputParts), outputParts, False
+    elif isinstance(outputPathValue, str):
+        normalizedValue = outputPathValue.strip().strip("/\\")
+        if normalizedValue:
+            return safeJoin(baseDir, normalizedValue), normalizedValue, False
+    elif outputPathValue not in (None, "", []):
+        normalizedValue = str(outputPathValue).strip().strip("/\\")
+        if normalizedValue:
+            return safeJoin(baseDir, normalizedValue), normalizedValue, False
+
+    now = datetime.now()
+    dateFolder = now.strftime("%Y%m%d")
+    timeToken = now.strftime("%H%M%S")
+    attempt = 0
+    while True:
+        suffix = "" if attempt == 0 else f"-{attempt:02d}"
+        folderName = f"{normalizedPrefix}-{timeToken}{suffix}"
+        outputParts = [dateFolder, folderName]
+        outputPath = safeJoin(baseDir, *outputParts)
+        if not os.path.exists(outputPath):
+            return outputPath, outputParts, True
+        attempt += 1
+
+
 def validateDataSourcePath(subpath: str) -> tuple:
     """验证数据源路径（相对于 dataSourceDir）。"""
     try:

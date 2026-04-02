@@ -2297,7 +2297,7 @@ body.tf-app.tf-theme-light .directory-path-text {
 }
 
 .tf-app .datasource-detail-content {
-    width: min(860px, calc(100vw - 48px));
+    width: min(1240px, calc(100vw - 48px));
 }
 
 .tf-app .datasource-detail-layout {
@@ -2305,6 +2305,15 @@ body.tf-app.tf-theme-light .directory-path-text {
     grid-template-columns: minmax(280px, 0.86fr) minmax(0, 1.14fr);
     gap: 18px;
     align-items: start;
+}
+
+.tf-app .datasource-detail-layout > .info-list {
+    min-width: 0;
+}
+
+.tf-app .datasource-detail-layout > .info-list:only-child {
+    grid-column: 1 / -1;
+    width: 100%;
 }
 
 .tf-app .datasource-preview-card {

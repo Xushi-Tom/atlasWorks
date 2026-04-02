@@ -52,6 +52,28 @@ config = {
     "tilesHostDir": _env("ATLASWORKS_TILES_HOST_DIR", default=""),
     "logDir": _env("ATLASWORKS_LOG_DIR", "TERRAFORGE_LOG_DIR", default="/app/log"),
     "logHostDir": _env("ATLASWORKS_LOG_HOST_DIR", default=""),
+    "remoteSourceTimeoutSeconds": max(
+        5,
+        _as_int(_env("ATLASWORKS_REMOTE_SOURCE_TIMEOUT", "TERRAFORGE_REMOTE_SOURCE_TIMEOUT"), 45),
+    ),
+    "remoteSourceRetryCount": max(
+        0,
+        _as_int(_env("ATLASWORKS_REMOTE_SOURCE_RETRIES", "TERRAFORGE_REMOTE_SOURCE_RETRIES"), 1),
+    ),
+    "remoteSourceDockerHostFallback": _as_bool(
+        _env("ATLASWORKS_REMOTE_SOURCE_DOCKER_HOST_FALLBACK", "TERRAFORGE_REMOTE_SOURCE_DOCKER_HOST_FALLBACK"),
+        True,
+    ),
+    "remoteSourceDockerHostFallbackHost": _env(
+        "ATLASWORKS_REMOTE_SOURCE_DOCKER_HOST",
+        "TERRAFORGE_REMOTE_SOURCE_DOCKER_HOST",
+        default="host.docker.internal",
+    ),
+    "remoteSourceHostAliases": _env(
+        "ATLASWORKS_REMOTE_SOURCE_HOST_ALIASES",
+        "TERRAFORGE_REMOTE_SOURCE_HOST_ALIASES",
+        default="",
+    ),
     "maxThreads": psutil.cpu_count() if psutilAvailable else 4,
     "defaultMemoryLimit": "8g",
     "supportedFormats": [".tif", ".tiff", ".png", ".jpg", ".jpeg", ".txt"],

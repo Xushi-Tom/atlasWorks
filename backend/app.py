@@ -9,6 +9,7 @@ import threading
 from flask import Flask, request
 from flask_cors import CORS
 
+from api_response import build_json_response, should_wrap_json_response
 from config import config, taskLock, taskStatus
 from db import flushTaskSnapshots, initializeDatabase, reconcileInterruptedTasks, startTaskSyncWorker
 from routeRegistry import registerRoutes
@@ -107,6 +108,21 @@ def handleOptions():
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
         }
         return ("", 204, headers)
+
+
+@app.after_request
+def normalizeApiJsonResponses(response):
+    try:
+        if not should_wrap_json_response(request.path, response):
+            return response
+
+        payload = response.get_json(silent=True)
+        if payload is None:
+            return response
+        return build_json_response(payload, response)
+    except Exception as exc:
+        logMessage(f"统一响应封装失败: {exc}", "WARNING")
+        return response
 
 
 bootstrapApplication()

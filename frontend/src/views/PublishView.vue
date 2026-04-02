@@ -235,6 +235,7 @@ async function togglePublicationStatus(item, explicitEnabled = null) {
     try {
         await api.updatePublication(item.publicationId, {
             publicationId: item.publicationId,
+            sourceMode: item.metadata?.taskId ? 'task' : 'manual',
             taskId: item.metadata?.taskId || undefined,
             workspacePath: item.metadata?.taskId ? undefined : normalizedWorkspacePath,
             publishPath: normalizedWorkspacePath,
@@ -243,11 +244,7 @@ async function togglePublicationStatus(item, explicitEnabled = null) {
             publishMethod: item.metadata?.publishMethod,
             enabled: nextEnabled,
             visibility: item.metadata?.visibility,
-            note: item.metadata?.note,
-            metadata: {
-                sourceMode: item.metadata?.taskId ? 'task' : 'manual',
-                publishMethod: item.metadata?.publishMethod
-            }
+            note: item.metadata?.note
         });
         pushToast(nextEnabled ? '发布已启用' : '发布已停用', 'success');
         await loadPublications();
@@ -334,6 +331,7 @@ async function submitPublication() {
 
     const normalizedWorkspacePath = normalizeWorkspacePath(form.workspacePath);
     const payload = {
+        sourceMode: form.sourceMode,
         taskId: form.sourceMode === 'task' ? form.taskId : undefined,
         workspacePath: form.sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
         publishPath: form.sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
@@ -342,11 +340,7 @@ async function submitPublication() {
         publishMethod: form.publishMethod || undefined,
         enabled: form.enabled,
         visibility: form.visibility,
-        note: form.note || undefined,
-        metadata: {
-            publishMethod: form.publishMethod || undefined,
-            sourceMode: form.sourceMode
-        }
+        note: form.note || undefined
     };
 
     try {

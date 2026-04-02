@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(docker cp:*)",
+      "Bash(grep -n \"subnav\\\\|section-tabs\\\\|tab-bar\\\\|view-tab\" d:/map/atlasWorks/frontend/src/views/*.vue d:/map/atlasWorks/backend/static/css/style.css)",
+      "Bash(docker exec:*)"
+    ]
+  }
+}
