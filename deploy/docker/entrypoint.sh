@@ -5,6 +5,11 @@ set -e
 ldconfig
 export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 
+if [ -n "${TZ:-}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
+    ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime
+    echo "${TZ}" > /etc/timezone || true
+fi
+
 if [ $# -eq 0 ]; then
     : "${HOST:=0.0.0.0}"
     : "${PORT:=18000}"

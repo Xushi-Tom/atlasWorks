@@ -10,7 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    LD_LIBRARY_PATH=/usr/local/lib
+    LD_LIBRARY_PATH=/usr/local/lib \
+    TZ=Asia/Shanghai
 
 WORKDIR /tmp/build
 
@@ -34,10 +35,14 @@ RUN printf "deb %s bullseye main contrib non-free\n" "${APT_MIRROR}" > /etc/apt/
     python3-pil \
     python3-pip \
     python3-setuptools \
+    tzdata \
     wget \
     && apt-get -f install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+RUN ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime \
+    && echo "${TZ}" > /etc/timezone
 
 RUN python3 -m pip install --upgrade pip setuptools wheel \
     && python3 -m pip install \

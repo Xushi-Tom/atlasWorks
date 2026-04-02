@@ -10,6 +10,10 @@ services:
     restart: unless-stopped
     # 容器环境变量配置
     environment:
+      # 容器时区（默认东八区，可通过环境变量覆盖）
+      TZ: ${ATLASWORKS_TZ:-Asia/Shanghai}
+      # PostgreSQL 会话时区
+      PGTZ: ${ATLASWORKS_TZ:-Asia/Shanghai}
       # 数据库名称
       POSTGRES_DB: atlasworks
       # 数据库用户名
@@ -59,6 +63,8 @@ services:
         condition: service_healthy
     # 容器环境变量配置
     environment:
+      # 容器时区（默认东八区，可通过环境变量覆盖）
+      TZ: ${ATLASWORKS_TZ:-Asia/Shanghai}
       # API 监听地址
       HOST: 0.0.0.0
       # API 容器内监听端口

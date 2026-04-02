@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import time
 from datetime import datetime
 
 from flask import jsonify, request
@@ -222,6 +223,9 @@ def updateContainerInfo():
                     try:
                         timezone = data["timezone"]
                         os.environ["TZ"] = timezone
+                        if hasattr(time, "tzset"):
+                            time.tzset()
+                            time_results["actions"].append("已调用 tzset 使时区配置立即生效")
                         time_results["actions"].append(f"设置时区为: {timezone}")
                     except Exception as exc:
                         time_results["actions"].append(f"设置时区失败: {str(exc)}")
