@@ -9,6 +9,10 @@ backend/__pycache__/
 
 # Runtime artifacts
 runtime/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
 
 # OS/editor
 .DS_Store

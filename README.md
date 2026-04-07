@@ -1,84 +1,145 @@
 # AtlasWorks
 
-`atlasWorks` 是当前产品化重组后的根目录，用来承载 Python 服务端、数据库初始化、Docker 部署和产品规划文档。
+AtlasWorks 是一个面向地理空间数据构建与发布场景的开源服务平台，聚焦于将 GeoTIFF、DEM 等数据资产组织为可执行任务、可追踪产物以及可对外访问的发布资源。项目以 Python 后端为核心，结合前端控制台、任务管理、产物清单和发布入口，提供一套从数据准备到成果交付的完整工作流。
 
-## 目录结构
+与单一用途的切片脚本相比，AtlasWorks 更强调工程化与产品化能力，包括构建前校验、任务状态追踪、产物元数据沉淀、发布访问封装以及工作空间治理。
 
-- `backend`
-  Python API 服务代码。
-  当前已拆出 `preflight.py`、`artifacts.py`、`catalog.py`、`dataSourceOps.py`、`fileSplitOps.py`、`indexedTilesOps.py`、`routeRegistry.py`、`taskState.py`、`terrainOps.py`、`taskCenter.py`、`systemOps.py`、`tileAdminOps.py`、`workspaceOps.py` 等模块，`app.py` 已收敛为启动入口。
-- `db/init`
-  PostgreSQL 初始化脚本。
-- `deploy/docker`
-  Dockerfile 和镜像构建脚本。
-- `docs/planning`
-  产品规划与架构设计文档。
-- `docs/legacy`
-  旧版 TerraForge 文档，作为历史资料保留。
-- `dockerCompose.yml`
-  AtlasWorks 的统一本地编排入口。
+## Overview
 
-## 当前约定
+AtlasWorks 适用于需要对栅格地图或地形数据进行批量处理、统一构建和集中发布的场景，例如：
 
-- PostgreSQL 宿主机端口固定为 `25432`
-- API 宿主机默认端口为 `18000`
-  这样可以避免和旧版 `terraforge-api` 占用的 `8000` 冲突；如需改回，可通过 `ATLASWORKS_HOST_PORT` 覆盖。
-- 运行时目录统一放在 `atlasWorks/runtime`
-- Python 服务代码统一以 `atlasWorks/backend` 为主工作区
-- 当前已具备基础 `preflight` 预检查能力和 `manifest.json` 产物描述能力
-- 已内置控制台页面，默认入口为 `/`，也可通过 `/console` 访问
-- 后端模块职责说明见 `docs/backendPyResponsibilities.md`
-- 后端 API 说明见 `docs/backendApiGuide.md`
+- GeoTIFF 等栅格数据的地图瓦片构建
+- DEM 数据的地形瓦片构建
+- 构建任务的跟踪、查询与回溯
+- 构建产物的清单管理与发布访问
+- 面向本地部署或私有环境的可视化控制台接入
 
-## 当前新增能力
+## Key Features
 
-- `POST /api/preflight`
-  在正式执行地图或地形构建前，检查输入文件、工具链、波段情况、输出覆盖风险与粗略资源预估。
-- 构建成功后自动写出 `manifest.json`
-  当前已接入索引切图与地形切片任务，产物目录中会自动生成 `manifest.json`，并尝试同步产物记录到 PostgreSQL。
-- `GET /api/artifacts`、`GET /api/artifacts/<artifactId>`
-  可查看已生成产物的列表和详情，数据库不可用时会回退扫描 `manifest.json`。
-- `GET /api/artifacts/<artifactId>/manifest`
-  可直接查看产物目录中的 `manifest.json` 内容。
-- `GET/POST /api/publications`
-  可为已有产物创建基础发布记录，并写入 `atlasWorks/runtime/tiles/_publications/<alias>/publication.json`。
-- `GET /api/tasks/<taskId>/events`
-  可读取任务的结构化事件流；数据库可用时返回 `tf_job_events`，否则回退到内存 `processLog`。
-- 产物生成与发布创建也会写入任务事件流
-  当前事件链已覆盖任务状态变化、`manifest` 生成、发布记录创建。
-- 内嵌控制台页面
-  当前已提供内嵌静态页面，可直接查看系统状态、数据源、任务、产物与发布，并提交预检查、索引切片和地形切片 JSON 请求。
+- Unified build workflow
+  将数据源解析、预检查、任务执行、产物登记和发布访问串联为统一流程。
+- Preflight validation
+  在正式构建前检查输入文件、工具链可用性、输出覆盖风险与资源消耗预估。
+- Raster and terrain pipelines
+  同时支持地图瓦片与地形瓦片两类核心处理链路。
+- Task-oriented execution
+  长任务以 `taskId` 作为统一入口，支持状态查询、停止、清理与事件流查看。
+- Artifact manifest
+  构建完成后自动生成 `manifest.json`，用于产物元数据记录与后续追踪。
+- Publication endpoints
+  支持将构建结果封装为发布记录，并通过静态路径或 WMTS 方式提供访问。
+- Embedded web console
+  内置 Vue 3 控制台，便于在本地部署环境中直接使用和验证。
 
-## 启动方式
+## Architecture
+
+AtlasWorks 由以下几个主要部分组成：
+
+- `backend/`
+  基于 Flask 的后端服务，负责 API、任务编排、产物/发布管理以及静态资源分发。
+- `frontend/`
+  基于 Vue 3 + Vite 的控制台界面，构建后由后端统一托管。
+- `db/init/`
+  PostgreSQL 初始化脚本，用于基础表结构和持久化能力接入。
+- `deploy/docker/`
+  Docker 构建文件与容器启动脚本。
+- `docs/`
+  项目规划、后端接口与模块职责说明文档。
+
+## Core Capabilities
+
+- 数据源浏览、文件解析与基础元信息读取
+- 构建前预检查与参数推荐
+- Indexed tiles 地图瓦片构建
+- Terrain 地形瓦片构建与辅助运维工具
+- 任务列表、任务详情与任务事件流查询
+- 产物列表、产物详情与 `manifest.json` 查询
+- 发布记录创建、更新、删除与访问地址封装
+- 工作空间浏览、重命名、移动、删除和缓存信息查看
+
+## Quick Start
+
+项目根目录提供了基于 Docker Compose 的本地部署入口：
 
 ```bash
-cd atlasWorks
 docker compose -f dockerCompose.yml up -d --build
 ```
 
-启动后可访问：
+服务启动后，默认可访问以下入口：
 
-- `http://localhost:18000/`
-- `http://localhost:18000/console`
+- Console: `http://localhost:18000/`
+- Console alias: `http://localhost:18000/console`
+- Health check: `http://localhost:18000/api/health`
+- API docs: `http://localhost:18000/api/docs`
 
-## Docker 说明
+## Deployment Notes
 
-- 当前默认 Dockerfile 为 `atlasWorks/deploy/docker/Dockerfile`
-- 当前默认基础镜像为 `terraforge:v3.0`
-  这是为了复用本机已有的 GDAL/CTB 运行底座，避免当前环境下 Docker Hub 拉取失败导致构建中断。
-- 如需切换基础镜像，可在构建时覆盖 `BASE_IMAGE`
+- 默认 Compose 配置使用 PostgreSQL，并将 API 暴露在 `18000` 端口。
+- `dockerCompose.yml` 中包含面向本地开发环境的示例挂载路径，启动前请根据你的机器路径进行调整。
+- 数据源目录、瓦片输出目录、日志目录和数据库配置均可通过环境变量覆盖。
+- 由于任务状态同步和后台线程的存在，示例配置默认采用 `1 worker + 多线程` 的运行方式。
 
-```bash
-docker build \
-  --build-arg BASE_IMAGE=debian:bullseye \
-  -f atlasWorks/deploy/docker/Dockerfile \
-  -t atlasworks:release-2.0.0 .
+## Technology Stack
+
+- Backend: Python, Flask, Gunicorn
+- Frontend: Vue 3, Vite, Element Plus
+- Database: PostgreSQL 15
+- Deployment: Docker, Docker Compose
+- Geospatial toolchain: GDAL, Cesium Terrain Builder
+
+## API Surface
+
+以下接口构成了 AtlasWorks 的主要能力入口：
+
+- `/api/dataSources`
+  数据源浏览与文件信息读取
+- `/api/preflight`
+  构建前预检查
+- `/api/tile/indexedTiles`
+  地图瓦片构建
+- `/api/tile/terrain`
+  地形瓦片构建
+- `/api/tasks`
+  任务列表与任务详情
+- `/api/artifacts`
+  产物列表与产物详情
+- `/api/publications`
+  发布记录管理
+- `/published/*`
+  静态发布资源访问入口
+- `/wmts`
+  WMTS 服务入口
+
+更完整的接口说明见 [docs/backendApiGuide.md](docs/backendApiGuide.md)。
+
+## Repository Layout
+
+```text
+atlasWorks/
+├─ backend/              # Flask API, task orchestration, static serving
+├─ frontend/             # Vue 3 console
+├─ db/init/              # PostgreSQL initialization scripts
+├─ deploy/docker/        # Docker build and runtime files
+├─ docs/                 # Design, API, and planning documents
+├─ runtime/              # Runtime data and local persistence
+├─ tests/                # Backend tests
+└─ dockerCompose.yml     # Local orchestration entrypoint
 ```
 
-- `docker compose` 目前支持以下覆盖变量：
-  `ATLASWORKS_BASE_IMAGE`
-  `ATLASWORKS_POSTGRES_IMAGE`
-  `ATLASWORKS_HOST_PORT`
+## Documentation
 
-- API 容器当前默认使用 `gunicorn` 启动，并固定为 `1 worker + 多线程`
-  因为当前服务里仍有进程内任务状态表和后台同步线程，多 worker 会把任务状态拆到不同进程里。
+- [docs/backendApiGuide.md](docs/backendApiGuide.md)
+- [docs/backendPyResponsibilities.md](docs/backendPyResponsibilities.md)
+- [docs/planning/pythonProductPlan.md](docs/planning/pythonProductPlan.md)
+- [frontend/README.md](frontend/README.md)
+
+## Project Status
+
+AtlasWorks 目前处于持续演进阶段，已经具备较完整的本地构建、任务追踪、产物登记和发布访问能力。现阶段的重点仍然是继续提升以下方面：
+
+- 更稳定的任务状态机与错误码体系
+- 更完善的鉴权与权限控制
+- 更清晰的版本治理与发布流程
+- 更完整的测试覆盖与部署说明
+
+如果你希望将其用于长期维护或生产环境，建议在接入前结合自身场景补充配置管理、安全策略和运维约束。
