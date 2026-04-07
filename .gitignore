@@ -4,6 +4,7 @@ frontend/dist/
 
 # Python cache
 backend/__pycache__/
+backend/static/
 **/__pycache__/
 *.py[cod]
 

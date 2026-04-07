@@ -15,7 +15,23 @@ from db import flushTaskSnapshots, initializeDatabase, reconcileInterruptedTasks
 from routeRegistry import registerRoutes
 from utils import logMessage
 
-app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+def _resolve_static_folder():
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    configured_static_dir = str(os.environ.get("ATLASWORKS_STATIC_DIR", "")).strip()
+    candidate_dirs = [
+        configured_static_dir,
+        os.path.join(base_dir, "static"),
+        os.path.abspath(os.path.join(base_dir, "..", "frontend", "dist")),
+    ]
+
+    for candidate in candidate_dirs:
+        if candidate and os.path.isdir(candidate):
+            return candidate
+    return candidate_dirs[-1]
+
+
+app = Flask(__name__, static_folder=_resolve_static_folder(), static_url_path="/static")
 CORS(
     app,
     resources={

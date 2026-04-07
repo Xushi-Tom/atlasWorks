@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
-import '../../backend/static/css/style.css';
+import './styles/style.css';
 import './styles/cosmic-theme.css';
 
 import AppToastStack from './components/AppToastStack.vue';
