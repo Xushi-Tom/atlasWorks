@@ -1,8 +1,8 @@
-# TerraForge HTTP服务 API接口文档
+# AtlasWorks HTTP服务 API接口文档
 
 ## 📋 概述
 
-TerraForge HTTP服务提供地形切片和地图切片的RESTful API接口，支持智能多配置推荐和实时进度监控。
+AtlasWorks HTTP服务提供地形切片和地图切片的RESTful API接口，支持智能多配置推荐和实时进度监控。
 
 **服务地址**: `http://localhost:8000`  
 **API版本**: v2.8  
@@ -34,7 +34,7 @@ TerraForge HTTP服务提供地形切片和地图切片的RESTful API接口，支
 | 分析工具 | 1个 | 缩放级别推荐 |
 | API文档 | 1个 | 接口路由列表 |
 | **Java后端接口** |  |  |
-| Java地形切片 | 3个 | 文件上传地形切片、路径地形切片、TerraForge API |
+| Java地形切片 | 3个 | 文件上传地形切片、路径地形切片、AtlasWorks API |
 | Java地图切片 | 4个 | 文件上传地图切片、路径地图切片、索引瓦片、透明瓦片管理 |
 | 瓦片服务 | 4个 | TMS瓦片、XYZ瓦片、WMTS标准服务、RESTful瓦片 |
 | 地形服务 | 2个 | 地形瓦片获取、layer.json获取 |
@@ -75,15 +75,15 @@ TerraForge HTTP服务提供地形切片和地图切片的RESTful API接口，支
 ### 容器部署
 ```bash
 # 导入镜像
-docker load -i terraforge-latest.tar
+docker load -i atlasworks-latest.tar
 
 # 启动服务（推荐配置）
-docker run -d --name terraforge-api --memory=16g --shm-size=4g --cpus=4 \
+docker run -d --name atlasworks-api --memory=16g --shm-size=4g --cpus=4 \
   -p 8000:8000 \
   -v /Users/xushi/TIF:/app/dataSource \
   -v /Users/xushi/tiles:/app/tiles \
   -v /Users/xushi/log:/app/log \
-  terraforge:latest python3 /app/app.py
+  atlasworks:latest python3 /app/app.py
 ```
 
 ### 健康检查
@@ -1839,11 +1839,11 @@ curl -X POST "http://localhost:8080/terrain/cut/terrainCutOfFile" \
 }
 ```
 
-### 创建地形瓦片（TerraForge API兼容）
+### 创建地形瓦片（AtlasWorks API兼容）
 
 **POST** `/terrain/cut/tile/terrain`
 
-与Python TerraForge API完全兼容的地形切片接口，支持批量处理和地形合并。
+与Python AtlasWorks API完全兼容的地形切片接口，支持批量处理和地形合并。
 
 #### 📝 核心技术
 1. **批量处理引擎**: 支持多文件并行处理，智能任务调度
@@ -1969,11 +1969,11 @@ curl -X POST "http://localhost:8080/map/cut/mapCutOfFile" \
 | backSuccessUrl | String | 否 | 成功回调地址 |
 | backFailUrl | String | 否 | 失败回调地址 |
 
-### 索引瓦片切片（TerraForge API兼容）
+### 索引瓦片切片（AtlasWorks API兼容）
 
 **POST** `/map/cut/tile/indexedTiles`
 
-基于空间索引的高性能瓦片生成，与Python TerraForge API完全兼容。
+基于空间索引的高性能瓦片生成，与Python AtlasWorks API完全兼容。
 
 #### 📝 核心技术
 1. **空间索引构建**: 生成SHP分幅矢量索引，精确记录空间关系
@@ -1999,7 +1999,7 @@ curl -X POST "http://localhost:8080/map/cut/mapCutOfFile" \
 | enableIncrementalUpdate | Boolean | 否 | false | 是否启用增量更新 |
 | skipNodataTiles | Boolean | 否 | false | 是否跳过透明瓦片 |
 
-### 扫描透明瓦片（TerraForge API兼容）
+### 扫描透明瓦片（AtlasWorks API兼容）
 
 **POST** `/map/cut/tiles/nodata/scan`
 
@@ -2017,7 +2017,7 @@ curl -X POST "http://localhost:8080/map/cut/mapCutOfFile" \
 | tilesPath | String | 是 | - | 瓦片目录路径（相对于tiles目录） |
 | includeDetails | Boolean | 否 | false | 是否返回详细文件列表 |
 
-### 删除透明瓦片（TerraForge API兼容）
+### 删除透明瓦片（AtlasWorks API兼容）
 
 **POST** `/map/cut/tiles/nodata/delete`
 

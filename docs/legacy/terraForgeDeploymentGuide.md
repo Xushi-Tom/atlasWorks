@@ -1,8 +1,8 @@
-# TerraForge 完整部署文档
+# AtlasWorks 完整部署文档
 
 ## 📋 概述
 
-TerraForge是一个完整的地理信息处理平台，集成了Java后端服务和Python切片引擎，支持高精度地形切片、地图瓦片生成、量化网格算法等先进技术。
+AtlasWorks是一个完整的地理信息处理平台，集成了Java后端服务和Python切片引擎，支持高精度地形切片、地图瓦片生成、量化网格算法等先进技术。
 
 ### 🏗️ 系统架构
 - **Java后端**: Spring Boot + MyBatis Plus，提供Web API和业务逻辑
@@ -21,30 +21,30 @@ TerraForge是一个完整的地理信息处理平台，集成了Java后端服务
 ## 📦 镜像信息
 
 ### Java后端镜像
-- **镜像名称**: `terraforge-server:latest`
+- **镜像名称**: `atlasworks-server:latest`
 - **基础镜像**: openjdk:8-jdk-alpine
 - **文件大小**: ~200MB
 - **端口**: 8080
 - **包含组件**: Spring Boot应用、GeoTools、量化网格算法
 
 ### Python切片引擎镜像
-- **镜像名称**: `terra-forge:release-1.0`
+- **镜像名称**: `atlasworks:release-1.0`
 - **基础镜像**: debian:bullseye
 - **文件大小**: 841MB
 - **端口**: 8000
 - **包含工具**: CTB, GDAL, Flask, PIL等地理信息处理工具
 
 ### 集成部署镜像
-- **镜像名称**: `terraforge-complete:latest`
+- **镜像名称**: `atlasworks-complete:latest`
 - **文件大小**: ~1GB
 - **端口**: 8080 (Java), 8000 (Python)
-- **包含组件**: 完整的TerraForge服务栈
+- **包含组件**: 完整的AtlasWorks服务栈
 
 ## 🚀 快速部署
 
 ### 部署方式选择
 
-TerraForge支持三种部署方式：
+AtlasWorks支持三种部署方式：
 
 1. **Java后端独立部署** - 适用于已有Python环境的场景
 2. **Python引擎独立部署** - 适用于只需要切片功能的场景  
@@ -57,28 +57,28 @@ TerraForge支持三种部署方式：
 ```bash
 # 克隆代码
 git clone <repository-url>
-cd terraforge-server
+cd atlasworks-server
 
 # Maven打包
 mvn clean package -Dmaven.test.skip=true
 
 # 构建Docker镜像
-docker build -t terraforge-server:latest .
+docker build -t atlasworks-server:latest .
 ```
 
 #### 1.2 启动Java服务
 
 ```bash
 # 基础启动
-docker run -d --name terraforge-java \
+docker run -d --name atlasworks-java \
   -p 8080:8080 \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/tiles:/app/tiles \
   -e SPRING_PROFILES_ACTIVE=prod \
-  terraforge-server:latest
+  atlasworks-server:latest
 
 # 生产环境启动（推荐）
-docker run -d --name terraforge-java \
+docker run -d --name atlasworks-java \
   --restart=unless-stopped \
   --memory=8g \
   --cpus=4 \
@@ -88,7 +88,7 @@ docker run -d --name terraforge-java \
   -v $(pwd)/logs:/app/logs \
   -e SPRING_PROFILES_ACTIVE=prod \
   -e JAVA_OPTS="-Xmx6g -Xms2g -XX:+UseG1GC" \
-  terraforge-server:latest
+  atlasworks-server:latest
 ```
 
 ### 方式二：Python引擎独立部署
@@ -97,24 +97,24 @@ docker run -d --name terraforge-java \
 
 ```bash
 # 从tar文件加载镜像
-docker load -i terraforge-image.tar
+docker load -i atlasworks-image.tar
 
 # 验证镜像加载成功
-docker images | grep terra-forge
+docker images | grep atlasworks
 ```
 
 #### 2.2 启动Python服务
 
 ```bash
 # 基础启动
-docker run -d --name terraforge-python \
+docker run -d --name atlasworks-python \
   -p 8000:8000 \
   -v $(pwd)/data/dataSource:/app/dataSource \
   -v $(pwd)/data/tiles:/app/tiles \
-  terra-forge:release-1.0 python3 /app/app.py
+  atlasworks:release-1.0 python3 /app/app.py
 
 # 生产环境启动（推荐）
-docker run -d --name terraforge-python \
+docker run -d --name atlasworks-python \
   --restart=unless-stopped \
   --memory=16g \
   --shm-size=4g \
@@ -125,7 +125,7 @@ docker run -d --name terraforge-python \
   -v $(pwd)/logs:/app/logs \
   -e GDAL_CACHEMAX=4096 \
   -e GDAL_NUM_THREADS=8 \
-  terra-forge:release-1.0 python3 /app/app.py
+  atlasworks:release-1.0 python3 /app/app.py
 ```
 
 ### 方式三：完整集成部署（推荐）
@@ -139,9 +139,9 @@ version: '3.8'
 
 services:
   # Java后端服务
-  terraforge-java:
-    image: terraforge-server:latest
-    container_name: terraforge-java
+  atlasworks-java:
+    image: atlasworks-server:latest
+    container_name: atlasworks-java
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -152,21 +152,21 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=prod
       - JAVA_OPTS=-Xmx6g -Xms2g -XX:+UseG1GC
-      - TERRAFORGE_PYTHON_URL=http://terraforge-python:8000
+      - TERRAFORGE_PYTHON_URL=http://atlasworks-python:8000
     depends_on:
-      - terraforge-python
+      - atlasworks-python
     deploy:
       resources:
         limits:
           memory: 8G
           cpus: '4'
     networks:
-      - terraforge-network
+      - atlasworks-network
 
   # Python切片引擎
-  terraforge-python:
-    image: terra-forge:release-1.0
-    container_name: terraforge-python
+  atlasworks-python:
+    image: atlasworks:release-1.0
+    container_name: atlasworks-python
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -185,12 +185,12 @@ services:
           memory: 16G
           cpus: '8'
     networks:
-      - terraforge-network
+      - atlasworks-network
 
   # 数据库（可选）
   mysql:
     image: mysql:8.0
-    container_name: terraforge-mysql
+    container_name: atlasworks-mysql
     restart: unless-stopped
     ports:
       - "3306:3306"
@@ -198,21 +198,21 @@ services:
       - mysql_data:/var/lib/mysql
       - ./sql:/docker-entrypoint-initdb.d
     environment:
-      - MYSQL_ROOT_PASSWORD=terraforge2024
-      - MYSQL_DATABASE=terraforge
-      - MYSQL_USER=terraforge
-      - MYSQL_PASSWORD=terraforge123
+      - MYSQL_ROOT_PASSWORD=atlasworks2024
+      - MYSQL_DATABASE=atlasworks
+      - MYSQL_USER=atlasworks
+      - MYSQL_PASSWORD=atlasworks123
     deploy:
       resources:
         limits:
           memory: 2G
     networks:
-      - terraforge-network
+      - atlasworks-network
 
   # Nginx代理（可选）
   nginx:
     image: nginx:alpine
-    container_name: terraforge-nginx
+    container_name: atlasworks-nginx
     restart: unless-stopped
     ports:
       - "80:80"
@@ -222,17 +222,17 @@ services:
       - ./nginx/ssl:/etc/nginx/ssl
       - ./tiles:/usr/share/nginx/html/tiles
     depends_on:
-      - terraforge-java
-      - terraforge-python
+      - atlasworks-java
+      - atlasworks-python
     networks:
-      - terraforge-network
+      - atlasworks-network
 
 volumes:
   mysql_data:
     driver: local
 
 networks:
-  terraforge-network:
+  atlasworks-network:
     driver: bridge
 ```
 
@@ -290,9 +290,9 @@ touch nginx/nginx.conf
 | `TILES_BASE_DIR` | /app/tiles | 瓦片输出目录 |
 | `DATA_SOURCE_DIR` | /app/dataSource | 数据源目录 |
 | `JAVA_OPTS` | -Xmx4g -Xms1g | JVM参数 |
-| `MYSQL_URL` | jdbc:mysql://localhost:3306/terraforge | 数据库连接 |
-| `MYSQL_USERNAME` | terraforge | 数据库用户名 |
-| `MYSQL_PASSWORD` | terraforge123 | 数据库密码 |
+| `MYSQL_URL` | jdbc:mysql://localhost:3306/atlasworks | 数据库连接 |
+| `MYSQL_USERNAME` | atlasworks | 数据库用户名 |
+| `MYSQL_PASSWORD` | atlasworks123 | 数据库密码 |
 | `TERRAFORGE_PYTHON_URL` | http://localhost:8000 | Python服务URL |
 
 #### Python引擎环境变量
@@ -313,10 +313,10 @@ touch nginx/nginx.conf
 ```bash
 # 基础启动（推荐）
 docker run -d \
-  --name terraforge \
+  --name atlasworks \
   -v $(pwd)/data/dataSource:/app/dataSource \
   -v $(pwd)/data/tiles:/app/tiles \
-  terraforge:latest tail -f /dev/null
+  atlasworks:latest tail -f /dev/null
 ```
 
 ## ⚙️ 高级配置
@@ -326,13 +326,13 @@ docker run -d \
 ```bash
 # 设置内存限制（8GB）和CPU限制（4核）
 docker run -d \
-  --name terraforge \
+  --name atlasworks \
   --memory=8g \
   --memory-swap=8g \
   --cpus=4 \
   -v $(pwd)/data/dataSource:/app/dataSource \
   -v $(pwd)/data/tiles:/app/tiles \
-  terraforge:latest tail -f /dev/null
+  atlasworks:latest tail -f /dev/null
 ```
 
 ### 完整配置启动
@@ -340,7 +340,7 @@ docker run -d \
 ```bash
 # 生产环境推荐配置
 docker run -d \
-  --name terraforge \
+  --name atlasworks \
   --restart=unless-stopped \
   --memory=8g \
   --memory-swap=12g \
@@ -352,7 +352,7 @@ docker run -d \
   -e GDAL_CACHEMAX=2048 \
   -e GDAL_SWATH_SIZE=1000000 \
   -e GDAL_MAX_DATASET_POOL_SIZE=1000 \
-  terraforge:latest tail -f /dev/null
+  atlasworks:latest tail -f /dev/null
 ```
 
 ## 📁 目录挂载说明
@@ -369,17 +369,17 @@ docker run -d \
 
 ```bash
 # 进入容器交互式命令行
-docker exec -it terraforge bash
+docker exec -it atlasworks bash
 
 # 在容器外执行单个命令
-docker exec terraforge [命令]
+docker exec atlasworks [命令]
 ```
 
 ### CTB地形切片
 
 ```bash
 # 基础地形切片
-docker exec terraforge ctb-tile \
+docker exec atlasworks ctb-tile \
   -f Mesh \
   -C \
   -o /app/tiles/terrain_output \
@@ -388,19 +388,19 @@ docker exec terraforge ctb-tile \
   /app/dataSource/input.tif
 
 # 检查输出文件
-docker exec terraforge ls -la /app/tiles/terrain_output/
+docker exec atlasworks ls -la /app/tiles/terrain_output/
 ```
 
 ### GDAL2Tiles地图切片
 
 ```bash
 # 基础地图切片
-docker exec terraforge gdal2tiles.py \
+docker exec atlasworks gdal2tiles.py \
   /app/dataSource/input.tif \
   /app/tiles/map_output/
 
 # 高性能切片（多进程）
-docker exec terraforge gdal2tiles.py \
+docker exec atlasworks gdal2tiles.py \
   --processes=4 \
   --resampling=near \
   -z 0-18 \
@@ -412,10 +412,10 @@ docker exec terraforge gdal2tiles.py \
 
 ```bash
 # 复制智能切片脚本到容器
-docker cp auto_zoom_tiles.sh terraforge:/app/
+docker cp auto_zoom_tiles.sh atlasworks:/app/
 
 # 执行智能切片
-docker exec terraforge bash -c \
+docker exec atlasworks bash -c \
   'cd /app && ./auto_zoom_tiles.sh dataSource/input.tif tiles/smart_output'
 ```
 
@@ -536,7 +536,7 @@ docker run --memory=64g --cpus=32 --shm-size=16g
 # 存储挂载优化示例
 -v /fast-ssd/tiles:/app/tiles              # 瓦片输出到SSD
 -v /storage/data:/app/dataSource           # 源数据在大容量存储
--v /tmp/terraforge:/tmp                    # 独立临时目录
+-v /tmp/atlasworks:/tmp                    # 独立临时目录
 ```
 
 ### 网络和并发优化
@@ -544,12 +544,12 @@ docker run --memory=64g --cpus=32 --shm-size=16g
 #### Nginx反向代理配置
 
 ```nginx
-upstream terraforge_java {
-    server terraforge-java:8080 max_fails=3 fail_timeout=30s;
+upstream atlasworks_java {
+    server atlasworks-java:8080 max_fails=3 fail_timeout=30s;
 }
 
-upstream terraforge_python {
-    server terraforge-python:8000 max_fails=3 fail_timeout=30s;
+upstream atlasworks_python {
+    server atlasworks-python:8000 max_fails=3 fail_timeout=30s;
 }
 
 server {
@@ -565,7 +565,7 @@ server {
     
     # Java API代理
     location /api/ {
-        proxy_pass http://terraforge_java;
+        proxy_pass http://atlasworks_java;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_timeout 300s;
@@ -574,7 +574,7 @@ server {
     
     # Python切片引擎代理
     location /tile/ {
-        proxy_pass http://terraforge_python;
+        proxy_pass http://atlasworks_python;
         proxy_set_header Host $host;
         proxy_timeout 1800s;  # 30分钟超时
         proxy_buffering off;
@@ -596,10 +596,10 @@ iostat -x 1
 free -h
 
 # 查看GDAL处理进度
-docker logs -f terraforge-python | grep "progress"
+docker logs -f atlasworks-python | grep "progress"
 
 # 查看Java应用JVM状态
-docker exec terraforge-java jstat -gc 1 5s
+docker exec atlasworks-java jstat -gc 1 5s
 ```
 
 #### 调试和排错
@@ -611,7 +611,7 @@ docker exec terraforge-java jstat -gc 1 5s
 -e SPRING_LOGGING_LEVEL=DEBUG
 
 # 查看处理统计
-docker exec terraforge-python gdalinfo --stats /app/dataSource/input.tif
+docker exec atlasworks-python gdalinfo --stats /app/dataSource/input.tif
 
 # 检查瓦片完整性
 find /tiles -name "*.png" -size 0 -delete
@@ -632,49 +632,49 @@ find /tiles -name "*.terrain" -size 0 -delete
 
 ```bash
 # 启动容器
-docker start terraforge
+docker start atlasworks
 
 # 停止容器
-docker stop terraforge
+docker stop atlasworks
 
 # 重启容器
-docker restart terraforge
+docker restart atlasworks
 
 # 删除容器
-docker rm terraforge
+docker rm atlasworks
 
 # 查看容器状态
-docker ps | grep terraforge
+docker ps | grep atlasworks
 
 # 查看容器资源使用
-docker stats terraforge
+docker stats atlasworks
 ```
 
 ### 文件操作
 
 ```bash
 # 复制文件到容器
-docker cp local_file.tif terraforge:/app/dataSource/
+docker cp local_file.tif atlasworks:/app/dataSource/
 
 # 从容器复制文件
-docker cp terraforge:/app/tiles/output ./output
+docker cp atlasworks:/app/tiles/output ./output
 
 # 查看容器内文件
-docker exec terraforge ls -la /app/dataSource/
-docker exec terraforge ls -la /app/tiles/
+docker exec atlasworks ls -la /app/dataSource/
+docker exec atlasworks ls -la /app/tiles/
 ```
 
 ### 日志查看
 
 ```bash
 # 查看容器日志
-docker logs terraforge
+docker logs atlasworks
 
 # 实时查看日志
-docker logs -f terraforge
+docker logs -f atlasworks
 
 # 查看最近100行日志
-docker logs --tail 100 terraforge
+docker logs --tail 100 atlasworks
 ```
 
 ## 🔧 故障排查
@@ -684,17 +684,17 @@ docker logs --tail 100 terraforge
 1. **内存不足**
    ```bash
    # 检查容器内存使用
-   docker stats terraforge
+   docker stats atlasworks
    
    # 增加内存限制
-   docker update --memory=8g terraforge
+   docker update --memory=8g atlasworks
    ```
 
 2. **磁盘空间不足**
    ```bash
    # 检查磁盘使用
    df -h
-   docker exec terraforge df -h
+   docker exec atlasworks df -h
    
    # 清理Docker缓存
    docker system prune -f
@@ -713,10 +713,10 @@ docker logs --tail 100 terraforge
 4. **容器无法启动**
    ```bash
    # 查看详细错误信息
-   docker logs terraforge
+   docker logs atlasworks
    
    # 重新加载镜像
-   docker load -i terraforge-image.tar
+   docker load -i atlasworks-image.tar
    ```
 
 ### 性能监控
@@ -763,7 +763,7 @@ netstat -i
 ```bash
 # 启动nginx容器提供切片服务
 docker run -d \
-  --name terraforge-web \
+  --name atlasworks-web \
   -p 8080:80 \
   -v $(pwd)/data/tiles:/usr/share/nginx/html \
   nginx:alpine
@@ -782,7 +782,7 @@ docker run -d \
 
 ### 量化网格算法（Java后端核心技术）
 
-TerraForge的Java后端集成了先进的量化网格算法，这是处理大规模地形数据的核心技术：
+AtlasWorks的Java后端集成了先进的量化网格算法，这是处理大规模地形数据的核心技术：
 
 #### 核心特性
 1. **半边数据结构**: 高效存储和处理三角网拓扑关系
@@ -841,16 +841,16 @@ Java后端的地图切片采用精确的防缝隙算法：
 #### Java后端升级
 ```bash
 # 备份当前版本
-docker save terraforge-server:latest > backup.tar
+docker save atlasworks-server:latest > backup.tar
 
 # 拉取新版本
-docker pull terraforge-server:v2.0
+docker pull atlasworks-server:v2.0
 
 # 升级数据库（如有需要）
-docker exec terraforge-mysql mysql -u root -p < upgrade.sql
+docker exec atlasworks-mysql mysql -u root -p < upgrade.sql
 
 # 重启服务
-docker-compose restart terraforge-java
+docker-compose restart atlasworks-java
 ```
 
 #### Python引擎升级
@@ -859,10 +859,10 @@ docker-compose restart terraforge-java
 cp -r ./tiles ./tiles.backup
 
 # 加载新镜像
-docker load -i terra-forge-v2.0.tar
+docker load -i atlasworks-v2.0.tar
 
 # 更新配置
-docker-compose up -d terraforge-python
+docker-compose up -d atlasworks-python
 ```
 
 ### 监控和维护
@@ -877,11 +877,11 @@ echo '{
     "compress": true,
     "maxsize": "100M"
   }
-}' > /etc/logrot.d/terraforge
+}' > /etc/logrot.d/atlasworks
 
 # 查看关键日志
-docker logs --tail 100 terraforge-java
-docker logs --tail 100 terraforge-python
+docker logs --tail 100 atlasworks-java
+docker logs --tail 100 atlasworks-python
 ```
 
 #### 健康检查
@@ -905,7 +905,7 @@ tar -czf config-backup-$(date +%Y%m%d).tar.gz ./config
 rsync -av --progress ./tiles/ /backup/tiles/
 
 # 数据库备份（如使用）
-docker exec terraforge-mysql mysqldump -u root -p terraforge > backup.sql
+docker exec atlasworks-mysql mysqldump -u root -p atlasworks > backup.sql
 ```
 
 ### 开发和扩展
@@ -919,7 +919,7 @@ docker exec terraforge-mysql mysqldump -u root -p terraforge > backup.sql
 #### API集成示例
 ```javascript
 // JavaScript集成示例
-const TerraForgeClient = {
+const AtlasWorksClient = {
   async createTerrainTiles(params) {
     const response = await fetch('http://localhost:8080/terrain/cut/tile/terrain', {
       method: 'POST',
@@ -938,11 +938,11 @@ const TerraForgeClient = {
 
 ---
 
-**TerraForge完整部署文档**  
+**AtlasWorks完整部署文档**  
 **版本**: v2.8  
 **最后更新**: 2025年7月26日  
-**维护团队**: TerraForge开发团队  
-**技术支持**: support@terraforge.com
+**维护团队**: AtlasWorks开发团队  
+**技术支持**: support@atlasworks.com
 
 ### 相关文档
 - [API接口文档](./terraForgeApiGuide.md)
@@ -951,3 +951,4 @@ const TerraForgeClient = {
 - [智能分级测试示例](./智能分级测试示例.md)
 
 **注意**: 本文档持续更新中，最新版本请查看项目仓库。 
+
