@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+
+{% block title %}Tasks – AtlasWorks{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div class="d-flex align-items-center">
+    <i class="bi bi-list-task fs-3 me-3 text-primary"></i>
+    <div>
+      <h2 class="mb-0">Tasks</h2>
+      <small class="text-muted">Create and manage geospatial processing tasks</small>
+    </div>
+  </div>
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createTaskModal">
+    <i class="bi bi-plus-lg me-1"></i>New Task
+  </button>
+</div>
+
+<!-- Task table -->
+<div class="card border-0 shadow-sm">
+  <div class="card-body p-0">
+    {% if tasks %}
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Data</th>
+            <th>Input Files</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Created</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for task in tasks %}
+          <tr>
+            <td>
+              <div class="fw-medium">{{ task.name }}</div>
+              {% if task.description %}
+              <small class="text-muted">{{ task.description[:60] }}{% if task.description|length > 60 %}…{% endif %}</small>
+              {% endif %}
+            </td>
+            <td><span class="badge bg-light text-dark border">{{ task.task_type }}</span></td>
+            <td><span class="badge bg-light text-dark border">{{ task.data_type }}</span></td>
+            <td>
+              {% if task.input_files %}
+                <small class="text-muted">{{ task.input_files | length }} file(s)</small>
+              {% else %}
+                <small class="text-muted">—</small>
+              {% endif %}
+            </td>
+            <td>
+              <span class="badge
+                {% if task.status == 'completed' %}bg-success
+                {% elif task.status == 'running' %}bg-warning text-dark
+                {% elif task.status == 'failed' %}bg-danger
+                {% else %}bg-secondary{% endif %}">
+                {{ task.status }}
+              </span>
+            </td>
+            <td style="min-width:100px">
+              <div class="progress" style="height:6px">
+                <div class="progress-bar
+                  {% if task.status == 'completed' %}bg-success
+                  {% elif task.status == 'failed' %}bg-danger
+                  {% elif task.status == 'running' %}bg-warning
+                  {% else %}bg-secondary{% endif %}"
+                  role="progressbar" style="width:{{ task.progress }}%"></div>
+              </div>
+              <small class="text-muted">{{ task.progress }}%</small>
+            </td>
+            <td><small class="text-muted">{{ task.created_at.strftime('%Y-%m-%d %H:%M') }}</small></td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                {% if task.status in ('pending', 'failed') %}
+                <button class="btn btn-outline-success btn-run-task"
+                        data-task-id="{{ task.id }}" title="Run task">
+                  <i class="bi bi-play-fill"></i>
+                </button>
+                {% endif %}
+                <button class="btn btn-outline-danger btn-delete-task"
+                        data-task-id="{{ task.id }}" title="Delete task">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-inbox fs-1 d-block mb-3"></i>
+      <p>No tasks yet. Create your first task to get started.</p>
+      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createTaskModal">
+        <i class="bi bi-plus-lg me-1"></i>Create Task
+      </button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Create Task Modal -->
+<div class="modal fade" id="createTaskModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>New Task</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form id="createTaskForm">
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label fw-medium">Task Name <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" id="taskName" required maxlength="256"
+                   placeholder="e.g. Process elevation model" />
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-medium">Description</label>
+            <textarea class="form-control" id="taskDesc" rows="2" maxlength="1024"
+                      placeholder="Optional description"></textarea>
+          </div>
+          <div class="row g-3">
+            <div class="col-6">
+              <label class="form-label fw-medium">Data Type</label>
+              <select class="form-select" id="dataType">
+                <option value="GeoTIFF">GeoTIFF</option>
+                <option value="DEM">DEM</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-medium">Task Type</label>
+              <select class="form-select" id="taskType">
+                <option value="process">Process</option>
+                <option value="convert">Convert</option>
+                <option value="analyze">Analyze</option>
+                <option value="tile">Tile</option>
+              </select>
+            </div>
+          </div>
+          <div class="mt-3">
+            <label class="form-label fw-medium">Input Files</label>
+            <input type="text" class="form-control" id="inputFiles"
+                   placeholder="file1.tif, file2.tif (comma-separated)" />
+            <div class="form-text">Comma-separated list of input file names</div>
+          </div>
+          <div id="taskFormError" class="alert alert-danger mt-3 d-none"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-plus-lg me-1"></i>Create Task
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+  <div id="toastMsg" class="toast align-items-center text-bg-success border-0" role="alert">
+    <div class="d-flex">
+      <div class="toast-body" id="toastText">Done.</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const createTaskModal = new bootstrap.Modal(document.getElementById('createTaskModal'));
+  const toastEl = document.getElementById('toastMsg');
+  const toast = new bootstrap.Toast(toastEl);
+
+  function showToast(msg, type = 'success') {
+    toastEl.className = `toast align-items-center text-bg-${type} border-0`;
+    document.getElementById('toastText').textContent = msg;
+    toast.show();
+  }
+
+  document.getElementById('createTaskForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('taskFormError');
+    errEl.classList.add('d-none');
+
+    const rawFiles = document.getElementById('inputFiles').value;
+    const files = rawFiles ? rawFiles.split(',').map(f => f.trim()).filter(Boolean) : [];
+
+    const payload = {
+      name: document.getElementById('taskName').value.trim(),
+      description: document.getElementById('taskDesc').value.trim(),
+      data_type: document.getElementById('dataType').value,
+      task_type: document.getElementById('taskType').value,
+      input_files: files,
+    };
+
+    const res = await fetch('/api/tasks/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      createTaskModal.hide();
+      showToast('Task created successfully!');
+      setTimeout(() => location.reload(), 800);
+    } else {
+      const err = await res.json();
+      errEl.textContent = err.detail || 'Failed to create task';
+      errEl.classList.remove('d-none');
+    }
+  });
+
+  document.querySelectorAll('.btn-run-task').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.taskId;
+      const res = await fetch(`/api/tasks/${id}/run`, { method: 'POST' });
+      if (res.ok) {
+        showToast('Task started!');
+        setTimeout(() => location.reload(), 800);
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to run task', 'danger');
+      }
+    });
+  });
+
+  document.querySelectorAll('.btn-delete-task').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this task and all its artifacts?')) return;
+      const id = btn.dataset.taskId;
+      const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+      if (res.ok || res.status === 204) {
+        showToast('Task deleted.');
+        setTimeout(() => location.reload(), 800);
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to delete task', 'danger');
+      }
+    });
+  });
+</script>
+{% endblock %}
