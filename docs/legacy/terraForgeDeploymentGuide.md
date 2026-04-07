@@ -152,7 +152,7 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=prod
       - JAVA_OPTS=-Xmx6g -Xms2g -XX:+UseG1GC
-      - TERRAFORGE_PYTHON_URL=http://atlasworks-python:8000
+      - ATLASWORKS_PYTHON_URL=http://atlasworks-python:8000
     depends_on:
       - atlasworks-python
     deploy:
@@ -293,7 +293,7 @@ touch nginx/nginx.conf
 | `MYSQL_URL` | jdbc:mysql://localhost:3306/atlasworks | 数据库连接 |
 | `MYSQL_USERNAME` | atlasworks | 数据库用户名 |
 | `MYSQL_PASSWORD` | atlasworks123 | 数据库密码 |
-| `TERRAFORGE_PYTHON_URL` | http://localhost:8000 | Python服务URL |
+| `ATLASWORKS_PYTHON_URL` | http://localhost:8000 | Python服务URL |
 
 #### Python引擎环境变量
 
@@ -945,7 +945,7 @@ const AtlasWorksClient = {
 **技术支持**: support@atlasworks.com
 
 ### 相关文档
-- [API接口文档](./terraForgeApiGuide.md)
+- [API接口文档](./terraForgeApiGuide.md)（AtlasWorks API Guide）
 - [CTB使用指南](./CTB使用指南.md)
 - [GDAL2Tiles使用指南](./GDAL2Tiles使用指南.md)
 - [智能分级测试示例](./智能分级测试示例.md)
