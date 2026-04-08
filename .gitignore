@@ -10,6 +10,7 @@ backend/static/
 
 # Runtime artifacts
 runtime/
+storage/
 *.zip
 *.tar
 *.tar.gz

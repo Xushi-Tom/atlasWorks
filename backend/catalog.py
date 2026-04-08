@@ -5,7 +5,7 @@ import json
 import os
 import socket
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote, unquote, urlsplit
 import xml.etree.ElementTree as ET
 
@@ -40,10 +40,16 @@ WMTS_MAX_ZOOM = 22
 def _mime_from_extension(extension):
     ext = str(extension or "").strip().lower()
     mapping = {
+        ".json": "application/json",
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".webp": "image/webp",
+        ".glb": "model/gltf-binary",
+        ".b3dm": "application/octet-stream",
+        ".pnts": "application/octet-stream",
+        ".i3dm": "application/octet-stream",
+        ".cmpt": "application/octet-stream",
     }
     return mapping.get(ext)
 
@@ -55,6 +61,8 @@ def _extension_from_mime(mime_type):
         "image/jpeg": ".jpg",
         "image/jpg": ".jpg",
         "image/webp": ".webp",
+        "model/gltf-binary": ".glb",
+        "application/json": ".json",
     }
     return mapping.get(mime)
 
@@ -288,6 +296,16 @@ def _find_tile_template_info(full_path):
     return None
 
 
+def _find_tileset_entry(full_path):
+    if not os.path.isdir(full_path):
+        return None
+    for candidate in ("tileset.json", "Tileset.json"):
+        candidate_path = os.path.join(full_path, candidate)
+        if os.path.isfile(candidate_path):
+            return candidate
+    return None
+
+
 def _build_publication_access_payload(publish_path, publish_method=None, publish_type=None, publication_id=None):
     public_base = _public_base_url()
     browser_url = _build_access_url(publish_path)
@@ -308,8 +326,15 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
     publish_method = str(publish_method or "").strip().lower()
     publish_type = str(publish_type or "").strip().lower()
     _, full_path = _resolve_tiles_path(normalized_path)
+    tileset_entry = _find_tileset_entry(full_path) if publish_method == "3d-tiles" or publish_type == "3dtiles" else None
     enable_tile_template = publish_method in {"wmts", "tms", "xyz", "quantized-mesh", "cesium-terrain", "terrain"} or publish_type == "terrain"
     tile_info = _find_tile_template_info(full_path) if enable_tile_template else None
+
+    if tileset_entry:
+        tileset_url = f"{public_base}/published/{normalized_path}/{tileset_entry}"
+        access_url = tileset_url
+        launch_url = tileset_url
+        sample_url = tileset_url
 
     if publish_method == "wmts":
         layer_identifier = str(publication_id or normalized_path).strip()
@@ -580,7 +605,8 @@ def _prepare_publication_payload(data, existing_publication=None):
     custom_metadata.pop("enabled", None)
     custom_metadata["sourceMode"] = source_mode_input
 
-    published_at = datetime.now().isoformat()
+    # Persist an explicit timezone-aware timestamp to avoid frontend double-shifting.
+    published_at = datetime.now(timezone.utc).isoformat()
     descriptor = {
         "id": publication_id,
         "artifactId": artifact_id,
@@ -1172,6 +1198,9 @@ def servePublishedPath(relative_path=""):
 
         parent_dir = os.path.dirname(full_path)
         filename = os.path.basename(full_path)
+        mimetype = _mime_from_extension(os.path.splitext(filename)[1])
+        if mimetype:
+            return send_from_directory(parent_dir, filename, mimetype=mimetype)
         return send_from_directory(parent_dir, filename)
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400

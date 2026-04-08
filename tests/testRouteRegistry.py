@@ -18,6 +18,7 @@ class RouteRegistryTests(unittest.TestCase):
         self.assertIn("/api/dataSources/split", routes)
         self.assertIn("/api/cache/info", routes)
         self.assertIn("/api/tile/indexedTiles", routes)
+        self.assertIn("/api/tile/3dtiles", routes)
         self.assertIn("/api/tasks/<taskId>", routes)
 
 

@@ -13,6 +13,7 @@ from systemOps import healthCheck, listApiRoutes, systemInfo, updateContainerInf
 from taskCenter import cleanupTasks, deleteTask, getTaskStatus, listTaskEventStream, listTasks, stopTask
 from terrainOps import createTerrainTiles, decompressTerrain, updateLayerJson
 from tileAdminOps import convertTileFormat, getCacheInfo
+from tiles3dOps import create3DTiles
 from uploadOps import extractArchiveFile, uploadFolderFiles, uploadSingleFile, uploadZipArchive
 from workspaceOps import browseDirectory, createDatasourceFolder, createWorkspaceFolder, deleteDatasourceFile, deleteDatasourceFolder, deleteWorkspaceFile, deleteWorkspaceFolder, getFileDetails, getWorkspaceInfo, moveWorkspaceItem, renameWorkspaceFile, renameWorkspaceFolder, serveWorkspaceFile
 
@@ -67,6 +68,7 @@ def registerRoutes(app):
 
     app.add_url_rule("/api/tile/terrain", endpoint="create_terrain_tiles", view_func=createTerrainTiles, methods=["POST"])
     app.add_url_rule("/api/tile/indexedTiles", endpoint="create_indexed_tiles", view_func=createIndexedTiles, methods=["POST"])
+    app.add_url_rule("/api/tile/3dtiles", endpoint="create_3d_tiles", view_func=create3DTiles, methods=["POST"])
     app.add_url_rule("/api/tile/convert", endpoint="convert_tile_format", view_func=convertTileFormat, methods=["POST"])
 
     app.add_url_rule("/api/tasks/<taskId>", endpoint="get_task_status", view_func=getTaskStatus, methods=["GET"])

@@ -10,6 +10,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn \
     LD_LIBRARY_PATH=/usr/local/lib \
     TZ=Asia/Shanghai
 
@@ -28,10 +31,14 @@ RUN printf "deb %s bullseye main contrib non-free\n" "${APT_MIRROR}" > /etc/apt/
     git \
     gunicorn \
     libgdal-dev \
+    libgl1 \
+    libglu1-mesa \
+    openscenegraph \
     p7zip-full \
     python3 \
     python3-dev \
     python3-gdal \
+    python3-numpy \
     python3-pil \
     python3-pip \
     python3-setuptools \
@@ -48,11 +55,16 @@ RUN python3 -m pip install --upgrade pip setuptools wheel \
     && python3 -m pip install \
     flask==2.2.5 \
     flask-cors==4.0.0 \
+    laspy \
     lxml \
     pillow \
+    py3dtiles \
+    pygltflib \
     psutil==5.9.0 \
     psycopg2-binary==2.9.9 \
-    requests==2.28.0
+    requests==2.28.0 \
+    trimesh \
+    lazrs
 
 COPY cesium-terrain-builder /tmp/build/cesium-terrain-builder
 
@@ -78,9 +90,10 @@ COPY deploy/docker/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh \
     && chmod +x /app/app.py /entrypoint.sh \
     && python3 -m py_compile /app/*.py \
-    && python3 -c "import flask, flask_cors, psutil, psycopg2, requests, lxml; print('python-imports:ok')" \
+    && python3 -c "import flask, flask_cors, psutil, psycopg2, requests, lxml, laspy, trimesh; from osgeo import ogr; print('python-imports:ok')" \
     && ctb-tile --version >/tmp/ctb-version.txt \
-    && gdalinfo --version >/tmp/gdal-version.txt
+    && gdalinfo --version >/tmp/gdal-version.txt \
+    && command -v osgconv >/tmp/osgconv-path.txt
 
 EXPOSE 18000
 

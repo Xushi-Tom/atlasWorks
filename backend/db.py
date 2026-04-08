@@ -171,6 +171,8 @@ def _detect_job_type(task_id, payload):
         return "terrain_tiles"
     if lowered.startswith("indexedtiles"):
         return "indexed_tiles"
+    if lowered.startswith("tiles3d"):
+        return "3dtiles"
     if lowered.startswith("tileconvert"):
         return "tile_convert"
     if lowered.startswith("split"):

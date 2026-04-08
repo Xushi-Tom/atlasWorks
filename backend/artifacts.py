@@ -41,6 +41,11 @@ def _artifact_type_for(job_type):
         "indexed_tiles": "xyz_tiles",
         "map_tiles": "xyz_tiles",
         "tile_convert": "xyz_tiles",
+        "3dtiles": "3dtiles",
+        "3dtiles-pointcloud": "3dtiles",
+        "3dtiles-vector": "3dtiles",
+        "3dtiles-model": "3dtiles",
+        "3dtiles-osgb": "3dtiles",
     }
     return mapping.get(str(job_type or "").strip().lower(), "unknown")
 
@@ -50,6 +55,8 @@ def _output_format_for(job_type, task_snapshot):
     result = task_snapshot.get("result", {}) if isinstance(task_snapshot, dict) else {}
     if normalized in ("terrain", "terrain_tiles"):
         return "quantized-mesh"
+    if normalized in {"3dtiles", "3dtiles-pointcloud", "3dtiles-vector", "3dtiles-model", "3dtiles-osgb"}:
+        return "3d-tiles"
     render_options = result.get("renderOptions", {})
     if isinstance(render_options, dict) and render_options.get("imageFormat"):
         return str(render_options["imageFormat"])
@@ -174,6 +181,10 @@ def finalizeTaskArtifact(task_id, source_files=None, build_parameters=None):
             task_snapshot = _safe_snapshot(taskStatus.get(task_id, {}))
         if not task_snapshot or task_snapshot.get("status") != "completed":
             return None
+
+        # Ensure the build job row exists before artifact upsert, otherwise
+        # fast jobs can hit the artifact foreign key before task sync finishes.
+        syncTaskSnapshot(task_id, normalizeTaskRecord(task_id, task_snapshot))
 
         artifact_info = writeArtifactManifest(
             task_id,

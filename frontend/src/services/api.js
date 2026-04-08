@@ -255,6 +255,10 @@ class AtlasWorksApi {
         return this.post('/api/tile/terrain', params);
     }
 
+    async create3DTiles(params) {
+        return this.post('/api/tile/3dtiles', params);
+    }
+
     async recommendConfig(params) {
         return this.post('/api/config/recommend', params);
     }

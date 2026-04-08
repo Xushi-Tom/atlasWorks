@@ -824,12 +824,23 @@ def resolveDataSourceFiles():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
-def findTifFilesInFolders(folderPaths, filePatterns=None):
+def findSourceFilesInFolders(folderPaths, filePatterns=None, allowedExtensions=None):
     try:
         found_files = []
         found_set = set()
         data_source_dir = config["dataSourceDir"]
         folderPaths = [str(item).strip() for item in _as_list(folderPaths) if str(item).strip()]
+        normalized_extensions = {
+            str(item or "").strip().lower()
+            for item in _as_list(allowedExtensions or [])
+            if str(item or "").strip()
+        }
+
+        def is_allowed_path(path_value):
+            lower_path = str(path_value or "").lower()
+            if not normalized_extensions:
+                return True
+            return any(lower_path.endswith(extension) for extension in normalized_extensions)
 
         if not folderPaths:
             search_paths = [data_source_dir]
@@ -846,7 +857,10 @@ def findTifFilesInFolders(folderPaths, filePatterns=None):
                     logMessage(f"输入目录不存在，已跳过: {folder_path}", "WARNING")
 
         if not filePatterns:
-            filePatterns = ["*.tif", "*.tiff"]
+            if normalized_extensions:
+                filePatterns = [f"*{extension}" for extension in sorted(normalized_extensions)]
+            else:
+                filePatterns = ["*"]
         filePatterns = [str(pattern).strip() for pattern in _as_list(filePatterns) if str(pattern).strip()]
         remote_patterns = [pattern for pattern in filePatterns if isHttpSource(pattern)]
         local_patterns = [pattern for pattern in filePatterns if not isHttpSource(pattern)]
@@ -884,10 +898,10 @@ def findTifFilesInFolders(folderPaths, filePatterns=None):
             lower_downloaded = downloaded_relative_path.lower()
             if lower_downloaded.endswith(".txt"):
                 txt_files.append(downloaded_relative_path)
-            elif lower_downloaded.endswith((".tif", ".tiff")):
+            elif is_allowed_path(downloaded_relative_path):
                 add_relative_path(downloaded_relative_path)
             else:
-                logMessage(f"远程来源不是 tif/tiff/txt，已忽略: {remote_url}", "WARNING")
+                logMessage(f"远程来源扩展名不在允许列表内，已忽略: {remote_url}", "WARNING")
 
         for txt_file in txt_files:
             txt_path_candidates = []
@@ -912,13 +926,13 @@ def findTifFilesInFolders(folderPaths, filePatterns=None):
                         continue
                     if isHttpSource(line):
                         downloaded_relative_path = _download_remote_source(line, data_source_dir)
-                        if downloaded_relative_path and downloaded_relative_path.lower().endswith((".tif", ".tiff")):
+                        if downloaded_relative_path and is_allowed_path(downloaded_relative_path):
                             add_relative_path(downloaded_relative_path)
                         elif downloaded_relative_path:
-                            logMessage(f"txt 远程行下载后不是 tif/tiff，已忽略: {line}", "WARNING")
+                            logMessage(f"txt 远程行下载后扩展名不在允许列表内，已忽略: {line}", "WARNING")
                         continue
                     if os.path.isabs(line):
-                        if os.path.exists(line) and line.lower().endswith((".tif", ".tiff")):
+                        if os.path.exists(line) and is_allowed_path(line):
                             relative_path = os.path.relpath(line, data_source_dir)
                             if not relative_path.startswith(".."):
                                 add_relative_path(relative_path)
@@ -926,11 +940,11 @@ def findTifFilesInFolders(folderPaths, filePatterns=None):
                     file_found = False
                     for candidate_relative_path in resolve_candidate_relative_paths(line, txt_file_path):
                         full_path = os.path.join(data_source_dir, candidate_relative_path)
-                        if os.path.exists(full_path) and full_path.lower().endswith((".tif", ".tiff")):
+                        if os.path.exists(full_path) and is_allowed_path(full_path):
                             add_relative_path(candidate_relative_path)
                             file_found = True
                     if not file_found:
-                        logMessage(f"txt 行未匹配到 tif 文件: {txt_file}:{line_num} -> {line}", "WARNING")
+                        logMessage(f"txt 行未匹配到允许类型文件: {txt_file}:{line_num} -> {line}", "WARNING")
             except Exception as exc:
                 logMessage(f"读取 txt 文件失败 {txt_file_path}: {exc}", "WARNING")
 
@@ -944,7 +958,7 @@ def findTifFilesInFolders(folderPaths, filePatterns=None):
 
                     matches = glob.glob(pattern_path, recursive=recursive)
                     for match in matches:
-                        if os.path.isfile(match) and match.lower().endswith((".tif", ".tiff")):
+                        if os.path.isfile(match) and is_allowed_path(match):
                             relative_path = os.path.relpath(match, data_source_dir)
                             add_relative_path(relative_path)
                 except Exception as exc:
@@ -953,5 +967,13 @@ def findTifFilesInFolders(folderPaths, filePatterns=None):
         found_files.sort()
         return found_files
     except Exception as exc:
-        logMessage(f"查找 tif 文件失败: {exc}", "ERROR")
+        logMessage(f"查找数据源文件失败: {exc}", "ERROR")
         return []
+
+
+def findTifFilesInFolders(folderPaths, filePatterns=None):
+    return findSourceFilesInFolders(
+        folderPaths,
+        filePatterns=filePatterns,
+        allowedExtensions=[".tif", ".tiff"],
+    )
