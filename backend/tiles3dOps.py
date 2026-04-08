@@ -150,6 +150,8 @@ def _resolve_single_source(folder_paths, file_patterns, source_path, data_type):
         ok, full_path = validateDataSourcePath(normalized)
         if not ok:
             raise ValueError(full_path)
+        if data_type == "osgb" and os.path.isdir(full_path):
+            return normalized, full_path
         if not os.path.isfile(full_path):
             raise ValueError("sourcePath 不是文件")
         return normalized, full_path
@@ -282,6 +284,51 @@ def _write_tileset(
     with open(tileset_path, "w", encoding="utf-8") as file_obj:
         json.dump(tileset, file_obj, ensure_ascii=False, indent=2)
     return tileset_path
+
+
+def _find_tileset_entry_in_dir(source_dir):
+    for candidate in ("tileset.json", "Tileset.json"):
+        candidate_path = os.path.join(source_dir, candidate)
+        if os.path.isfile(candidate_path):
+            return candidate
+    return None
+
+
+def _import_prebuilt_3dtiles(source_dir, output_dir):
+    import json
+
+    tileset_entry = _find_tileset_entry_in_dir(source_dir)
+    if not tileset_entry:
+        raise RuntimeError("OSGB 目录中未找到 tileset.json，无法按预构建 3D Tiles 导入")
+
+    source_abs = os.path.abspath(source_dir)
+    output_abs = os.path.abspath(output_dir)
+    if source_abs != output_abs:
+        shutil.copytree(source_abs, output_abs, dirs_exist_ok=True)
+
+    tileset_path = os.path.join(output_abs, tileset_entry)
+    if not os.path.exists(tileset_path):
+        raise RuntimeError("预构建 tileset 导入失败，输出目录缺少 tileset.json")
+
+    bounds = None
+    content_format = "3dtiles-prebuilt"
+    try:
+        with open(tileset_path, "r", encoding="utf-8") as file_obj:
+            tileset_data = json.load(file_obj)
+        region = (((tileset_data or {}).get("root") or {}).get("boundingVolume") or {}).get("region")
+        if isinstance(region, list) and len(region) >= 4:
+            bounds = [float(region[0]), float(region[1]), float(region[2]), float(region[3])]
+    except Exception:
+        pass
+
+    return {
+        "tilesetPath": tileset_path,
+        "entryFile": tileset_path,
+        "contentFiles": [],
+        "bounds": bounds,
+        "contentFormat": content_format,
+        "sourceMode": "prebuilt-directory",
+    }
 
 
 def _polygon_area(points):
@@ -700,6 +747,9 @@ def _export_obj_tiles(source_path, output_dir, longitude, latitude, height, scal
 
 
 def _export_osgb_tiles(source_path, output_dir, longitude, latitude, height, scale, rotation_z_degrees, content_format):
+    if os.path.isdir(source_path):
+        return _import_prebuilt_3dtiles(source_path, output_dir)
+
     temp_dir = tempfile.mkdtemp(prefix="atlasworks-osgb-")
     try:
         obj_path = os.path.join(temp_dir, "osgb_converted.obj")
@@ -806,6 +856,9 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
         result = _export_osgb_tiles(source_full_path, output_path, longitude, latitude, height, scale, rotation_z_degrees, content_format)
         method = "3dtiles-osgb"
         output_content_format = content_format
+        if result.get("sourceMode") == "prebuilt-directory":
+            method = "3dtiles-osgb-prebuilt"
+            output_content_format = result.get("contentFormat") or output_content_format
 
     if _is_task_stopped(task_id):
         raise RuntimeError("任务已停止")
@@ -880,9 +933,9 @@ def create3DTiles():
             content_format = str(data.get("contentFormat") or "b3dm").strip().lower()
             if content_format not in SUPPORTED_CONTENT_FORMATS:
                 errors.append("contentFormat 仅支持 b3dm 或 glb")
-        if data_type in {"model", "osgb"}:
+        if data_type == "model":
             if normalizeFloat(data.get("longitude"), None) is None or normalizeFloat(data.get("latitude"), None) is None:
-                errors.append("OBJ/OSGB 任务必须提供 longitude 与 latitude")
+                errors.append("OBJ 任务必须提供 longitude 与 latitude")
 
         if errors:
             with taskLock:
@@ -907,6 +960,19 @@ def create3DTiles():
                 "statusUrl": f"/api/tasks/{task_id}",
                 "errors": [str(exc)],
             }), 200
+
+        if data_type == "osgb" and os.path.isfile(source_full_path):
+            if normalizeFloat(data.get("longitude"), None) is None or normalizeFloat(data.get("latitude"), None) is None:
+                message = "OSGB 单文件转换必须提供 longitude 与 latitude；若 sourcePath 是预构建 3D Tiles 目录（含 tileset.json）则可不传"
+                with taskLock:
+                    taskStatus[task_id] = _build_error_task(task_id, [message])
+                return jsonify({
+                    "success": False,
+                    "taskId": task_id,
+                    "message": f"3D Tiles 任务创建失败: {message}",
+                    "statusUrl": f"/api/tasks/{task_id}",
+                    "errors": [message],
+                }), 200
 
         output_path, _, _ = resolveTilesOutputPath(data.get("outputPath"), "3dtiles")
         os.makedirs(output_path, exist_ok=True)
