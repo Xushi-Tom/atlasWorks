@@ -1472,6 +1472,7 @@ _GENERIC_JSON_REQUEST_EXAMPLES = {
         "path": "imports/demo.zip",
         "targetType": "datasource",
         "overwrite": False,
+        "extractFolderName": "demo-extracted",
     },
     ("/api/config/recommend", "post"): {
         "sourceFile": "20260327/demo.tif",
@@ -1546,6 +1547,7 @@ _MULTIPART_REQUESTS = {
                         "targetType": {"type": "string", "enum": ["datasource", "workspace"]},
                         "overwrite": {"type": "string"},
                         "stripTopLevel": {"type": "string"},
+                        "extractFolderName": {"type": "string", "description": "可选；解压后的目标子文件夹名称"},
                     },
                     "required": ["file"],
                 }

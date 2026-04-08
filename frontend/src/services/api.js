@@ -147,13 +147,15 @@ class AtlasWorksApi {
         return this.upload('/api/upload/file', formData);
     }
 
-    async uploadZipArchive(file, targetPath = '', overwrite = false, stripTopLevel = true, targetType = 'datasource') {
+    async uploadZipArchive(file, targetPath = '', overwrite = false, stripTopLevel = true, targetType = 'datasource', extractFolderName = '') {
         const formData = new FormData();
         formData.append('file', file);
         if (targetPath) formData.append('targetPath', targetPath);
         formData.append('overwrite', overwrite ? '1' : '0');
         formData.append('stripTopLevel', stripTopLevel ? '1' : '0');
         formData.append('targetType', targetType);
+        const folderName = String(extractFolderName || '').trim();
+        if (folderName) formData.append('extractFolderName', folderName);
         return this.upload('/api/upload/zip', formData);
     }
 
@@ -215,12 +217,15 @@ class AtlasWorksApi {
         return this.delete(`/api/workspace/file/${encodePathSegments(filePath)}`);
     }
 
-    async extractArchive(path, targetType = 'datasource', overwrite = false) {
-        return this.post('/api/files/extract', {
+    async extractArchive(path, targetType = 'datasource', overwrite = false, extractFolderName = '') {
+        const payload = {
             path: normalizeRelativePath(path),
             targetType,
             overwrite
-        });
+        };
+        const folderName = String(extractFolderName || '').trim();
+        if (folderName) payload.extractFolderName = folderName;
+        return this.post('/api/files/extract', payload);
     }
 
     async getAllTasks(params = {}) {

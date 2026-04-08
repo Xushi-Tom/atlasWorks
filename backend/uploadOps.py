@@ -43,6 +43,33 @@ def _get_validator(target_type: str):
     return validateWorkspacePath if target_type == "workspace" else validateDataSourcePath
 
 
+def _normalize_extract_folder_name(value: str) -> str:
+    text = str(value or "").strip().replace("\\", "/").strip("/")
+    if not text:
+        return ""
+
+    normalized = _normalize_relpath(text)
+    if not normalized:
+        return ""
+    if "/" in normalized:
+        raise ValueError("extractFolderName 仅支持单级文件夹名称")
+
+    invalid_chars = '<>:"/\\|?*'
+    if any(ch in invalid_chars for ch in normalized):
+        raise ValueError("extractFolderName 包含非法字符")
+    if normalized in {".", ".."}:
+        raise ValueError("extractFolderName 非法")
+    return normalized
+
+
+def _resolve_extract_output_dir(base_dir: str, extract_folder_name: str) -> str:
+    if not extract_folder_name:
+        return base_dir
+    output_dir = safeJoin(base_dir, extract_folder_name)
+    os.makedirs(output_dir, exist_ok=True)
+    return output_dir
+
+
 def _extract_zip_to_dir(zip_path: str, output_dir: str):
     extracted = []
     total_uncompressed = 0
@@ -134,6 +161,7 @@ def extractArchiveFile():
         rel_path = _normalize_relpath(data.get("path", ""))
         target_type = str(data.get("targetType", "datasource")).strip().lower() or "datasource"
         overwrite = bool(data.get("overwrite", False))
+        extract_folder_name = _normalize_extract_folder_name(data.get("extractFolderName", ""))
         if not rel_path:
             return jsonify({"error": "缺少参数: path"}), 400
 
@@ -145,6 +173,7 @@ def extractArchiveFile():
             return jsonify({"error": "压缩文件不存在"}), 404
 
         parent_dir = os.path.dirname(archive_path)
+        output_dir = _resolve_extract_output_dir(parent_dir, extract_folder_name)
         temp_dir = tempfile.mkdtemp(prefix="atlasworks_extract_", dir=tempfile.gettempdir())
         try:
             archive_name = os.path.basename(archive_path).lower()
@@ -160,7 +189,7 @@ def extractArchiveFile():
             copied = []
             for rel_name in extracted:
                 temp_file = safeJoin(temp_dir, rel_name)
-                dest_path = safeJoin(parent_dir, rel_name)
+                dest_path = safeJoin(output_dir, rel_name)
                 if os.path.exists(dest_path) and not overwrite:
                     continue
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
@@ -176,6 +205,7 @@ def extractArchiveFile():
                 "message": "解压完成",
                 "targetType": target_type,
                 "sourcePath": rel_path,
+                "extractFolderName": extract_folder_name or None,
                 "count": len(copied),
                 "files": copied[:200],
                 "note": "仅返回前200个文件路径" if len(copied) > 200 else None,
@@ -253,6 +283,7 @@ def uploadZipArchive():
       - targetPath: str (optional)
       - overwrite: 0/1 (optional)
       - stripTopLevel: 0/1 (optional)  是否去掉顶层目录（如果 zip 只有一个顶层文件夹）
+      - extractFolderName: str (optional) 解压后的目标子文件夹名称
     """
     try:
         if "file" not in request.files:
@@ -268,7 +299,10 @@ def uploadZipArchive():
 
         overwrite = str(request.form.get("overwrite", "0")).strip().lower() in {"1", "true", "yes", "on"}
         strip_top_level = str(request.form.get("stripTopLevel", "1")).strip().lower() in {"1", "true", "yes", "on"}
+        extract_folder_name = _normalize_extract_folder_name(request.form.get("extractFolderName", ""))
         rel_target, target_dir, target_type = _get_target_dir()
+        output_dir = _resolve_extract_output_dir(target_dir, extract_folder_name)
+        relative_root = "/".join(part for part in [rel_target, extract_folder_name] if part)
 
         temp_dir = tempfile.mkdtemp(prefix="atlasworks_zip_", dir=tempfile.gettempdir())
         try:
@@ -312,7 +346,7 @@ def uploadZipArchive():
                     if not rel_name:
                         continue
 
-                    dest_path = safeJoin(target_dir, rel_name)
+                    dest_path = safeJoin(output_dir, rel_name)
                     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                     if os.path.exists(dest_path) and not overwrite:
                         continue
@@ -320,15 +354,16 @@ def uploadZipArchive():
                     with zip_ref.open(info, "r") as src, open(dest_path, "wb") as dst:
                         shutil.copyfileobj(src, dst, length=1024 * 1024)
 
-                    rel_saved = f"{rel_target}/{rel_name}".strip("/") if rel_target else rel_name
+                    rel_saved = f"{relative_root}/{rel_name}".strip("/") if relative_root else rel_name
                     extracted_files.append(rel_saved)
 
-            logMessage(f"ZIP 解压完成: {filename} -> {target_dir}, files={len(extracted_files)}", "INFO")
+            logMessage(f"ZIP 解压完成: {filename} -> {output_dir}, files={len(extracted_files)}", "INFO")
             return jsonify({
                 "success": True,
                 "message": "ZIP 上传并解压完成",
                 "targetPath": rel_target,
                 "targetType": target_type,
+                "extractFolderName": extract_folder_name or None,
                 "count": len(extracted_files),
                 "files": extracted_files[:200],
                 "note": "仅返回前200个文件路径" if len(extracted_files) > 200 else None,

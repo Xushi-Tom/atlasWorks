@@ -163,8 +163,10 @@ async function deleteItem(item, type) {
 
 async function extractArchive(file) {
     if (!window.confirm(`确认解压“${file.name}”到当前目录吗？`)) return;
+    const extractFolderName = window.prompt('解压后文件夹名称（可选，留空使用默认）', '');
+    if (extractFolderName === null) return;
     try {
-        await api.extractArchive(file.path, 'workspace');
+        await api.extractArchive(file.path, 'workspace', false, extractFolderName);
         pushToast('压缩文件解压完成', 'success');
         await loadDirectory(currentPath.value);
     } catch (error) {
