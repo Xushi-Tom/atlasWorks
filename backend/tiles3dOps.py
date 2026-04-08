@@ -164,6 +164,8 @@ def _resolve_single_source(folder_paths, file_patterns, source_path, data_type):
     if not matched_files:
         raise ValueError("未找到匹配的输入文件")
     if len(matched_files) > 1:
+        if data_type == "osgb":
+            raise ValueError("匹配到多个 .osgb，请改用 sourcePath 指向上级目录以启用批量 OSGB 转换")
         raise ValueError("当前版本每次仅支持处理单个输入文件，请缩小 filePatterns 或直接传 sourcePath")
 
     normalized = matched_files[0]
@@ -286,71 +288,76 @@ def _write_tileset(
     return tileset_path
 
 
-def _find_tileset_entry_in_dir(source_dir):
-    for candidate in ("tileset.json", "Tileset.json"):
-        candidate_path = os.path.join(source_dir, candidate)
-        if os.path.isfile(candidate_path):
-            return candidate
-    return None
+def _normalize_content_format(content_format):
+    format_name = str(content_format or "b3dm").strip().lower()
+    if format_name not in SUPPORTED_CONTENT_FORMATS:
+        raise RuntimeError(f"不支持的 contentFormat: {content_format}")
+    return format_name
 
 
-def _import_prebuilt_3dtiles(source_dir, output_dir):
-    import json
+def _collect_osgb_files(source_path, max_scan=200000):
+    if os.path.isfile(source_path):
+        if str(source_path).lower().endswith(".osgb"):
+            return [source_path]
+        raise RuntimeError("OSGB 任务输入文件必须是 .osgb")
+    if not os.path.isdir(source_path):
+        raise RuntimeError("OSGB 输入路径不存在")
 
-    tileset_entry = _find_tileset_entry_in_dir(source_dir)
-    if not tileset_entry:
-        raise RuntimeError("OSGB 目录中未找到 tileset.json，无法按预构建 3D Tiles 导入")
-
-    source_abs = os.path.abspath(source_dir)
-    output_abs = os.path.abspath(output_dir)
-    if source_abs != output_abs:
-        shutil.copytree(source_abs, output_abs, dirs_exist_ok=True)
-
-    tileset_path = os.path.join(output_abs, tileset_entry)
-    if not os.path.exists(tileset_path):
-        raise RuntimeError("预构建 tileset 导入失败，输出目录缺少 tileset.json")
-
-    bounds = None
-    content_format = "3dtiles-prebuilt"
-    try:
-        with open(tileset_path, "r", encoding="utf-8") as file_obj:
-            tileset_data = json.load(file_obj)
-        region = (((tileset_data or {}).get("root") or {}).get("boundingVolume") or {}).get("region")
-        if isinstance(region, list) and len(region) >= 4:
-            bounds = [float(region[0]), float(region[1]), float(region[2]), float(region[3])]
-    except Exception:
-        pass
-
-    return {
-        "tilesetPath": tileset_path,
-        "entryFile": tileset_path,
-        "contentFiles": [],
-        "bounds": bounds,
-        "contentFormat": content_format,
-        "sourceMode": "prebuilt-directory",
-    }
-
-
-def _find_single_osgb_in_dir(source_dir, max_scan=50000):
     matches = []
     scanned = 0
-    for root, _, files in os.walk(source_dir):
+    for root, _, files in os.walk(source_path):
         for filename in files:
             scanned += 1
             if scanned > max_scan:
-                raise RuntimeError("OSGB 目录文件过多，未能在限制内定位可转换文件")
+                raise RuntimeError("OSGB 目录文件过多，超过扫描上限")
             if str(filename).lower().endswith(".osgb"):
                 matches.append(os.path.join(root, filename))
-                if len(matches) > 1:
-                    break
-        if len(matches) > 1:
-            break
 
     if not matches:
-        raise RuntimeError("OSGB 目录中未找到 .osgb 文件，也未找到 tileset.json")
-    if len(matches) > 1:
-        raise RuntimeError("OSGB 目录包含多个 .osgb 文件；当前请提供单文件路径或预构建 3D Tiles 目录")
-    return matches[0]
+        raise RuntimeError("OSGB 目录中未找到 .osgb 文件")
+    matches.sort()
+    return matches
+
+
+def _apply_scene_transform(scene, scale, rotation_z_degrees):
+    try:
+        import trimesh
+    except Exception as exc:
+        raise RuntimeError(f"模型处理依赖不可用: {exc}")
+
+    if scale and scale != 1.0:
+        scene.apply_scale(float(scale))
+    if rotation_z_degrees:
+        rotation = trimesh.transformations.rotation_matrix(
+            math.radians(float(rotation_z_degrees)),
+            [0, 0, 1],
+        )
+        scene.apply_transform(rotation)
+    return scene
+
+
+def _export_scene_content(scene, output_dir, content_stem, content_format):
+    format_name = _normalize_content_format(content_format)
+    glb_path = os.path.join(output_dir, f"{content_stem}.glb")
+    scene.export(glb_path)
+    if format_name == "b3dm":
+        b3dm_name = f"{content_stem}.b3dm"
+        b3dm_path = os.path.join(output_dir, b3dm_name)
+        _write_b3dm_from_glb(glb_path, b3dm_path)
+        try:
+            os.remove(glb_path)
+        except Exception:
+            pass
+        return b3dm_name
+    return f"{content_stem}.glb"
+
+
+def _convert_osgb_to_obj(source_path, obj_path):
+    result = runCommand(["osgconv", source_path, obj_path])
+    if not result.get("success"):
+        raise RuntimeError(result.get("stderr") or result.get("error") or "osgconv 执行失败")
+    if not os.path.exists(obj_path):
+        raise RuntimeError("osgconv 未生成 OBJ 输出")
 
 
 def _polygon_area(points):
@@ -471,9 +478,7 @@ def _export_vector_tiles(source_path, output_dir, height_field, default_height, 
     except Exception as exc:
         raise RuntimeError(f"矢量 3D Tiles 依赖不可用: {exc}")
 
-    format_name = str(content_format or "b3dm").strip().lower()
-    if format_name not in SUPPORTED_CONTENT_FORMATS:
-        raise RuntimeError(f"不支持的 contentFormat: {content_format}")
+    format_name = _normalize_content_format(content_format)
 
     dataset = ogr.Open(source_path)
     if dataset is None:
@@ -703,40 +708,12 @@ def _estimate_region_from_anchor(longitude, latitude, bounds):
 
 
 def _export_scene_tiles(scene, output_dir, longitude, latitude, height, scale, rotation_z_degrees, content_format):
-    try:
-        import trimesh
-    except Exception as exc:
-        raise RuntimeError(f"模型导出依赖不可用: {exc}")
-
     if longitude is None or latitude is None:
         raise RuntimeError("OBJ/OSGB 需要提供 longitude 与 latitude 作为锚点")
 
-    if scale and scale != 1.0:
-        scene.apply_scale(float(scale))
-    if rotation_z_degrees:
-        rotation = trimesh.transformations.rotation_matrix(
-            math.radians(float(rotation_z_degrees)),
-            [0, 0, 1],
-        )
-        scene.apply_transform(rotation)
-
-    format_name = str(content_format or "b3dm").strip().lower()
-    if format_name not in SUPPORTED_CONTENT_FORMATS:
-        raise RuntimeError(f"不支持的 contentFormat: {content_format}")
-
-    glb_path = os.path.join(output_dir, "scene.glb")
-    if format_name == "b3dm":
-        content_file = "scene.b3dm"
-        content_path = os.path.join(output_dir, content_file)
-        scene.export(glb_path)
-        _write_b3dm_from_glb(glb_path, content_path)
-        try:
-            os.remove(glb_path)
-        except Exception:
-            pass
-    else:
-        content_file = "scene.glb"
-        scene.export(glb_path)
+    _apply_scene_transform(scene, scale, rotation_z_degrees)
+    format_name = _normalize_content_format(content_format)
+    content_file = _export_scene_content(scene, output_dir, "scene", format_name)
 
     bounds = scene.bounds
     min_height = float(height or 0.0) + float(bounds[0][2])
@@ -769,21 +746,131 @@ def _export_obj_tiles(source_path, output_dir, longitude, latitude, height, scal
 
 
 def _export_osgb_tiles(source_path, output_dir, longitude, latitude, height, scale, rotation_z_degrees, content_format):
-    if os.path.isdir(source_path):
-        tileset_entry = _find_tileset_entry_in_dir(source_path)
-        if tileset_entry:
-            return _import_prebuilt_3dtiles(source_path, output_dir)
-        source_path = _find_single_osgb_in_dir(source_path)
+    if longitude is None or latitude is None:
+        raise RuntimeError("OSGB 转换必须提供 longitude 与 latitude 作为锚点")
+    format_name = _normalize_content_format(content_format)
+    osgb_files = _collect_osgb_files(source_path)
+    if len(osgb_files) == 1:
+        source_path = osgb_files[0]
+        temp_dir = tempfile.mkdtemp(prefix="atlasworks-osgb-")
+        try:
+            obj_path = os.path.join(temp_dir, "osgb_converted.obj")
+            _convert_osgb_to_obj(source_path, obj_path)
+            return _export_obj_tiles(obj_path, output_dir, longitude, latitude, height, scale, rotation_z_degrees, format_name)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
+    meters_lon_ref, meters_lat_ref = _meters_per_degree(float(longitude), float(latitude))
+    children = []
+    content_files = []
+    skipped_files = []
+    global_min_x = float("inf")
+    global_min_y = float("inf")
+    global_max_x = float("-inf")
+    global_max_y = float("-inf")
+    global_min_z = float("inf")
+    global_max_z = float("-inf")
     temp_dir = tempfile.mkdtemp(prefix="atlasworks-osgb-")
     try:
-        obj_path = os.path.join(temp_dir, "osgb_converted.obj")
-        result = runCommand(["osgconv", source_path, obj_path])
-        if not result.get("success"):
-            raise RuntimeError(result.get("stderr") or result.get("error") or "osgconv 执行失败")
-        if not os.path.exists(obj_path):
-            raise RuntimeError("osgconv 未生成 OBJ 输出")
-        return _export_obj_tiles(obj_path, output_dir, longitude, latitude, height, scale, rotation_z_degrees, content_format)
+        chunk_index = 0
+        obj_path = os.path.join(temp_dir, "osgb_current.obj")
+        for osgb_file in osgb_files:
+            try:
+                _convert_osgb_to_obj(osgb_file, obj_path)
+                scene = _load_scene(obj_path)
+                _apply_scene_transform(scene, scale, rotation_z_degrees)
+                bounds = scene.bounds
+                if bounds is None:
+                    skipped_files.append(osgb_file)
+                    continue
+
+                min_corner = [float(value) for value in bounds[0]]
+                max_corner = [float(value) for value in bounds[1]]
+                if any(math.isnan(value) for value in min_corner + max_corner):
+                    skipped_files.append(osgb_file)
+                    continue
+
+                center_x = (min_corner[0] + max_corner[0]) * 0.5
+                center_y = (min_corner[1] + max_corner[1]) * 0.5
+                center_z = (min_corner[2] + max_corner[2]) * 0.5
+                half_x = max((max_corner[0] - min_corner[0]) * 0.5, 0.01)
+                half_y = max((max_corner[1] - min_corner[1]) * 0.5, 0.01)
+
+                chunk_lon = float(longitude) + (center_x / max(meters_lon_ref, 1.0))
+                chunk_lat = float(latitude) + (center_y / max(meters_lat_ref, 1.0))
+                meters_lon, meters_lat = _meters_per_degree(chunk_lon, chunk_lat)
+                delta_lon = half_x / max(meters_lon, 1.0)
+                delta_lat = half_y / max(meters_lat, 1.0)
+
+                min_height = float(height or 0.0) + min_corner[2]
+                max_height = float(height or 0.0) + max_corner[2]
+                chunk_height = float(height or 0.0) + center_z
+
+                chunk_scene = scene.copy()
+                chunk_scene.apply_translation([-center_x, -center_y, -center_z])
+                chunk_stem = f"chunk_{chunk_index:04d}"
+                chunk_file = _export_scene_content(chunk_scene, output_dir, chunk_stem, format_name)
+                content_files.append(chunk_file)
+
+                children.append(
+                    {
+                        "boundingVolume": {
+                            "region": _region_bounds(
+                                chunk_lon - delta_lon,
+                                chunk_lat - delta_lat,
+                                chunk_lon + delta_lon,
+                                chunk_lat + delta_lat,
+                                min_height,
+                                max_height,
+                            )
+                        },
+                        "geometricError": 0,
+                        "refine": "ADD",
+                        "transform": _enu_transform(chunk_lon, chunk_lat, chunk_height),
+                        "content": {"uri": chunk_file},
+                    }
+                )
+
+                global_min_x = min(global_min_x, min_corner[0])
+                global_min_y = min(global_min_y, min_corner[1])
+                global_max_x = max(global_max_x, max_corner[0])
+                global_max_y = max(global_max_y, max_corner[1])
+                global_min_z = min(global_min_z, min_corner[2])
+                global_max_z = max(global_max_z, max_corner[2])
+                chunk_index += 1
+            except Exception:
+                skipped_files.append(osgb_file)
+                continue
+
+        if not children:
+            raise RuntimeError("OSGB 批量转换失败：未生成有效分块内容")
+
+        west = float(longitude) + (global_min_x / max(meters_lon_ref, 1.0))
+        south = float(latitude) + (global_min_y / max(meters_lat_ref, 1.0))
+        east = float(longitude) + (global_max_x / max(meters_lon_ref, 1.0))
+        north = float(latitude) + (global_max_y / max(meters_lat_ref, 1.0))
+        min_height = float(height or 0.0) + global_min_z
+        max_height = float(height or 0.0) + global_max_z
+
+        tileset_path = _write_tileset(
+            output_dir,
+            west,
+            south,
+            east,
+            north,
+            min_height,
+            max_height,
+            children=children,
+            asset_version="1.0" if format_name == "b3dm" else "1.1",
+        )
+        return {
+            "tilesetPath": tileset_path,
+            "entryFile": tileset_path,
+            "contentFiles": content_files,
+            "bounds": [west, south, east, north],
+            "chunkCount": len(children),
+            "skippedFiles": len(skipped_files),
+        }
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -881,9 +968,6 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
         result = _export_osgb_tiles(source_full_path, output_path, longitude, latitude, height, scale, rotation_z_degrees, content_format)
         method = "3dtiles-osgb"
         output_content_format = content_format
-        if result.get("sourceMode") == "prebuilt-directory":
-            method = "3dtiles-osgb-prebuilt"
-            output_content_format = result.get("contentFormat") or output_content_format
 
     if _is_task_stopped(task_id):
         raise RuntimeError("任务已停止")
@@ -916,6 +1000,8 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
             record["result"]["featureCount"] = result.get("featureCount")
         if result.get("chunkCount") is not None:
             record["result"]["chunkCount"] = result.get("chunkCount")
+        if result.get("skippedFiles") is not None:
+            record["result"]["skippedFiles"] = result.get("skippedFiles")
         if result.get("sceneBounds") is not None:
             record["result"]["sceneBounds"] = result.get("sceneBounds")
         appendTaskLog(record, "完成", "completed", "3D Tiles 输出已生成", progress=100, outputPath=output_path, entryFile=result.get("entryFile"))
@@ -958,9 +1044,9 @@ def create3DTiles():
             content_format = str(data.get("contentFormat") or "b3dm").strip().lower()
             if content_format not in SUPPORTED_CONTENT_FORMATS:
                 errors.append("contentFormat 仅支持 b3dm 或 glb")
-        if data_type == "model":
+        if data_type in {"model", "osgb"}:
             if normalizeFloat(data.get("longitude"), None) is None or normalizeFloat(data.get("latitude"), None) is None:
-                errors.append("OBJ 任务必须提供 longitude 与 latitude")
+                errors.append("OBJ/OSGB 任务必须提供 longitude 与 latitude")
 
         if errors:
             with taskLock:
@@ -986,9 +1072,9 @@ def create3DTiles():
                 "errors": [str(exc)],
             }), 200
 
-        if data_type == "osgb" and os.path.isfile(source_full_path):
-            if normalizeFloat(data.get("longitude"), None) is None or normalizeFloat(data.get("latitude"), None) is None:
-                message = "OSGB 单文件转换必须提供 longitude 与 latitude；若 sourcePath 是预构建 3D Tiles 目录（含 tileset.json）则可不传"
+        if data_type == "osgb":
+            if os.path.isfile(source_full_path) and not str(source_full_path).lower().endswith(".osgb"):
+                message = "OSGB 任务输入文件必须为 .osgb"
                 with taskLock:
                     taskStatus[task_id] = _build_error_task(task_id, [message])
                 return jsonify({
@@ -998,20 +1084,6 @@ def create3DTiles():
                     "statusUrl": f"/api/tasks/{task_id}",
                     "errors": [message],
                 }), 200
-        if data_type == "osgb" and os.path.isdir(source_full_path):
-            has_prebuilt_tileset = _find_tileset_entry_in_dir(source_full_path) is not None
-            if not has_prebuilt_tileset:
-                if normalizeFloat(data.get("longitude"), None) is None or normalizeFloat(data.get("latitude"), None) is None:
-                    message = "OSGB 目录若非预构建 3D Tiles（无 tileset.json），则按模型转换时必须提供 longitude 与 latitude"
-                    with taskLock:
-                        taskStatus[task_id] = _build_error_task(task_id, [message])
-                    return jsonify({
-                        "success": False,
-                        "taskId": task_id,
-                        "message": f"3D Tiles 任务创建失败: {message}",
-                        "statusUrl": f"/api/tasks/{task_id}",
-                        "errors": [message],
-                    }), 200
 
         output_path, _, _ = resolveTilesOutputPath(data.get("outputPath"), "3dtiles")
         os.makedirs(output_path, exist_ok=True)

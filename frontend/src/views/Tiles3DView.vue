@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive } from 'vue';
+import { computed, reactive, watch } from 'vue';
 
 import PathPickerModal from '../components/PathPickerModal.vue';
 import { api } from '../services/api';
@@ -12,10 +12,12 @@ const form = reactive({
     dataType: 'pointcloud',
     folderPaths: '',
     filePatterns: '',
+    sourcePath: '',
     outputPath: '',
     crs: '',
     heightField: 'height',
     defaultHeight: 30,
+    contentFormat: 'b3dm',
     longitude: '',
     latitude: '',
     height: 0,
@@ -45,7 +47,13 @@ const sourcePlaceholder = computed(() => {
     if (form.dataType === 'pointcloud') return '选择 .las / .laz 点云文件';
     if (form.dataType === 'vector') return '选择 .geojson / .shp 建筑面文件';
     if (form.dataType === 'model') return '选择 .obj 模型文件';
-    return '选择 .osgb 倾斜摄影文件';
+    return 'OSGB 使用下方“单文件/目录”选择';
+});
+
+watch(() => form.dataType, nextType => {
+    if (nextType !== 'osgb') {
+        form.sourcePath = '';
+    }
 });
 
 function openPicker(config) {
@@ -69,7 +77,13 @@ function clearField(field) {
 
 async function submit() {
     const filePatterns = normalizeListInput(form.filePatterns);
-    if (!filePatterns.length) {
+    const sourcePath = String(form.sourcePath || '').trim();
+    if (form.dataType === 'osgb') {
+        if (!sourcePath) {
+            pushToast('OSGB 请先选择单个 .osgb 文件或目录', 'warning');
+            return;
+        }
+    } else if (!filePatterns.length) {
         pushToast('请先选择输入文件', 'warning');
         return;
     }
@@ -87,11 +101,13 @@ async function submit() {
         const payload = {
             dataType: form.dataType,
             folderPaths: normalizeListInput(form.folderPaths),
-            filePatterns,
+            filePatterns: form.dataType === 'osgb' ? [] : filePatterns,
+            sourcePath: sourcePath || undefined,
             outputPath: form.outputPath,
             crs: form.crs,
             heightField: form.heightField,
             defaultHeight: Number(form.defaultHeight),
+            contentFormat: form.dataType === 'pointcloud' ? undefined : form.contentFormat,
             longitude: form.longitude === '' ? undefined : Number(form.longitude),
             latitude: form.latitude === '' ? undefined : Number(form.latitude),
             height: Number(form.height),
@@ -115,7 +131,7 @@ async function submit() {
             <div>
                 <span class="section-kicker">3D Tiles Pipeline</span>
                 <h2>3D Tiles 工位</h2>
-                <p class="section-subtitle">在现有任务与发布体系上新增三维数据生产链，当前支持点云、矢量建筑、OBJ 与 OSGB。</p>
+                <p class="section-subtitle">在现有任务与发布体系上新增三维数据生产链，当前支持点云、矢量建筑、OBJ 与 OSGB（含目录批量）。</p>
             </div>
             <div class="section-header-actions">
                 <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始生成</button>
@@ -165,13 +181,25 @@ async function submit() {
                                 </div>
                             </div>
 
-                            <div class="form-group">
+                            <div v-if="form.dataType !== 'osgb'" class="form-group">
                                 <label>输入文件</label>
                                 <div class="path-field">
                                     <input v-model="form.filePatterns" type="text" :placeholder="sourcePlaceholder">
                                     <div class="path-field-actions">
                                         <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择 3D Tiles 输入文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'filePatterns', allowedExtensions: allowedExtensions })">选择文件</button>
                                         <button class="btn btn-secondary" type="button" @click="clearField('filePatterns')">清空</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div v-else class="form-group">
+                                <label>OSGB 输入（单文件或目录）</label>
+                                <div class="path-field">
+                                    <input v-model="form.sourcePath" type="text" placeholder="支持单个 .osgb，或选择目录进行递归批量处理">
+                                    <div class="path-field-actions">
+                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择 OSGB 文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'sourcePath', allowedExtensions: ['.osgb'] })">选择文件</button>
+                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择 OSGB 目录', source: 'datasource', selectionMode: 'folder', multiple: false, field: 'sourcePath', allowedExtensions: [] })">选择目录</button>
+                                        <button class="btn btn-secondary" type="button" @click="clearField('sourcePath')">清空</button>
                                     </div>
                                 </div>
                             </div>
@@ -206,6 +234,13 @@ async function submit() {
                                     <label>默认高度</label>
                                     <input v-model="form.defaultHeight" type="number" min="1">
                                 </div>
+                            </div>
+                            <div v-if="form.dataType !== 'pointcloud'" class="form-group">
+                                <label>内容格式</label>
+                                <select v-model="form.contentFormat">
+                                    <option value="b3dm">b3dm（推荐）</option>
+                                    <option value="glb">glb</option>
+                                </select>
                             </div>
                             <div v-if="form.dataType === 'vector'" class="form-group">
                                 <label>高度字段</label>

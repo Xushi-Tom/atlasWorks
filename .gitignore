@@ -19,3 +19,6 @@ storage/
 # OS/editor
 .DS_Store
 Thumbs.db
+.idea/
+.claude/
+claude/

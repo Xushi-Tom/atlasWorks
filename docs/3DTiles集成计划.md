@@ -29,9 +29,9 @@
 | 输入类型 | 典型输入 | 典型输出 | 难度 |
 |---|---|---|---|
 | 点云 | `.las/.laz` | `tileset.json + .pnts` | 低-中 |
-| 矢量建筑 | `.geojson/.shp`（含高度字段） | `tileset.json + .b3dm` | 中 |
-| 通用模型 | `.obj` | `tileset.json + .b3dm` | 中 |
-| 倾斜摄影 | `.osgb` | `tileset.json + .b3dm` | 中-高 |
+| 矢量建筑 | `.geojson/.shp`（含高度字段） | `tileset.json + .b3dm/.glb`（可选） | 中 |
+| 通用模型 | `.obj` | `tileset.json + .b3dm/.glb`（可选） | 中 |
+| 倾斜摄影 | 单个 `.osgb` 或目录（递归） | `tileset.json + chunk_*.b3dm/.glb`（可选） | 中-高 |
 
 说明：
 
@@ -182,10 +182,11 @@ OBJ
 ### 6.4 OSGB（倾斜摄影，开源路径）
 
 ```txt
-OSGB
+OSGB（单文件/目录批量）
+ -> 递归收集 .osgb
  -> osgconv 转中间模型
- -> 标准化为 GLB（必要时分块）
- -> 封装 B3DM
+ -> 按单体切块（chunk_*）
+ -> 按配置输出 GLB 或封装 B3DM
  -> 生成 tileset.json
 ```
 
@@ -281,4 +282,3 @@ create3DTiles(params)
 - obj2gltf：https://github.com/CesiumGS/obj2gltf
 - 3d-tiles-tools：https://github.com/CesiumGS/3d-tiles-tools
 - OpenSceneGraph 许可与工具：https://openscenegraph.github.io/openscenegraph.io/about/license.html
-
