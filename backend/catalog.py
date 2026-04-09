@@ -438,20 +438,8 @@ def _cleanup_publication_descriptor(publication):
 
 
 def _write_publication_descriptor(descriptor, alias, previous_publication=None):
-    previous_alias = (previous_publication or {}).get("alias")
-    previous_metadata = (previous_publication or {}).get("metadata") or {}
-    previous_descriptor_path = previous_metadata.get("descriptorPath") or (previous_publication or {}).get("descriptorPath")
-
-    descriptor_dir = _publication_descriptor_dir(alias)
-    os.makedirs(descriptor_dir, exist_ok=True)
-    descriptor_path = os.path.join(descriptor_dir, "publication.json")
-    with open(descriptor_path, "w", encoding="utf-8") as publication_file:
-        json.dump(descriptor, publication_file, ensure_ascii=False, indent=2)
-
-    if previous_alias and previous_alias != alias and previous_descriptor_path and os.path.exists(previous_descriptor_path):
-        _cleanup_publication_descriptor(previous_publication)
-
-    return descriptor_path
+    # 数据库持久化开启后，发布记录仅写入数据库，不再向 /tiles/_publications 落盘。
+    return None
 
 
 def _get_publication_snapshot(publication_id):
@@ -459,9 +447,10 @@ def _get_publication_snapshot(publication_id):
     if record:
         return _publication_record_to_response(record)
 
-    for publication in _scan_publication_files(limit=500):
-        if publication.get("id") == publication_id or publication.get("publicationId") == publication_id:
-            return _augment_publication_response(publication)
+    if not isDatabaseEnabled():
+        for publication in _scan_publication_files(limit=500):
+            if publication.get("id") == publication_id or publication.get("publicationId") == publication_id:
+                return _augment_publication_response(publication)
     return None
 
 
@@ -1073,25 +1062,26 @@ def listPublications():
                 continue
             publications[response["publicationId"]] = response
 
-        for record in _scan_publication_files():
-            publication_id = record.get("id")
-            if not publication_id:
-                continue
-            publications.setdefault(
-                publication_id,
-                _augment_publication_response({
-                    "publicationId": record.get("id"),
-                    "artifactId": record.get("artifactId"),
-                    "publishType": record.get("publishType"),
-                    "publishPath": record.get("publishPath"),
-                    "alias": record.get("alias"),
-                    "status": record.get("status"),
-                    "metadata": record.get("metadata", {}),
-                    "publishedAt": record.get("publishedAt"),
-                    "createdAt": record.get("createdAt"),
-                    "descriptorPath": record.get("descriptorPath"),
-                }),
-            )
+        if not isDatabaseEnabled():
+            for record in _scan_publication_files():
+                publication_id = record.get("id")
+                if not publication_id:
+                    continue
+                publications.setdefault(
+                    publication_id,
+                    _augment_publication_response({
+                        "publicationId": record.get("id"),
+                        "artifactId": record.get("artifactId"),
+                        "publishType": record.get("publishType"),
+                        "publishPath": record.get("publishPath"),
+                        "alias": record.get("alias"),
+                        "status": record.get("status"),
+                        "metadata": record.get("metadata", {}),
+                        "publishedAt": record.get("publishedAt"),
+                        "createdAt": record.get("createdAt"),
+                        "descriptorPath": record.get("descriptorPath"),
+                    }),
+                )
 
         items = list(publications.values())
         if publish_type:
@@ -1135,9 +1125,10 @@ def getPublication(publication_id=None, publicationId=None):
         if record:
             return jsonify({"success": True, "publication": _publication_record_to_response(record)})
 
-        for publication in _scan_publication_files(limit=500):
-            if publication.get("id") == publication_id:
-                return jsonify({"success": True, "publication": _augment_publication_response(publication)})
+        if not isDatabaseEnabled():
+            for publication in _scan_publication_files(limit=500):
+                if publication.get("id") == publication_id:
+                    return jsonify({"success": True, "publication": _augment_publication_response(publication)})
 
         return jsonify({"error": "发布记录不存在"}), 404
     except Exception as exc:
@@ -1220,25 +1211,26 @@ def _collect_publication_items(limit=500):
         if publication_id:
             publications[publication_id] = response
 
-    for record in _scan_publication_files(limit=limit * 2):
-        publication_id = record.get("id")
-        if not publication_id:
-            continue
-        publications.setdefault(
-            publication_id,
-            _augment_publication_response({
-                "publicationId": record.get("id"),
-                "artifactId": record.get("artifactId"),
-                "publishType": record.get("publishType"),
-                "publishPath": record.get("publishPath"),
-                "alias": record.get("alias"),
-                "status": record.get("status"),
-                "metadata": record.get("metadata", {}),
-                "publishedAt": record.get("publishedAt"),
-                "createdAt": record.get("createdAt"),
-                "descriptorPath": record.get("descriptorPath"),
-            }),
-        )
+    if not isDatabaseEnabled():
+        for record in _scan_publication_files(limit=limit * 2):
+            publication_id = record.get("id")
+            if not publication_id:
+                continue
+            publications.setdefault(
+                publication_id,
+                _augment_publication_response({
+                    "publicationId": record.get("id"),
+                    "artifactId": record.get("artifactId"),
+                    "publishType": record.get("publishType"),
+                    "publishPath": record.get("publishPath"),
+                    "alias": record.get("alias"),
+                    "status": record.get("status"),
+                    "metadata": record.get("metadata", {}),
+                    "publishedAt": record.get("publishedAt"),
+                    "createdAt": record.get("createdAt"),
+                    "descriptorPath": record.get("descriptorPath"),
+                }),
+            )
 
     return list(publications.values())
 

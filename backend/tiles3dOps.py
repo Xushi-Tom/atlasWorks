@@ -263,6 +263,7 @@ def _write_tileset(
     content_uri=None,
     children=None,
     asset_version="1.1",
+    gltf_up_axis=None,
 ):
     import json
 
@@ -275,6 +276,9 @@ def _write_tileset(
             "refine": "ADD",
         },
     }
+    axis = str(gltf_up_axis or "").strip().upper()
+    if axis in {"X", "Y", "Z"}:
+        tileset["asset"]["gltfUpAxis"] = axis
     if content_uri:
         tileset["root"]["content"] = {"uri": str(content_uri)}
     if children:
@@ -669,6 +673,7 @@ def _export_vector_tiles(source_path, output_dir, height_field, default_height, 
         max_height,
         children=children,
         asset_version="1.0" if format_name == "b3dm" else "1.1",
+        gltf_up_axis="Z",
     )
     return {
         "tilesetPath": tileset_path,
@@ -730,6 +735,7 @@ def _export_scene_tiles(scene, output_dir, longitude, latitude, height, scale, r
         transform=_enu_transform(float(longitude), float(latitude), float(height or 0.0)),
         content_uri=content_file,
         asset_version="1.0" if format_name == "b3dm" else "1.1",
+        gltf_up_axis="Z",
     )
     return {
         "tilesetPath": tileset_path,
@@ -862,6 +868,7 @@ def _export_osgb_tiles(source_path, output_dir, longitude, latitude, height, sca
             max_height,
             children=children,
             asset_version="1.0" if format_name == "b3dm" else "1.1",
+            gltf_up_axis="Z",
         )
         return {
             "tilesetPath": tileset_path,
