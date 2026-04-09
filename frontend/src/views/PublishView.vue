@@ -55,11 +55,6 @@ const publishMethodCatalog = {
     ],
     '3dtiles': [
         { value: '3d-tiles', label: '3D Tiles 服务' }
-    ],
-    geo: [
-        { value: 'wms', label: 'WMS 服务' },
-        { value: 'wfs', label: 'WFS 服务' },
-        { value: 'static-download', label: '静态下载' }
     ]
 };
 
@@ -67,8 +62,7 @@ const publishTypeLabelMap = {
     imagery: '地图 / 遥感',
     'electronic-map': '地图 / 电子地图',
     terrain: '地形',
-    '3dtiles': '3DTiles',
-    geo: 'Geo 数据'
+    '3dtiles': '3DTiles'
 };
 
 const visibilityLabelMap = {
@@ -540,7 +534,6 @@ onBeforeUnmount(() => {
                         <el-option label="地图 / 电子地图" value="electronic-map" />
                         <el-option label="地形" value="terrain" />
                         <el-option label="3DTiles" value="3dtiles" />
-                        <el-option label="Geo 数据" value="geo" />
                     </el-select>
                 </el-form-item>
 

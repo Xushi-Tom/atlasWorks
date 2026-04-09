@@ -8,6 +8,7 @@ import signal
 import psutil
 import math
 import re
+import ctypes
 from datetime import datetime
 from typing import Dict, List, Optional, Union
 from config import config, taskStatus, taskProcesses, taskStopFlags, taskLock
@@ -270,6 +271,8 @@ def runCommand(cmd: List[str], cwd: str = None, env: dict = None) -> Dict:
 
 def runCommandWithProcessTracking(cmd: List[str], taskId: str, cwd: str = None, env: dict = None) -> Dict:
     """运行命令并跟踪进程"""
+    previous_entry = None
+    process = None
     try:
         if env is None:
             env = os.environ.copy()
@@ -285,14 +288,19 @@ def runCommandWithProcessTracking(cmd: List[str], taskId: str, cwd: str = None, 
         
         # 记录进程
         with taskLock:
+            previous_entry = taskProcesses.get(taskId)
             taskProcesses[taskId] = process
         
         stdout, stderr = process.communicate()
         
         # 清理进程记录
         with taskLock:
-            if taskId in taskProcesses:
-                del taskProcesses[taskId]
+            current = taskProcesses.get(taskId)
+            if current is process:
+                if previous_entry is not None:
+                    taskProcesses[taskId] = previous_entry
+                else:
+                    del taskProcesses[taskId]
         
         return {
             "success": process.returncode == 0,
@@ -303,12 +311,36 @@ def runCommandWithProcessTracking(cmd: List[str], taskId: str, cwd: str = None, 
     except Exception as e:
         # 清理进程记录
         with taskLock:
-            if taskId in taskProcesses:
-                del taskProcesses[taskId]
+            current = taskProcesses.get(taskId)
+            if process is not None and current is process:
+                if previous_entry is not None:
+                    taskProcesses[taskId] = previous_entry
+                else:
+                    del taskProcesses[taskId]
         return {
             "success": False,
             "error": str(e)
         }
+
+def _force_stop_thread(thread_obj) -> bool:
+    """尝试向线程注入 SystemExit，实现强制停止。"""
+    thread_id = getattr(thread_obj, "ident", None)
+    if not thread_id:
+        return False
+
+    try:
+        result = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_long(int(thread_id)),
+            ctypes.py_object(SystemExit),
+        )
+        if result == 0:
+            return False
+        if result > 1:
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(int(thread_id)), None)
+            return False
+        return True
+    except Exception:
+        return False
 
 def stopTaskProcess(taskId: str) -> bool:
     """停止任务进程（支持subprocess和Thread）"""
@@ -316,6 +348,7 @@ def stopTaskProcess(taskId: str) -> bool:
         with taskLock:
             if taskId in taskProcesses:
                 process_or_thread = taskProcesses[taskId]
+                taskStopFlags[taskId] = True
                 
                 # 检查是线程还是进程
                 if hasattr(process_or_thread, 'terminate'):
@@ -332,8 +365,13 @@ def stopTaskProcess(taskId: str) -> bool:
                     # 这是一个Thread对象
                     # 注意：Python的Thread对象无法强制停止
                     # 我们设置停止标志让线程自己检查并退出
-                    taskStopFlags[taskId] = True
-                    logMessage(f"线程任务 {taskId} 已标记为停止状态", "INFO")
+                    forced = False
+                    if str(taskId or "").startswith("tiles3d"):
+                        forced = _force_stop_thread(process_or_thread)
+                    if forced:
+                        logMessage(f"线程任务 {taskId} 已执行强制停止", "INFO")
+                    else:
+                        logMessage(f"线程任务 {taskId} 已标记为停止状态", "INFO")
                 
                 del taskProcesses[taskId]
                 return True
