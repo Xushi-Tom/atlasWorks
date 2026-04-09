@@ -327,7 +327,7 @@ async function submit() {
                             <div v-if="form.dataType === 'vector' || form.dataType === 'osgb'" class="form-group">
                                 <label class="checkbox-inline">
                                     <input v-model="form.enablePyramid" type="checkbox">
-                                    启用金字塔层级（多层级 children）
+                                    <span class="checkbox-text">启用金字塔层级</span>
                                 </label>
                             </div>
                             <div v-if="(form.dataType === 'vector' || form.dataType === 'osgb') && form.enablePyramid" class="form-row form-row-2">
@@ -433,11 +433,29 @@ async function submit() {
 </template>
 
 <style scoped>
+.form-group select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    cursor: pointer;
+    padding-right: 44px;
+    background-image:
+        linear-gradient(180deg, rgba(103, 240, 255, 0.03), rgba(31, 164, 255, 0.05)),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='%239ec1d7' d='M1.4.8L6 5.4 10.6.8 12 2.2 6 8 0 2.2z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat, no-repeat;
+    background-position: 0 0, right 14px center;
+    background-size: auto, 12px 8px;
+}
+
+.form-group select:hover {
+    border-color: rgba(126, 186, 231, 0.58);
+}
+
 .checkbox-inline {
     width: auto;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     margin: 0;
     padding: 2px 0;
     border: 0;
@@ -446,18 +464,27 @@ async function submit() {
     cursor: pointer;
     user-select: none;
     transition: color 0.18s ease;
+    line-height: 1.35;
 }
 
 .checkbox-inline:hover {
     color: #d9ecff;
 }
 
+.checkbox-text {
+    display: inline-block;
+}
+
 .checkbox-inline input[type="checkbox"] {
     appearance: none;
-    width: 16px !important;
-    height: 16px !important;
-    flex: 0 0 16px;
-    margin: 0;
+    -webkit-appearance: none;
+    width: 18px !important;
+    height: 18px !important;
+    min-height: 18px !important;
+    padding: 0 !important;
+    flex: 0 0 18px;
+    margin: 0 !important;
+    display: inline-block !important;
     border-radius: 4px;
     border: 1px solid rgba(120, 149, 189, 0.64);
     background: rgba(9, 20, 34, 0.95);
@@ -474,10 +501,10 @@ async function submit() {
 .checkbox-inline input[type="checkbox"]:checked::after {
     content: '';
     position: absolute;
-    left: 4px;
-    top: 1px;
-    width: 4px;
-    height: 8px;
+    left: 5px;
+    top: 2px;
+    width: 5px;
+    height: 9px;
     border-right: 2px solid #05121f;
     border-bottom: 2px solid #05121f;
     transform: rotate(45deg);
