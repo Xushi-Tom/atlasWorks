@@ -17,6 +17,8 @@ const form = reactive({
     crsPreset: '',
     crsCustom: '',
     heightField: 'height',
+    vectorHeightMode: 'meters',
+    floorHeightMeters: 3.0,
     defaultHeight: 30,
     contentFormat: 'b3dm',
     longitude: '',
@@ -58,6 +60,7 @@ const HEIGHT_FIELD_OPTIONS = [
     'HGT',
     'z',
     'elevation',
+    'Floor',
     'floors',
     'building:levels'
 ];
@@ -81,6 +84,10 @@ const sourcePlaceholder = computed(() => {
     if (form.dataType === 'model') return '选择 .obj 模型文件';
     return 'OSGB 使用下方“单文件/目录”选择';
 });
+
+const defaultHeightUnitLabel = computed(() => (
+    form.vectorHeightMode === 'floors' ? '层' : '米'
+));
 
 watch(() => form.dataType, nextType => {
     if (nextType !== 'osgb') {
@@ -175,6 +182,8 @@ async function submit() {
             outputPath: form.outputPath,
             crs: effectiveCrs.value || undefined,
             heightField: form.heightField,
+            vectorHeightMode: form.dataType === 'vector' ? form.vectorHeightMode : undefined,
+            floorHeightMeters: form.dataType === 'vector' ? Number(form.floorHeightMeters) : undefined,
             defaultHeight: Number(form.defaultHeight),
             contentFormat: form.dataType === 'pointcloud' ? undefined : form.contentFormat,
             longitude: form.longitude === '' ? undefined : Number(form.longitude),
@@ -358,7 +367,27 @@ async function submit() {
                                     </datalist>
                                 </div>
                                 <div class="form-group">
-                                    <label>缺失高度时使用（米）</label>
+                                    <label>高度单位</label>
+                                    <select v-model="form.vectorHeightMode">
+                                        <option value="meters">米（字段值即米）</option>
+                                        <option value="floors">层数（字段值为楼层）</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div v-if="form.dataType === 'vector'" class="form-row form-row-2">
+                                <div v-if="form.vectorHeightMode === 'floors'" class="form-group">
+                                    <label>每层高度（米）</label>
+                                    <input
+                                        v-model="form.floorHeightMeters"
+                                        type="number"
+                                        min="0.1"
+                                        step="0.1"
+                                        placeholder="默认 3.0"
+                                    >
+                                    <p class="field-hint">默认 3.0 米/层，可按项目标准调整。</p>
+                                </div>
+                                <div class="form-group">
+                                    <label>缺失高度时使用（{{ defaultHeightUnitLabel }}）</label>
                                     <input
                                         v-model="form.defaultHeight"
                                         type="number"
@@ -366,7 +395,7 @@ async function submit() {
                                         step="0.1"
                                         placeholder="例如 6"
                                     >
-                                    <p class="field-hint">当要素没有该高度字段或字段为空时，使用这个高度值。</p>
+                                    <p class="field-hint">当要素没有该高度字段或字段为空时，使用这个默认值。</p>
                                 </div>
                             </div>
                         </section>

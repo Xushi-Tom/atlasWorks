@@ -39,6 +39,8 @@ SOURCE_EXTENSIONS = {
 WGS84_A = 6378137.0
 WGS84_E2 = 6.69437999014e-3
 SUPPORTED_CONTENT_FORMATS = {"b3dm", "glb"}
+SUPPORTED_VECTOR_HEIGHT_MODES = {"meters", "floors"}
+DEFAULT_FLOOR_HEIGHT_METERS = 3.0
 MIN_VECTOR_EXTRUSION_HEIGHT = 0.01
 MAX_VECTOR_CHUNK_LON_SPAN_DEG = 2.0
 MAX_VECTOR_CHUNK_LAT_SPAN_DEG = 2.0
@@ -345,6 +347,13 @@ def _resolve_height_value(raw_value, default_value):
     if value is None:
         return default_value
     return float(value)
+
+
+def _normalize_vector_height_mode(value, default="meters"):
+    text = str(value or "").strip().lower()
+    if text in SUPPORTED_VECTOR_HEIGHT_MODES:
+        return text
+    return default
 
 
 def _normalize_bool(value, default=False):
@@ -1158,6 +1167,8 @@ def _export_vector_tiles(
     height_field,
     default_height,
     content_format,
+    vector_height_mode="meters",
+    floor_height_meters=DEFAULT_FLOOR_HEIGHT_METERS,
     enable_pyramid=False,
     pyramid_leaf_size=8,
     pyramid_max_depth=4,
@@ -1188,13 +1199,17 @@ def _export_vector_tiles(
     if source_srs and not source_srs.IsSame(target_srs):
         transform_to_wgs84 = osr.CoordinateTransformation(source_srs, target_srs)
 
+    vector_height_mode = _normalize_vector_height_mode(vector_height_mode, "meters")
+    floor_height_meters = max(0.1, _resolve_height_value(floor_height_meters, DEFAULT_FLOOR_HEIGHT_METERS))
+    default_height_meters = float(default_height) * floor_height_meters if vector_height_mode == "floors" else float(default_height)
+
     feature_records = []
     west = 180.0
     south = 90.0
     east = -180.0
     north = -90.0
     min_height = 0.0
-    max_height = float(default_height)
+    max_height = float(default_height_meters)
     layer.ResetReading()
     for feature in layer:
         _ensure_not_stopped(stop_checker)
@@ -1205,10 +1220,11 @@ def _export_vector_tiles(
         if transform_to_wgs84:
             geometry.Transform(transform_to_wgs84)
 
-        height_value = _resolve_height_value(
+        raw_height_value = _resolve_height_value(
             feature.GetField(height_field) if height_field and feature.GetFieldIndex(height_field) >= 0 else None,
             default_height,
         )
+        height_value = float(raw_height_value) * floor_height_meters if vector_height_mode == "floors" else float(raw_height_value)
         if height_value < 0:
             continue
         if abs(float(height_value)) < 1e-9:
@@ -1754,6 +1770,10 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
     crs = str(request_data.get("crs") or "").strip()
     height_field = str(request_data.get("heightField") or "").strip()
     default_height = _resolve_height_value(request_data.get("defaultHeight"), 30.0)
+    vector_height_mode = _normalize_vector_height_mode(request_data.get("vectorHeightMode"), "meters")
+    floor_height_meters = _resolve_height_value(request_data.get("floorHeightMeters"), DEFAULT_FLOOR_HEIGHT_METERS)
+    if floor_height_meters <= 0:
+        floor_height_meters = DEFAULT_FLOOR_HEIGHT_METERS
     longitude = normalizeFloat(request_data.get("longitude"), None)
     latitude = normalizeFloat(request_data.get("latitude"), None)
     anchor_mode = _normalize_anchor_mode(request_data.get("anchorMode"), "manual")
@@ -1823,6 +1843,8 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
             height_field,
             default_height,
             content_format,
+            vector_height_mode=vector_height_mode,
+            floor_height_meters=floor_height_meters,
             enable_pyramid=enable_pyramid,
             pyramid_leaf_size=pyramid_leaf_size,
             pyramid_max_depth=pyramid_max_depth,
@@ -1894,6 +1916,9 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
             "enablePyramid": enable_pyramid if data_type in {"vector", "osgb"} else False,
             "anchorMode": anchor_mode if data_type in {"model", "osgb"} else None,
         }
+        if data_type == "vector":
+            record["result"]["vectorHeightMode"] = vector_height_mode
+            record["result"]["floorHeightMeters"] = float(floor_height_meters)
         if longitude is not None and latitude is not None and data_type in {"model", "osgb"}:
             record["result"]["resolvedAnchor"] = {
                 "longitude": float(longitude),
@@ -1925,6 +1950,8 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
             "entryFile": result.get("entryFile"),
             "contentFormat": output_content_format,
             "anchorMode": anchor_mode if data_type in {"model", "osgb"} else None,
+            "vectorHeightMode": vector_height_mode if data_type == "vector" else None,
+            "floorHeightMeters": float(floor_height_meters) if data_type == "vector" else None,
         },
     )
 
@@ -1955,6 +1982,13 @@ def create3DTiles():
             content_format = str(data.get("contentFormat") or "b3dm").strip().lower()
             if content_format not in SUPPORTED_CONTENT_FORMATS:
                 errors.append("contentFormat 仅支持 b3dm 或 glb")
+        if data_type == "vector":
+            raw_mode = str(data.get("vectorHeightMode") or "").strip().lower()
+            if raw_mode and raw_mode not in SUPPORTED_VECTOR_HEIGHT_MODES:
+                errors.append("vectorHeightMode 仅支持 meters 或 floors")
+            floor_height_meters = normalizeFloat(data.get("floorHeightMeters"), DEFAULT_FLOOR_HEIGHT_METERS)
+            if floor_height_meters is not None and float(floor_height_meters) <= 0:
+                errors.append("floorHeightMeters 必须大于 0")
         if data_type == "model":
             if normalizeFloat(data.get("longitude"), None) is None or normalizeFloat(data.get("latitude"), None) is None:
                 errors.append("OBJ 任务必须提供 longitude 与 latitude")

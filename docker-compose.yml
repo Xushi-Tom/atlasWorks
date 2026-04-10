@@ -1,45 +1,5 @@
 # 顶层配置：定义所有容器服务
 services:
-  # 服务名：PostgreSQL 数据库服务
-  atlasworks-postgres:
-    # 使用的数据库镜像（可通过环境变量覆盖）
-    image: ${ATLASWORKS_POSTGRES_IMAGE:-postgres:15}
-    # 固定容器名称
-    container_name: atlasworks-postgres
-    # 重启策略：除非手动停止，否则自动重启
-    restart: unless-stopped
-    # 容器环境变量配置
-    environment:
-      # 容器时区（默认东八区，可通过环境变量覆盖）
-      TZ: ${ATLASWORKS_TZ:-Asia/Shanghai}
-      # PostgreSQL 会话时区
-      PGTZ: ${ATLASWORKS_TZ:-Asia/Shanghai}
-      # 数据库名称
-      POSTGRES_DB: atlasworks
-      # 数据库用户名
-      POSTGRES_USER: postgres
-      # 数据库密码
-      POSTGRES_PASSWORD: atlasworks
-    # 端口映射配置
-    ports:
-      # 主机 25432 映射到容器 5432
-      - "25432:5432"
-    # 数据卷挂载配置
-    volumes:
-      # 持久化数据库数据目录
-      - ./runtime/postgres:/var/lib/postgresql/data
-      # 挂载初始化 SQL 脚本目录（只读）
-      - ./db/init:/docker-entrypoint-initdb.d:ro
-    # 健康检查配置
-    healthcheck:
-      # 健康检查命令
-      test: ["CMD-SHELL", "pg_isready -U postgres -d atlasworks"]
-      # 检查间隔
-      interval: 10s
-      # 单次检查超时
-      timeout: 5s
-      # 失败重试次数
-      retries: 10
 
   # 服务名：AtlasWorks API 服务
   atlasworks-api:
@@ -55,67 +15,79 @@ services:
     container_name: atlasworks-api
     # 重启策略：除非手动停止，否则自动重启
     restart: unless-stopped
+    # 运行资源限制（等价于常见 docker run 的资源参数）
+    cpus: ${ATLASWORKS_API_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_API_MEM_LIMIT:-8g}
+    mem_reservation: ${ATLASWORKS_API_MEM_RESERVATION:-2g}
+    shm_size: ${ATLASWORKS_API_SHM_SIZE:-1g}
+    pids_limit: ${ATLASWORKS_API_PIDS_LIMIT:-1024}
+    ulimits:
+      # 最大打开文件数
+      nofile:
+        soft: ${ATLASWORKS_API_NOFILE_SOFT:-65535}
+        hard: ${ATLASWORKS_API_NOFILE_HARD:-65535}
     # 依赖服务配置
-    depends_on:
-      # 依赖 postgres 服务
-      atlasworks-postgres:
-        # 依赖条件：postgres 健康后再启动 API
-        condition: service_healthy
+    # depends_on:
+    #   # 依赖 postgres 服务
+    #   atlasworks-postgres:
+    #     # 依赖条件：postgres 健康后再启动 API
+    #     condition: service_healthy
     # 容器环境变量配置
     environment:
-      # 容器时区（默认东八区，可通过环境变量覆盖）
-      TZ: ${ATLASWORKS_TZ:-Asia/Shanghai}
+      # 容器时区
+      - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       # API 监听地址
-      HOST: 0.0.0.0
-      # API 容器内监听端口
-      PORT: 18000
+      - HOST=0.0.0.0
+      # API 容器内部监听端口
+      - PORT=18000
       # Gunicorn worker 数量
-      ATLASWORKS_WORKERS: 1
-      # Gunicorn 每个 worker 的线程数
-      ATLASWORKS_THREADS: 4
-      # 发布地址完整覆盖（为空则按其他策略计算）
-      ATLASWORKS_PUBLIC_BASE_URL: ${ATLASWORKS_PUBLIC_BASE_URL:-}
-      # 发布地址主机固定值（当前固定为宿主机 IP）
-      # ATLASWORKS_PUBLIC_BASE_HOST: 10.88.30.57
-      ATLASWORKS_PUBLIC_BASE_HOST: 192.168.202.57
-      # 发布地址模式（默认按请求主机）
-      ATLASWORKS_PUBLIC_BASE_MODE: ${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
+      - ATLASWORKS_WORKERS=1
+      # 每个 worker 的线程数
+      - ATLASWORKS_THREADS=4
+      # 发布地址完整覆盖（为空则按其他规则计算）
+      - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLIC_BASE_URL:-}
+      # 发布地址主机名/IP（默认写死，可按需覆盖）
+      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-192.168.202.57}
+      # 发布地址解析模式（request_host/auto 等）
+      - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
       # 发布地址端口
-      ATLASWORKS_PUBLIC_BASE_PORT: ${ATLASWORKS_PUBLIC_BASE_PORT:-18000}
-      # API 文档访问用户名（可空）
-      ATLASWORKS_DOCS_USER: ${ATLASWORKS_DOCS_USER:-}
-      # API 文档访问密码
-      ATLASWORKS_DOCS_PASSWORD: ${ATLASWORKS_DOCS_PASSWORD:-Su19960624Xhi}
+      - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLIC_BASE_PORT:-18000}
+      # API 文档认证用户名（可为空）
+      - ATLASWORKS_DOCS_USER=${ATLASWORKS_DOCS_USER:-}
+      # API 文档认证密码
+      - ATLASWORKS_DOCS_PASSWORD=${ATLASWORKS_DOCS_PASSWORD:-Swsj@2025}
       # 容器内数据源目录
-      ATLASWORKS_DATA_SOURCE_DIR: /app/dataSource
-      # 宿主机数据源目录
-      ATLASWORKS_DATA_SOURCE_HOST_DIR: D:/TIF
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 宿主机数据源目录（用于展示/记录）
+      - ATLASWORKS_DATA_SOURCE_HOST_DIR=D:/TIF
       # 容器内瓦片目录
-      ATLASWORKS_TILES_DIR: /app/tiles
-      # 宿主机瓦片目录
-      ATLASWORKS_TILES_HOST_DIR: D:/tiles
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      # 宿主机瓦片目录（用于展示/记录）
+      - ATLASWORKS_TILES_HOST_DIR=D:/tiles
       # 容器内日志目录
-      ATLASWORKS_LOG_DIR: /app/log
-      # 宿主机日志目录
-      ATLASWORKS_LOG_HOST_DIR: ./runtime/log
-      # 启用数据库
-      TF_DB_ENABLED: "1"
-      # 数据库主机
-      TF_DB_HOST: atlasworks-postgres
+      - ATLASWORKS_LOG_DIR=/app/log
+      # 宿主机日志目录（用于展示/记录）
+      - ATLASWORKS_LOG_HOST_DIR=./runtime/log
+      # 启用数据库持久化能力
+      - TF_DB_ENABLED=1
+      # 数据库主机（容器网络内建议用服务名）
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
       # 数据库端口
-      TF_DB_PORT: 5432
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
       # 数据库名称
-      TF_DB_NAME: atlasworks
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
       # 数据库用户
-      TF_DB_USER: postgres
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
       # 数据库密码
-      TF_DB_PASSWORD: atlasworks
-      # 数据库 SSL 模式
-      TF_DB_SSLMODE: disable
-      # 启用任务状态同步
-      TF_TASK_SYNC_ENABLED: "1"
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
+      # 数据库连接超时（秒）
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 数据库 SSL 模式（本地默认 disable）
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+      # 启用任务状态同步线程
+      - TF_TASK_SYNC_ENABLED=1
       # 任务状态同步间隔（秒）
-      TF_TASK_SYNC_INTERVAL: 2
+      - TF_TASK_SYNC_INTERVAL=2
     # 端口映射配置
     ports:
       # 主机端口映射到容器同端口
