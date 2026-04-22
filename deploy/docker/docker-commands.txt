@@ -1,0 +1,165 @@
+
+docker build -f deploy/docker/Dockerfile -t atlasworks:release-2.0.0 .
+
+docker save -o atlasworks-release-2.0.0.tar atlasworks:release-2.0.0
+
+AtlasWorks Docker 常用命令
+===========================
+
+说明
+----
+1. 下面命令默认都在仓库根目录执行：d:\map\atlasWorks
+2. 当前项目实际使用的编排文件是仓库根目录的 docker-compose.yml
+3. Dockerfile 路径：deploy/docker/Dockerfile
+4. 镜像名当前使用：atlasworks:release-2.0.0
+5. 构建前请确认 frontend/dist 和 cesium-terrain-builder 目录已存在
+
+
+一、构建镜像
+------------
+手动构建：
+docker build -f deploy/docker/Dockerfile -t atlasworks:release-2.0.0 .
+
+如果需要指定国内 Debian 源：
+docker build ^
+  --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian ^
+  --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security ^
+  -f deploy/docker/Dockerfile ^
+  -t atlasworks:release-2.0.0 ^
+  .
+
+说明：
+- 上面这种多行写法是 PowerShell/cmd 下更容易改写的展示方式
+- 如果直接在 PowerShell 执行，也可以写成一行
+
+
+二、使用 compose 启动
+--------------------
+后台构建并启动：
+docker compose -f docker-compose.yml up -d --build
+
+仅启动：
+docker compose -f docker-compose.yml up -d
+
+停止并删除容器：
+docker compose -f docker-compose.yml down
+
+查看服务状态：
+docker compose -f docker-compose.yml ps
+
+说明：
+- 当前 compose 默认容器名是 atlasworks-api
+- 当前 compose 里挂载了 D:/TIF 和 D:/tiles，启动前请按实际机器路径调整
+
+
+三、单独运行镜像
+----------------
+docker run -d --name atlasworks-api `
+  -e HOST=0.0.0.0 `
+  -e PORT=18000 `
+  -p 18000:18000 `
+  -v D:/TIF:/app/dataSource `
+  -v D:/tiles:/app/tiles `
+  -v ${PWD}/runtime/log:/app/log `
+  atlasworks:release-2.0.0
+
+停止容器：
+docker stop atlasworks-api
+
+删除容器：
+docker rm atlasworks-api
+
+
+四、进入容器和看日志
+--------------------
+进入容器：
+docker exec -it atlasworks-api bash
+
+查看实时日志：
+docker logs -f atlasworks-api
+
+查看最近 200 行日志：
+docker logs --tail 200 atlasworks-api
+
+
+五、镜像验证命令
+----------------
+检查 GDAL：
+docker run --rm atlasworks:release-2.0.0 gdalinfo --version
+
+检查 CTB：
+docker run --rm atlasworks:release-2.0.0 ctb-tile --version
+
+检查 obj2gltf：
+docker run --rm atlasworks:release-2.0.0 obj2gltf --help
+
+
+六、导出镜像
+------------
+导出镜像为 tar：
+docker save -o atlasworks-release-2.0.0.tar atlasworks:release-2.0.0
+
+导出带版本标签的镜像：
+docker tag atlasworks:release-2.0.0 atlasworks:backup-20260422
+docker save -o atlasworks-backup-20260422.tar atlasworks:backup-20260422
+
+说明：
+- docker save 导出的是镜像，适合迁移部署环境
+
+
+七、导入镜像
+------------
+从 tar 导入镜像：
+docker load -i atlasworks-release-2.0.0.tar
+
+导入后查看镜像：
+docker images | findstr atlasworks
+
+
+八、导出容器文件系统
+--------------------
+导出容器：
+docker export -o atlasworks-api-container.tar atlasworks-api
+
+说明：
+- docker export 导出的是容器文件系统，不包含镜像历史层信息
+- 一般做部署迁移时，优先使用 docker save / docker load
+
+
+九、从容器拷贝文件
+------------------
+从容器拷贝日志到宿主机：
+docker cp atlasworks-api:/app/log ./runtime/log-backup
+
+从宿主机拷贝文件到容器：
+docker cp .\test.tif atlasworks-api:/app/dataSource/test.tif
+
+
+十、清理命令
+------------
+删除镜像：
+docker rmi atlasworks:release-2.0.0
+
+删除悬空镜像：
+docker image prune -f
+
+删除未使用容器：
+docker container prune -f
+
+注意：
+- 清理前先确认没有正在使用的重要容器或镜像
+
+
+十一、项目内相关文件
+--------------------
+Dockerfile：
+deploy/docker/Dockerfile
+
+启动脚本：
+deploy/docker/entrypoint.sh
+
+构建脚本（Linux/Git Bash 环境可参考）：
+deploy/docker/buildGeotiler.sh
+
+Compose 文件：
+docker-compose.yml

@@ -276,6 +276,98 @@ def _extract_projection_summary(info):
     return wkt.split(",")[0][:100]
 
 
+def _extract_data_name_from_source(source_path, fallback_name):
+    source_text = str(source_path or "").strip()
+    if source_text:
+        parsed = urlparse(source_text)
+        if parsed.scheme in {"http", "https"}:
+            remote_name = unquote(os.path.basename(parsed.path or ""))
+            if remote_name:
+                stem, _ = os.path.splitext(remote_name)
+                return stem or remote_name
+    fallback_text = str(fallback_name or "").strip()
+    if not fallback_text:
+        return ""
+    stem, _ = os.path.splitext(fallback_text)
+    return stem or fallback_text
+
+
+def _extract_epsg_code(info):
+    coordinate_system = info.get("coordinateSystem", {})
+    if not isinstance(coordinate_system, dict):
+        return None
+    cs_id = coordinate_system.get("id", {})
+    if isinstance(cs_id, dict):
+        authority = str(cs_id.get("authority") or "").strip().upper()
+        code = cs_id.get("code")
+        if authority == "EPSG" and code is not None:
+            return code
+
+    wkt = coordinate_system.get("wkt") or ""
+    if not wkt:
+        return None
+    marker = 'ID["EPSG",'
+    marker_index = wkt.find(marker)
+    if marker_index < 0:
+        return None
+    start_index = marker_index + len(marker)
+    end_index = wkt.find("]", start_index)
+    if end_index < 0:
+        return None
+    raw_code = wkt[start_index:end_index].replace('"', "").strip()
+    try:
+        return int(raw_code)
+    except Exception:
+        return raw_code or None
+
+
+def _build_corner_coordinates(bounds):
+    if not isinstance(bounds, dict):
+        return None
+    west = bounds.get("west")
+    east = bounds.get("east")
+    south = bounds.get("south")
+    north = bounds.get("north")
+    if None in (west, east, south, north):
+        return None
+    return {
+        "leftTop": {"longitude": west, "latitude": north},
+        "rightTop": {"longitude": east, "latitude": north},
+        "leftBottom": {"longitude": west, "latitude": south},
+        "rightBottom": {"longitude": east, "latitude": south},
+    }
+
+
+def _build_center_coordinate(bounds):
+    if not isinstance(bounds, dict):
+        return None
+    west = bounds.get("west")
+    east = bounds.get("east")
+    south = bounds.get("south")
+    north = bounds.get("north")
+    if None in (west, east, south, north):
+        return None
+    return {
+        "longitude": (west + east) / 2.0,
+        "latitude": (south + north) / 2.0,
+    }
+
+
+def _build_geometry_wkt(bounds):
+    if not isinstance(bounds, dict):
+        return None
+    west = bounds.get("west")
+    east = bounds.get("east")
+    south = bounds.get("south")
+    north = bounds.get("north")
+    if None in (west, east, south, north):
+        return None
+    return (
+        f"POLYGON(({west} {north}, {east} {north}, {east} {south}, "
+        f"{west} {south}, {west} {north}))"
+    )
+
+
 def generateSmartRecommendations(fileSizeGb, tileType="map", userMinZoom=None, userMaxZoom=None, cpuCount=4, memoryTotalGb=8):
     try:
         recommendations = {}
@@ -393,14 +485,16 @@ def getSourceBandInfoCached(filePath):
     return _bandInfoCache[filePath]
 
 
-def getFileInfo(filePath, relativePath=None):
+def getFileInfo(filePath, relativePath=None, sourcePath=None, displayName=None, dataSourceType="local"):
     try:
         file_info = {}
         if os.path.exists(filePath):
             stat = os.stat(filePath)
-            normalized_relative_path = str(relativePath or "").replace("\\", "/").strip("/")
-            file_name = os.path.basename(filePath)
+            source_path_text = str(sourcePath or relativePath or "").replace("\\", "/").strip("/")
+            normalized_relative_path = source_path_text or os.path.basename(filePath)
+            file_name = str(displayName or "").strip() or os.path.basename(filePath)
             file_ext = os.path.splitext(filePath)[1].lower()
+            data_name = _extract_data_name_from_source(sourcePath or relativePath, file_name)
             file_info.update({
                 "name": file_name,
                 "path": normalized_relative_path or file_name,
@@ -413,6 +507,17 @@ def getFileInfo(filePath, relativePath=None):
                 "extension": file_ext,
             })
             file_info["format"] = file_ext.lstrip(".") or "file"
+            file_info["data_name"] = data_name
+            file_info["data_path"] = file_info["path"]
+            file_info["data_size"] = file_info["size"]
+            file_info["data_format"] = file_info["format"]
+            file_info["data_source"] = dataSourceType
+            file_info["id"] = None
+            file_info["satelite_no"] = None
+            file_info["gather_time"] = None
+            file_info["thumb_url"] = None
+            file_info["processing_level"] = None
+            file_info["product_no"] = None
             if file_ext in [".tif", ".tiff", ".geotiff"]:
                 result = _run_command(["gdalinfo", "-json", filePath], timeout=30)
                 if result["success"]:
@@ -436,6 +541,8 @@ def getFileInfo(filePath, relativePath=None):
                     metadata = {
                         "driver": info.get("driverShortName") or "",
                         "driverLongName": info.get("driverLongName") or "",
+                        "description": info.get("description") or "",
+                        "files": info.get("files", []),
                         "rasterSize": {
                             "width": size[0] if len(size) > 0 else 0,
                             "height": size[1] if len(size) > 1 else 0,
@@ -446,18 +553,54 @@ def getFileInfo(filePath, relativePath=None):
                         },
                         "bandCount": len(bands),
                         "srs": _extract_projection_summary(info),
+                        "coordinateSystem": info.get("coordinateSystem", {}) if isinstance(info.get("coordinateSystem"), dict) else {},
+                        "epsg": _extract_epsg_code(info),
+                        "geoTransform": geo_transform,
+                        "cornerCoordinates": info.get("cornerCoordinates", {}),
+                        "wgs84Extent": info.get("wgs84Extent", {}),
+                        "stac": info.get("stac", {}),
+                        "metadataDomains": root_metadata,
+                        "bands": bands,
                     }
                     if data_types:
                         metadata["dataType"] = ",".join(data_types)
                         metadata["bandDataTypes"] = data_types
+                        file_info["data_type"] = metadata["dataType"]
+                    else:
+                        file_info["data_type"] = "raster"
                     if nodata_values:
                         metadata["nodata"] = nodata_values[0] if len(nodata_values) == 1 else nodata_values
                     if image_structure.get("COMPRESSION"):
                         metadata["compression"] = image_structure.get("COMPRESSION")
+
+                    pixel_size = metadata.get("pixelSize", {})
+                    file_info["resolution"] = pixel_size.get("x") or pixel_size.get("y")
+                    file_info["coordinate_system"] = metadata.get("srs") or ""
                     if bounds:
                         metadata["bounds"] = bounds
                         file_info["geoBounds"] = bounds
+                        corners = _build_corner_coordinates(bounds)
+                        center = _build_center_coordinate(bounds)
+                        file_info["center_longitude"] = center.get("longitude") if center else None
+                        file_info["center_latitude"] = center.get("latitude") if center else None
+                        file_info["geometry"] = _build_geometry_wkt(bounds)
+                        if corners:
+                            file_info["left_top_longitude"] = corners["leftTop"]["longitude"]
+                            file_info["left_top_latitude"] = corners["leftTop"]["latitude"]
+                            file_info["right_top_longitude"] = corners["rightTop"]["longitude"]
+                            file_info["right_top_latitude"] = corners["rightTop"]["latitude"]
+                            file_info["left_bottom_longitude"] = corners["leftBottom"]["longitude"]
+                            file_info["left_bottom_latitude"] = corners["leftBottom"]["latitude"]
+                            file_info["right_bottom_longitude"] = corners["rightBottom"]["longitude"]
+                            file_info["right_bottom_latitude"] = corners["rightBottom"]["latitude"]
+                            metadata["corners"] = corners
+                        if center:
+                            metadata["center"] = center
                     file_info["metadata"] = metadata
+                else:
+                    file_info["data_type"] = "raster"
+            else:
+                file_info["data_type"] = file_info["format"]
         return file_info
     except Exception as exc:
         logMessage(f"获取文件信息失败 {filePath}: {exc}", "ERROR")
@@ -616,6 +759,9 @@ def getDataSourceInfo(filename):
         is_remote_http = isHttpSource(source_text)
         normalized_filename = source_text.replace("\\", "/").strip("/")
         data_source_dir = os.path.abspath(config["dataSourceDir"])
+        source_path_for_response = normalized_filename
+        display_name = os.path.basename(normalized_filename) if normalized_filename else ""
+        data_source_type = "remote-http" if is_remote_http else "local"
 
         if is_remote_http:
             remote_temp_file = _download_remote_source_to_temp(source_text)

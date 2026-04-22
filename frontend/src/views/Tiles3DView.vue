@@ -96,7 +96,7 @@ watch(() => form.dataType, nextType => {
     if ((nextType === 'vector' || nextType === 'osgb') && !form.crsPreset) {
         form.crsPreset = 'EPSG:4326';
     }
-    if (nextType !== 'vector' && nextType !== 'osgb') {
+    if (nextType !== 'vector' && nextType !== 'model' && nextType !== 'osgb') {
         form.enablePyramid = false;
     }
     if (nextType !== 'osgb') {
@@ -193,9 +193,9 @@ async function submit() {
             scale: Number(form.scale),
             rotationZ: Number(form.rotationZ),
             jobs: Number(form.jobs),
-            enablePyramid: (form.dataType === 'vector' || form.dataType === 'osgb') ? Boolean(form.enablePyramid) : undefined,
-            pyramidLeafSize: (form.dataType === 'vector' || form.dataType === 'osgb') ? Number(form.pyramidLeafSize) : undefined,
-            pyramidMaxDepth: (form.dataType === 'vector' || form.dataType === 'osgb') ? Number(form.pyramidMaxDepth) : undefined
+            enablePyramid: (form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb') ? Boolean(form.enablePyramid) : undefined,
+            pyramidLeafSize: (form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb') ? Number(form.pyramidLeafSize) : undefined,
+            pyramidMaxDepth: (form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb') ? Number(form.pyramidMaxDepth) : undefined
         };
 
         const result = await api.create3DTiles(payload);
@@ -333,13 +333,13 @@ async function submit() {
                                     <option value="glb">glb</option>
                                 </select>
                             </div>
-                            <div v-if="form.dataType === 'vector' || form.dataType === 'osgb'" class="form-group">
+                            <div v-if="form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb'" class="form-group">
                                 <label class="checkbox-inline">
                                     <input v-model="form.enablePyramid" type="checkbox">
                                     <span class="checkbox-text">启用金字塔层级</span>
                                 </label>
                             </div>
-                            <div v-if="(form.dataType === 'vector' || form.dataType === 'osgb') && form.enablePyramid" class="form-row form-row-2">
+                            <div v-if="(form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb') && form.enablePyramid" class="form-row form-row-2">
                                 <div class="form-group">
                                     <label>叶子容量</label>
                                     <input v-model="form.pyramidLeafSize" type="number" min="1" max="2000">
