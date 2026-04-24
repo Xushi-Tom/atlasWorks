@@ -1,10 +1,11 @@
-FROM debian:bullseye
+ARG BASE_IMAGE=debian:bullseye
+FROM ${BASE_IMAGE}
 
 LABEL maintainer="AtlasWorks Team"
 LABEL description="AtlasWorks geographic tiling platform with GDAL, CTB and embedded console"
 
-ARG APT_MIRROR=http://deb.debian.org/debian
-ARG APT_SECURITY_MIRROR=http://security.debian.org/debian-security
+ARG APT_MIRROR=https://deb.debian.org/debian
+ARG APT_SECURITY_MIRROR=https://deb.debian.org/debian-security
 ARG NODE_MAJOR=20
 
 ENV DEBIAN_FRONTEND=noninteractive \

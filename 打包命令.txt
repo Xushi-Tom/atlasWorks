@@ -1,0 +1,174 @@
+AtlasWorks 镜像打包命令
+
+说明：
+1、当前项目不是 Maven/JAR 项目，不需要执行 `mvn clean package -DskipTests`
+2、正式打镜像前，先执行前端构建，确保 `frontend/dist` 已生成
+3、`debian:bullseye-amd64` 和 `debian:bullseye-arm64` 不是 Docker Hub 官方标签
+   这里的做法是：先按平台拉取 `debian:bullseye`，再在本地打成专用别名
+4、当前这台 x86 开发机上：
+   `amd64` 镜像可以直接稳定构建
+   `arm64` 镜像在 `buildx + qemu` 下会在 `libc-bin` 触发阶段段错误，不建议继续在这台机器上本地硬打
+5、如果一定要打 `arm64`，推荐两种方式：
+   在原生 `linux/arm64` 机器上执行相同构建命令
+   或接一个原生 ARM 的 buildx builder，再做多架构构建
+6、如果网络不稳定，APT 镜像建议显式传入清华镜像的 HTTP 源，避免 HTTPS 证书和代理链路问题
+7、远程 ARM builder 的稳定性明显高于本机 `x86 + qemu` 交叉构建
+   只要远程 builder 是原生 `linux/arm64` 主机，且网络稳定，这套方式是可长期使用的
+
+
+1、先执行前端打包，确保静态资源已生成
+Set-Location D:\map\atlasWorks\frontend
+npm run build
+
+
+2、回到项目根目录
+Set-Location D:\map\atlasWorks
+
+
+3、普通 x86 构建命令（当前开发机直接使用）
+docker pull --platform linux/amd64 debian:bullseye
+docker tag debian:bullseye debian:bullseye-amd64
+docker build --progress=plain -t atlasworks:release-3.0.0-20260424 --build-arg BASE_IMAGE=debian:bullseye-amd64 --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security -f deploy/docker/Dockerfile .
+
+
+4、打 amd64 离线镜像包（x86_64 环境使用）
+4.1 拉取 amd64 基础镜像，并单独保存为本地专用标签
+docker pull --platform linux/amd64 debian:bullseye
+docker tag debian:bullseye debian:bullseye-amd64
+
+4.2 构建 amd64 镜像并加载到本地 Docker
+docker buildx build `
+  --builder desktop-linux `
+  --platform linux/amd64 `
+  --pull=false `
+  -t atlasworks:release-3.0.0-20260424-amd64 `
+  --build-arg BASE_IMAGE=debian:bullseye-amd64 `
+  --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian `
+  --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security `
+  -f deploy/docker/Dockerfile `
+  --load `
+  .
+
+4.3 导出 amd64 tar 包
+docker save -o .\atlasworks-release-3.0.0-20260424-amd64.tar atlasworks:release-3.0.0-20260424-amd64
+
+
+5、打 arm64 离线镜像包（推荐在 ARM64 原生环境使用）
+5.1 拉取 arm64 基础镜像，并单独保存为本地专用标签
+docker pull --platform linux/arm64 debian:bullseye
+docker tag debian:bullseye debian:bullseye-arm64
+
+5.2 在 ARM64 原生机器上构建 arm64 镜像并加载到本地 Docker
+docker buildx build `
+  --builder desktop-linux `
+  --platform linux/arm64 `
+  --pull=false `
+  -t atlasworks:release-3.0.0-20260424-arm64 `
+  --build-arg BASE_IMAGE=debian:bullseye-arm64 `
+  --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian `
+  --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security `
+  -f deploy/docker/Dockerfile `
+  --load `
+  .
+
+5.3 导出 arm64 tar 包
+docker save -o .\atlasworks-release-3.0.0-20260424-arm64.tar atlasworks:release-3.0.0-20260424-arm64
+
+
+6、在目标机器加载镜像
+docker load -i .\atlasworks-release-3.0.0-20260424-amd64.tar
+docker load -i .\atlasworks-release-3.0.0-20260424-arm64.tar
+
+
+7、远程 ARM builder 方案（推荐）
+7.1 准备一台原生 ARM Linux 机器
+要求：
+开启 SSH
+已安装 Docker
+当前登录用户具备 Docker 权限
+
+7.2 先验证本机能 SSH 到远程 ARM 主机
+ssh atlas@192.168.1.50 uname -m
+
+正常应返回：
+aarch64
+
+7.3 把远程 ARM 主机接入 buildx
+docker buildx create --name atlasworks-remote-arm --driver docker-container --platform linux/arm64 ssh://atlas@192.168.1.50 --use
+
+7.4 查看 builder 状态
+docker buildx inspect --bootstrap atlasworks-remote-arm
+
+7.5 使用远程 ARM builder 构建并回传 arm64 镜像到本机
+docker buildx build `
+  --builder atlasworks-remote-arm `
+  --platform linux/arm64 `
+  --pull=false `
+  -t atlasworks:release-3.0.0-20260424-arm64 `
+  --build-arg BASE_IMAGE=debian:bullseye-arm64 `
+  --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian `
+  --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security `
+  -f deploy/docker/Dockerfile `
+  --load `
+  .
+
+7.6 导出远程 ARM builder 构建出的 tar 包
+docker save -o .\atlasworks-release-3.0.0-20260424-arm64.tar atlasworks:release-3.0.0-20260424-arm64
+
+7.7 不再使用时切回本地 builder
+docker buildx use desktop-linux
+
+7.8 如果要删除远程 builder
+docker buildx rm atlasworks-remote-arm
+
+
+8、如果要推送到镜像仓库，可使用多架构构建
+前提：
+`atlasworks-remote-arm` 可用
+本机 `desktop-linux` 可用
+仓库可正常推送
+
+docker buildx build `
+  --builder atlasworks-remote-arm `
+  --platform linux/amd64,linux/arm64 `
+  -t your-registry/atlasworks:release-3.0.0-20260424 `
+  --build-arg BASE_IMAGE=debian:bullseye `
+  --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian `
+  --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security `
+  -f deploy/docker/Dockerfile `
+  --push `
+  .
+
+
+9、推荐的日期变量写法（避免手改日期）
+$date = Get-Date -Format yyyyMMdd
+$version = "3.0.0-$date"
+
+docker buildx build `
+  --builder desktop-linux `
+  --platform linux/amd64 `
+  --pull=false `
+  -t atlasworks:release-$version-amd64 `
+  --build-arg BASE_IMAGE=debian:bullseye-amd64 `
+  --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian `
+  --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security `
+  -f deploy/docker/Dockerfile `
+  --load `
+  .
+
+docker save -o .\atlasworks-release-$version-amd64.tar atlasworks:release-$version-amd64
+
+远程 ARM builder 上执行：
+docker buildx build `
+  --builder atlasworks-remote-arm `
+  --platform linux/arm64 `
+  --pull=false `
+  -t atlasworks:release-$version-arm64 `
+  --build-arg BASE_IMAGE=debian:bullseye-arm64 `
+  --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian `
+  --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security `
+  -f deploy/docker/Dockerfile `
+  --load `
+  .
+
+docker save -o .\atlasworks-release-$version-arm64.tar atlasworks:release-$version-arm64
