@@ -41,6 +41,7 @@ def _mime_from_extension(extension):
     ext = str(extension or "").strip().lower()
     mapping = {
         ".json": "application/json",
+        ".geojson": "application/geo+json",
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
@@ -65,6 +66,7 @@ def _extension_from_mime(mime_type):
         "image/webp": ".webp",
         "model/gltf-binary": ".glb",
         "application/json": ".json",
+        "application/geo+json": ".geojson",
     }
     return mapping.get(mime)
 
@@ -500,10 +502,10 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
     tile_profile = _resolve_tile_publish_profile(full_path, metadata=metadata)
     source_tile_scheme = tile_profile.get("sourceTileScheme") or "tms"
     target_tile_scheme = _target_tile_scheme_for_publish_method(publish_method)
-    is_vector_tile_publish = publish_method in {"mvt", "vector-tile", "vector-tiles"}
+    is_vector_tile_publish = publish_method in {"mvt", "vector-tile", "vector-tiles", "geojson-tile", "geojson-tiles"}
     tileset_entry = _find_tileset_entry(full_path) if publish_method == "3d-tiles" or publish_type == "3dtiles" else None
     enable_tile_template = (
-        publish_method in {"wmts", "tms", "xyz", "quantized-mesh", "cesium-terrain", "terrain", "mvt", "vector-tile", "vector-tiles"}
+        publish_method in {"wmts", "tms", "xyz", "quantized-mesh", "cesium-terrain", "terrain", "mvt", "vector-tile", "vector-tiles", "geojson-tile", "geojson-tiles"}
         or publish_type == "terrain"
     )
     tile_info = _find_tile_template_info(full_path) if enable_tile_template else None

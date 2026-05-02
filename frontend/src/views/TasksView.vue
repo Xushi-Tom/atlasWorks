@@ -55,6 +55,9 @@ function inferTaskType(task) {
     if (artifactType.includes('terrain') || stage.includes('terrain') || Number(task?.result?.totalTerrainFiles || 0) > 0) {
         return '地形切片';
     }
+    if (artifactType.includes('vector') || String(task?.result?.method || '').includes('mvt') || task?.result?.totalTiles !== undefined) {
+        return '二维矢量切片';
+    }
     if (artifactType.includes('map') || artifactType.includes('imagery') || stage.includes('raster') || task?.result?.totalFiles !== undefined) {
         return '地图切片';
     }

@@ -123,7 +123,7 @@ def listApiRoutes():
             {"path": "/api/preflight", "methods": ["POST"], "description": "执行构建预检查", "category": "数据源管理", "logic": "在正式构建前检查输入文件、工具链、波段与输出覆盖风险，并返回资源估算"},
             {"path": "/api/tile/terrain", "methods": ["POST"], "description": "创建地形瓦片（支持合并）", "category": "瓦片生成", "logic": "使用CTB生成地形瓦片，支持批量处理、智能缩放和地形合并。filePatterns 支持 http/https 网络地址；参数mergeTerrains=true可自动合并多个地形文件夹"},
             {"path": "/api/tile/indexedTiles", "methods": ["POST"], "description": "创建索引瓦片", "category": "瓦片生成", "logic": "基于空间索引的高性能瓦片生成，支持多进程并行处理，filePatterns 支持 http/https 网络地址"},
-            {"path": "/api/tile/mvt", "methods": ["POST"], "description": "创建 MVT 矢量切片", "category": "瓦片生成", "logic": "将 GeoJSON、SHP、GPKG 等矢量源构建为静态 MVT（.pbf）目录，并复用现有任务与发布体系"},
+            {"path": "/api/tile/mvt", "methods": ["POST"], "description": "创建二维矢量切片", "category": "瓦片生成", "logic": "将 GeoJSON、SHP、GPKG 等矢量源构建为静态 MVT（.pbf）或 GeoJSON 瓦片目录，并复用现有任务与发布体系"},
             {"path": "/api/tile/3dtiles", "methods": ["POST"], "description": "创建 3D Tiles", "category": "瓦片生成", "logic": "按输入类型生成 3D Tiles 输出目录，支持 pointcloud/vector/model/osgb 并复用现有任务与发布体系"},
             {"path": "/api/tile/convert", "methods": ["POST"], "description": "瓦片格式转换", "category": "瓦片生成", "logic": "z/x_y.png ↔ z/x/y.png格式转换，支持批量处理"},
             {"path": "/api/fileDetails", "methods": ["GET"], "description": "获取文件详情", "category": "工作空间管理", "logic": "根据 type 和 path 查询数据源或结果目录中的单个文件详情"},

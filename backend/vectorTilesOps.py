@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import math
 import os
 import re
 import shutil
@@ -19,7 +20,10 @@ from taskState import appendTaskLog, createTaskRecord
 from utils import logMessage, normalizeInt, resolveTilesOutputPath, runCommandWithProcessTracking
 
 
-SUPPORTED_VECTOR_EXTENSIONS = [".geojson", ".shp", ".gpkg"]
+SUPPORTED_VECTOR_EXTENSIONS = [".geojson", ".json", ".shp", ".gpkg"]
+VECTOR_TILE_FORMATS = {"mvt", "geojson"}
+GEOJSON_TILE_METHOD = "geojson-tile"
+WEB_MERCATOR_MAX_LAT = 85.0511287798066
 
 
 def _as_bool(value, default=False):
@@ -59,14 +63,29 @@ def _ensure_task_not_stopped(task_id):
         raise RuntimeError("任务已停止")
 
 
-def _count_vector_tiles(output_path):
+def _normalize_vector_tile_format(value):
+    normalized = str(value or "mvt").strip().lower()
+    if normalized in {"json", "geojson", "geojson-tile", "geojson-tiles"}:
+        return "geojson"
+    return "mvt"
+
+
+def _vector_tile_extension(tile_format):
+    return ".geojson" if tile_format == "geojson" else ".pbf"
+
+
+def _vector_publish_method(tile_format):
+    return GEOJSON_TILE_METHOD if tile_format == "geojson" else "mvt"
+
+
+def _count_vector_tiles(output_path, tile_extension=".pbf"):
     tile_count = 0
     for root, _, files in os.walk(output_path):
-        tile_count += len([filename for filename in files if filename.endswith(".pbf")])
+        tile_count += len([filename for filename in files if filename.endswith(tile_extension)])
     return tile_count
 
 
-def _find_sample_tile(output_path):
+def _find_sample_tile(output_path, tile_extension=".pbf"):
     for zoom_name in sorted(os.listdir(output_path), key=lambda value: (not str(value).isdigit(), str(value))):
         if not str(zoom_name).isdigit():
             continue
@@ -80,7 +99,7 @@ def _find_sample_tile(output_path):
             if not os.path.isdir(x_dir):
                 continue
             for filename in sorted(os.listdir(x_dir)):
-                if filename.endswith(".pbf"):
+                if filename.endswith(tile_extension):
                     return {
                         "z": str(zoom_name),
                         "x": str(x_name),
@@ -104,14 +123,15 @@ def _clear_directory(path):
                 continue
 
 
-def _write_tileset_metadata(output_path, dataset_name, layer_names, min_zoom, max_zoom, bounds=None):
+def _write_tileset_metadata(output_path, dataset_name, layer_names, min_zoom, max_zoom, bounds=None, tile_format="mvt"):
+    tile_extension = _vector_tile_extension(tile_format)
     tileset_path = os.path.join(output_path, "tileset.json")
     payload = {
         "tilejson": "3.0.0",
         "name": dataset_name,
-        "format": "pbf",
+        "format": "geojson" if tile_format == "geojson" else "pbf",
         "scheme": "xyz",
-        "tiles": ["{z}/{x}/{y}.pbf"],
+        "tiles": [f"{{z}}/{{x}}/{{y}}{tile_extension}"],
         "minzoom": min_zoom,
         "maxzoom": max_zoom,
         "vector_layers": [{"id": layer_name, "description": f"AtlasWorks layer {layer_name}"} for layer_name in layer_names],
@@ -123,13 +143,274 @@ def _write_tileset_metadata(output_path, dataset_name, layer_names, min_zoom, ma
     return tileset_path
 
 
+def _clamp(value, min_value, max_value):
+    return max(min_value, min(max_value, value))
+
+
+def _lonlat_to_tile(lon, lat, zoom):
+    lat = _clamp(float(lat), -WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT)
+    lon = _clamp(float(lon), -180.0, 180.0)
+    n = 2 ** int(zoom)
+    x = int(math.floor((lon + 180.0) / 360.0 * n))
+    lat_rad = math.radians(lat)
+    y = int(math.floor((1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n))
+    return _clamp(x, 0, n - 1), _clamp(y, 0, n - 1)
+
+
+def _tile_to_lonlat(x, y, zoom):
+    n = 2.0 ** int(zoom)
+    lon = float(x) / n * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * float(y) / n))))
+    return lon, lat
+
+
+def _tile_bounds(x, y, zoom):
+    west, north = _tile_to_lonlat(x, y, zoom)
+    east, south = _tile_to_lonlat(x + 1, y + 1, zoom)
+    return [west, south, east, north]
+
+
+def _tile_range_for_bounds(bounds, zoom):
+    west, south, east, north = bounds
+    west = _clamp(west, -180.0, 180.0)
+    east = _clamp(east, -180.0, 180.0)
+    south = _clamp(south, -WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT)
+    north = _clamp(north, -WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT)
+    if east < west:
+        west, east = east, west
+    if north < south:
+        south, north = north, south
+    x_min, y_max = _lonlat_to_tile(west, south, zoom)
+    x_max, y_min = _lonlat_to_tile(east, north, zoom)
+    return min(x_min, x_max), max(x_min, x_max), min(y_min, y_max), max(y_min, y_max)
+
+
+def _envelope_intersects_bounds(envelope, bounds):
+    min_x, max_x, min_y, max_y = envelope
+    west, south, east, north = bounds
+    return not (max_x < west or min_x > east or max_y < south or min_y > north)
+
+
+def _build_bbox_polygon(bounds):
+    from osgeo import ogr
+
+    west, south, east, north = bounds
+    ring = ogr.Geometry(ogr.wkbLinearRing)
+    ring.AddPoint_2D(west, south)
+    ring.AddPoint_2D(east, south)
+    ring.AddPoint_2D(east, north)
+    ring.AddPoint_2D(west, north)
+    ring.AddPoint_2D(west, south)
+    polygon = ogr.Geometry(ogr.wkbPolygon)
+    polygon.AddGeometry(ring)
+    return polygon
+
+
+def _json_safe_property(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_property(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe_property(item) for key, item in value.items()}
+    return str(value)
+
+
+def _normalize_level_rules(level_rules):
+    if not isinstance(level_rules, list):
+        return []
+
+    normalized_rules = []
+    for raw_rule in level_rules:
+        if not isinstance(raw_rule, dict):
+            continue
+
+        raw_values = raw_rule.get("values")
+        if raw_values is None:
+            raw_values = raw_rule.get("levels")
+        if raw_values is None:
+            raw_values = raw_rule.get("value")
+        if raw_values is None:
+            raw_values = raw_rule.get("level")
+
+        if isinstance(raw_values, (list, tuple, set)):
+            values = {str(value).strip() for value in raw_values if str(value).strip()}
+        else:
+            values = {str(raw_values).strip()} if str(raw_values or "").strip() else set()
+        if not values:
+            continue
+
+        min_zoom = normalizeInt(raw_rule.get("minZoom"), 0, 0, 22)
+        max_zoom = normalizeInt(raw_rule.get("maxZoom"), 22, 0, 22)
+        if max_zoom < min_zoom:
+            min_zoom, max_zoom = max_zoom, min_zoom
+
+        normalized_rules.append(
+            {
+                "values": values,
+                "minZoom": min_zoom,
+                "maxZoom": max_zoom,
+            }
+        )
+    return normalized_rules
+
+
+def _feature_allowed_at_zoom(properties, zoom, level_field, level_rules, unmatched_policy):
+    if not level_field or not level_rules:
+        return True
+
+    value = str((properties or {}).get(level_field, "")).strip()
+    for rule in level_rules:
+        if value in rule["values"]:
+            return rule["minZoom"] <= zoom <= rule["maxZoom"]
+    return str(unmatched_policy or "include").strip().lower() != "exclude"
+
+
+def _collect_geojson_features(merged_gpkg_path, layer_names):
+    from osgeo import ogr, osr
+
+    dataset = ogr.Open(merged_gpkg_path)
+    if dataset is None:
+        raise RuntimeError("无法打开中间 GPKG 数据")
+
+    target_srs = osr.SpatialReference()
+    target_srs.ImportFromEPSG(4326)
+    target_srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+
+    features = []
+    bounds = None
+    for layer_name in layer_names:
+        layer = dataset.GetLayerByName(layer_name)
+        if layer is None:
+            continue
+
+        source_srs = layer.GetSpatialRef()
+        transform = None
+        if source_srs is not None:
+            source_srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            if not source_srs.IsSame(target_srs):
+                transform = osr.CoordinateTransformation(source_srs, target_srs)
+
+        layer_defn = layer.GetLayerDefn()
+        field_names = [layer_defn.GetFieldDefn(index).GetName() for index in range(layer_defn.GetFieldCount())]
+        layer.ResetReading()
+        for feature in layer:
+            geometry = feature.GetGeometryRef()
+            if geometry is None or geometry.IsEmpty():
+                continue
+
+            geometry_clone = geometry.Clone()
+            if transform is not None:
+                geometry_clone.Transform(transform)
+            geometry_clone.FlattenTo2D()
+            envelope = geometry_clone.GetEnvelope()
+
+            feature_bounds = [envelope[0], envelope[2], envelope[1], envelope[3]]
+            if bounds is None:
+                bounds = list(feature_bounds)
+            else:
+                bounds = [
+                    min(bounds[0], feature_bounds[0]),
+                    min(bounds[1], feature_bounds[1]),
+                    max(bounds[2], feature_bounds[2]),
+                    max(bounds[3], feature_bounds[3]),
+                ]
+
+            properties = {}
+            for field_name in field_names:
+                value = feature.GetField(field_name)
+                if value is not None:
+                    properties[field_name] = _json_safe_property(value)
+            properties.setdefault("_layer", layer_name)
+
+            features.append(
+                {
+                    "layer": layer_name,
+                    "properties": properties,
+                    "geometry": geometry_clone,
+                    "envelope": envelope,
+                }
+            )
+
+    if not features:
+        raise RuntimeError("未读取到有效矢量要素")
+    return features, bounds
+
+
+def _write_geojson_feature_collection(path, features):
+    payload = {
+        "type": "FeatureCollection",
+        "features": features,
+    }
+    with open(path, "w", encoding="utf-8") as file_obj:
+        json.dump(payload, file_obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def _build_geojson_tiles(merged_gpkg_path, output_path, layer_names, min_zoom, max_zoom, task_id, level_field="", level_rules=None, unmatched_policy="include"):
+    features, bounds = _collect_geojson_features(merged_gpkg_path, layer_names)
+    level_rules = _normalize_level_rules(level_rules)
+    os.makedirs(output_path, exist_ok=True)
+    tile_count = 0
+
+    for zoom in range(min_zoom, max_zoom + 1):
+        _ensure_task_not_stopped(task_id)
+        zoom_features = [
+            feature for feature in features
+            if _feature_allowed_at_zoom(feature.get("properties"), zoom, level_field, level_rules, unmatched_policy)
+        ]
+        if not zoom_features:
+            continue
+
+        x_min, x_max, y_min, y_max = _tile_range_for_bounds(bounds, zoom)
+        for x in range(x_min, x_max + 1):
+            for y in range(y_min, y_max + 1):
+                tile_bounds = _tile_bounds(x, y, zoom)
+                tile_polygon = _build_bbox_polygon(tile_bounds)
+                tile_features = []
+
+                for source_feature in zoom_features:
+                    if not _envelope_intersects_bounds(source_feature["envelope"], tile_bounds):
+                        continue
+                    try:
+                        clipped_geometry = source_feature["geometry"].Intersection(tile_polygon)
+                    except Exception:
+                        clipped_geometry = None
+                    if clipped_geometry is None or clipped_geometry.IsEmpty():
+                        continue
+
+                    tile_features.append(
+                        {
+                            "type": "Feature",
+                            "properties": dict(source_feature["properties"]),
+                            "geometry": json.loads(clipped_geometry.ExportToJson()),
+                        }
+                    )
+
+                if not tile_features:
+                    continue
+
+                tile_dir = os.path.join(output_path, str(zoom), str(x))
+                os.makedirs(tile_dir, exist_ok=True)
+                _write_geojson_feature_collection(os.path.join(tile_dir, f"{y}.geojson"), tile_features)
+                tile_count += 1
+
+        with taskLock:
+            current_task = taskStatus.get(task_id)
+            if current_task:
+                progress = 55 + int(((zoom - min_zoom + 1) / max(1, max_zoom - min_zoom + 1)) * 35)
+                current_task["progress"] = min(90, progress)
+                current_task["message"] = f"正在生成 GeoJSON 瓦片: z{zoom}"
+
+    return {"tileCount": tile_count, "bounds": bounds}
+
+
 def _build_failed_task(task_id, errors):
     timestamp = datetime.now()
     return createTaskRecord(
         task_id=task_id,
         status="failed",
         progress=0,
-        message=f"MVT 任务创建失败: {'; '.join(errors)}",
+        message=f"二维矢量切片任务创建失败: {'; '.join(errors)}",
         start_time=timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         end_time=timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         current_stage="参数校验失败",
@@ -150,23 +431,37 @@ def _build_failed_task(task_id, errors):
 
 def createVectorTiles():
     try:
-        logMessage("收到 MVT 切片创建请求", "INFO")
+        logMessage("收到二维矢量切片创建请求", "INFO")
         data = request.get_json(silent=True)
         if data is None:
             return jsonify({"error": "请求数据为空，无法解析JSON"}), 400
 
-        task_id = f"mvt{int(time.time())}"
+        tile_format = _normalize_vector_tile_format(data.get("tileFormat") or data.get("outputFormat") or data.get("format"))
+        tile_extension = _vector_tile_extension(tile_format)
+        publish_method = _vector_publish_method(tile_format)
+        task_id = f"{tile_format}{int(time.time())}"
         folder_paths = data.get("folderPaths", [])
         file_patterns = data.get("filePatterns")
         output_path_value = data.get("outputPath", [])
         overwrite = _as_bool(data.get("overwrite"), False)
         min_zoom = normalizeInt(data.get("minZoom"), 0, 0, 22)
         max_zoom = normalizeInt(data.get("maxZoom"), 14, 0, 22)
-        dataset_name = _sanitize_layer_name(data.get("datasetName") or data.get("layerName") or "atlasworks_mvt", "atlasworks_mvt")
+        dataset_name = _sanitize_layer_name(data.get("datasetName") or data.get("layerName") or f"atlasworks_{tile_format}", f"atlasworks_{tile_format}")
+        level_field = str(data.get("levelField") or "").strip()
+        level_rules = _normalize_level_rules(data.get("levelRules"))
+        unmatched_policy = str(data.get("unmatchedPolicy") or "include").strip().lower()
+        if unmatched_policy not in {"include", "exclude"}:
+            unmatched_policy = "include"
 
         errors = []
         if not file_patterns:
             errors.append("缺少参数: filePatterns")
+        if tile_format not in VECTOR_TILE_FORMATS:
+            errors.append("tileFormat 仅支持 mvt 或 geojson")
+        if tile_format != "geojson" and (level_field or level_rules):
+            errors.append("levelField/levelRules 目前仅支持 GeoJSON 瓦片输出")
+        if level_rules and not level_field:
+            errors.append("传入 levelRules 时必须指定 levelField")
         if max_zoom < min_zoom:
             errors.append("maxZoom 不能小于 minZoom")
 
@@ -178,15 +473,15 @@ def createVectorTiles():
                 allowedExtensions=SUPPORTED_VECTOR_EXTENSIONS,
             )
             if not relative_source_files:
-                errors.append("未找到匹配的矢量文件（支持 .geojson/.shp/.gpkg）")
+                errors.append("未找到匹配的矢量文件（支持 .geojson/.json/.shp/.gpkg）")
 
-        output_path, output_path_array, output_auto_generated = resolveTilesOutputPath(output_path_value, "mvt")
+        output_path, output_path_array, output_auto_generated = resolveTilesOutputPath(output_path_value, tile_format)
         os.makedirs(output_path, exist_ok=True)
         if output_auto_generated:
-            logMessage(f"未传 outputPath，已自动生成 MVT 输出目录: {output_path}")
+            logMessage(f"未传 outputPath，已自动生成二维矢量输出目录: {output_path}")
 
         if os.path.abspath(output_path) == os.path.abspath(config["tilesDir"]):
-            errors.append("禁止直接把 MVT 输出到 tiles 根目录")
+            errors.append("禁止直接把二维矢量切片输出到 tiles 根目录")
         elif os.path.isdir(output_path) and os.listdir(output_path) and not overwrite:
             errors.append("outputPath 已存在且非空，如需覆盖请传 overwrite=true")
 
@@ -198,7 +493,7 @@ def createVectorTiles():
                     {
                         "success": False,
                         "taskId": task_id,
-                        "message": f"MVT 任务创建失败: {'; '.join(errors)}",
+                        "message": f"二维矢量切片任务创建失败: {'; '.join(errors)}",
                         "statusUrl": f"/api/tasks/{task_id}",
                         "errors": errors,
                     }
@@ -223,12 +518,13 @@ def createVectorTiles():
         def run_vector_tile_task():
             temp_dir = None
             try:
+                format_label = "GeoJSON" if tile_format == "geojson" else "MVT"
                 with taskLock:
                     taskStatus[task_id] = createTaskRecord(
                         task_id=task_id,
                         status="running",
                         progress=0,
-                        message=f"开始生成 MVT，共 {len(source_files)} 个源文件",
+                        message=f"开始生成 {format_label} 矢量瓦片，共 {len(source_files)} 个源文件",
                         start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         current_stage="准备数据",
                         process_log=[
@@ -244,8 +540,8 @@ def createVectorTiles():
                     )
 
                 _ensure_task_not_stopped(task_id)
-                temp_dir = tempfile.mkdtemp(prefix=f"atlasworks-mvt-{task_id}-")
-                staging_output_path = os.path.join(temp_dir, "mvt_output")
+                temp_dir = tempfile.mkdtemp(prefix=f"atlasworks-vector-{task_id}-")
+                staging_output_path = os.path.join(temp_dir, f"{tile_format}_output")
                 merged_gpkg_path = os.path.join(temp_dir, "source_layers.gpkg")
                 layer_names = []
                 used_layer_names = set()
@@ -304,41 +600,56 @@ def createVectorTiles():
                     if not current_task:
                         return
                     current_task["progress"] = 55
-                    current_task["message"] = "正在生成 MVT 目录切片"
-                    current_task["currentStage"] = "生成 MVT"
-                    appendTaskLog(current_task, "MVT 生成", "running", "开始执行 ogr2ogr MVT 输出", 55)
+                    current_task["message"] = f"正在生成 {format_label} 目录切片"
+                    current_task["currentStage"] = f"生成 {format_label}"
+                    appendTaskLog(current_task, f"{format_label} 生成", "running", f"开始生成 {format_label} 输出", 55)
 
-                build_command = [
-                    "ogr2ogr",
-                    "-f",
-                    "MVT",
-                    staging_output_path,
-                    merged_gpkg_path,
-                    "-dsco",
-                    "FORMAT=DIRECTORY",
-                    "-dsco",
-                    f"MINZOOM={min_zoom}",
-                    "-dsco",
-                    f"MAXZOOM={max_zoom}",
-                    "-dsco",
-                    f"NAME={dataset_name}",
-                ]
-                build_result = runCommandWithProcessTracking(build_command, task_id)
-                if not build_result.get("success"):
-                    if _task_was_stopped(task_id):
-                        raise RuntimeError("任务已停止")
-                    raise RuntimeError(build_result.get("stderr") or build_result.get("error") or "生成 MVT 失败")
+                generated_bounds = None
+                if tile_format == "mvt":
+                    build_command = [
+                        "ogr2ogr",
+                        "-f",
+                        "MVT",
+                        staging_output_path,
+                        merged_gpkg_path,
+                        "-dsco",
+                        "FORMAT=DIRECTORY",
+                        "-dsco",
+                        f"MINZOOM={min_zoom}",
+                        "-dsco",
+                        f"MAXZOOM={max_zoom}",
+                        "-dsco",
+                        f"NAME={dataset_name}",
+                    ]
+                    build_result = runCommandWithProcessTracking(build_command, task_id)
+                    if not build_result.get("success"):
+                        if _task_was_stopped(task_id):
+                            raise RuntimeError("任务已停止")
+                        raise RuntimeError(build_result.get("stderr") or build_result.get("error") or "生成 MVT 失败")
+                else:
+                    geojson_result = _build_geojson_tiles(
+                        merged_gpkg_path,
+                        staging_output_path,
+                        layer_names,
+                        min_zoom,
+                        max_zoom,
+                        task_id,
+                        level_field=level_field,
+                        level_rules=level_rules,
+                        unmatched_policy=unmatched_policy,
+                    )
+                    generated_bounds = geojson_result.get("bounds")
 
                 _ensure_task_not_stopped(task_id)
-                tile_count = _count_vector_tiles(staging_output_path)
+                tile_count = _count_vector_tiles(staging_output_path, tile_extension)
                 if tile_count <= 0:
-                    raise RuntimeError("MVT 输出目录中未生成任何 .pbf 瓦片")
+                    raise RuntimeError(f"{format_label} 输出目录中未生成任何 {tile_extension} 瓦片")
 
                 if overwrite:
                     _clear_directory(output_path)
                 shutil.copytree(staging_output_path, output_path, dirs_exist_ok=True)
-                sample_tile = _find_sample_tile(output_path)
-                tileset_metadata_path = _write_tileset_metadata(output_path, dataset_name, layer_names, min_zoom, max_zoom)
+                sample_tile = _find_sample_tile(output_path, tile_extension)
+                tileset_metadata_path = _write_tileset_metadata(output_path, dataset_name, layer_names, min_zoom, max_zoom, bounds=generated_bounds, tile_format=tile_format)
 
                 with taskLock:
                     current_task = taskStatus.get(task_id, {})
@@ -348,7 +659,7 @@ def createVectorTiles():
                         task_id=task_id,
                         status="completed",
                         progress=100,
-                        message=f"MVT 切片完成，共生成 {tile_count} 个矢量瓦片",
+                        message=f"{format_label} 切片完成，共生成 {tile_count} 个矢量瓦片",
                         start_time=start_time,
                         end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         current_stage="已完成",
@@ -363,8 +674,17 @@ def createVectorTiles():
                             "sampleTile": sample_tile,
                             "sourceFiles": [item["relativePath"] for item in source_files],
                             "tilesetFile": tileset_metadata_path,
-                            "method": "mvt-static",
-                            "publishHints": {"publishType": "geo", "publishMethod": "mvt"},
+                            "format": tile_format,
+                            "tileExtension": tile_extension,
+                            "bounds": generated_bounds,
+                            "levelField": level_field or None,
+                            "levelRules": [
+                                {"values": sorted(rule["values"]), "minZoom": rule["minZoom"], "maxZoom": rule["maxZoom"]}
+                                for rule in level_rules
+                            ],
+                            "unmatchedPolicy": unmatched_policy,
+                            "method": f"{tile_format}-static",
+                            "publishHints": {"publishType": "vector", "publishMethod": publish_method},
                         },
                         stats={
                             "totalTiles": tile_count,
@@ -380,7 +700,7 @@ def createVectorTiles():
                         taskStatus[task_id],
                         "任务完成",
                         "completed",
-                        f"MVT 切片任务完成，生成 {tile_count} 个 .pbf 瓦片",
+                        f"{format_label} 切片任务完成，生成 {tile_count} 个 {tile_extension} 瓦片",
                         100,
                         outputPath=output_path,
                         layers=layer_names,
@@ -390,24 +710,32 @@ def createVectorTiles():
                     task_id,
                     source_files=[item["relativePath"] for item in source_files],
                     build_parameters={
-                        "jobType": "mvt_tiles",
+                        "jobType": "geojson_tiles" if tile_format == "geojson" else "mvt_tiles",
                         "outputPath": output_path_array,
                         "minZoom": min_zoom,
                         "maxZoom": max_zoom,
                         "datasetName": dataset_name,
+                        "tileFormat": tile_format,
+                        "levelField": level_field or None,
+                        "levelRules": [
+                            {"values": sorted(rule["values"]), "minZoom": rule["minZoom"], "maxZoom": rule["maxZoom"]}
+                            for rule in level_rules
+                        ],
+                        "unmatchedPolicy": unmatched_policy,
                         "overwrite": overwrite,
                     },
                 )
-                logMessage(f"MVT 切片任务完成: {task_id}", "INFO")
+                logMessage(f"{format_label} 切片任务完成: {task_id}", "INFO")
             except Exception as exc:
                 stopped = str(exc) == "任务已停止"
+                failure_label = "GeoJSON" if tile_format == "geojson" else "MVT"
                 with taskLock:
                     current_task = taskStatus.get(task_id, {})
                     taskStatus[task_id] = createTaskRecord(
                         task_id=task_id,
                         status="stopped" if stopped else "failed",
                         progress=current_task.get("progress", 0),
-                        message="MVT 切片任务已停止" if stopped else f"MVT 切片失败: {exc}",
+                        message=f"{failure_label} 切片任务已停止" if stopped else f"{failure_label} 切片失败: {exc}",
                         start_time=current_task.get("startTime", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                         end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         current_stage="已停止" if stopped else "失败",
@@ -424,7 +752,7 @@ def createVectorTiles():
                         "任务已停止" if stopped else str(exc),
                         current_task.get("progress", 0),
                     )
-                logMessage(f"MVT 切片任务{'停止' if stopped else '失败'}: {task_id} - {exc}", "WARNING" if stopped else "ERROR")
+                logMessage(f"{failure_label} 切片任务{'停止' if stopped else '失败'}: {task_id} - {exc}", "WARNING" if stopped else "ERROR")
             finally:
                 if temp_dir and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -441,18 +769,24 @@ def createVectorTiles():
                 "success": True,
                 "taskId": task_id,
                 "status": "running",
-                "message": f"MVT 切片任务已启动，识别到 {len(source_files)} 个源文件",
+                "message": f"二维矢量切片任务已启动，识别到 {len(source_files)} 个源文件",
                 "statusUrl": f"/api/tasks/{task_id}",
                 "parameters": {
                     "totalFiles": len(source_files),
                     "outputPath": output_path_array,
                     "zoomRange": f"{min_zoom}-{max_zoom}",
                     "datasetName": dataset_name,
-                    "type": "mvt",
+                    "type": tile_format,
+                    "publishMethod": publish_method,
+                    "levelField": level_field or None,
+                    "levelRules": [
+                        {"values": sorted(rule["values"]), "minZoom": rule["minZoom"], "maxZoom": rule["maxZoom"]}
+                        for rule in level_rules
+                    ],
                     "overwrite": overwrite,
                 },
             }
         )
     except Exception as exc:
-        logMessage(f"创建 MVT 切片任务失败: {exc}", "ERROR")
+        logMessage(f"创建二维矢量切片任务失败: {exc}", "ERROR")
         return jsonify({"error": str(exc)}), 500

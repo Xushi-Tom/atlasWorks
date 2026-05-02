@@ -264,6 +264,10 @@ class AtlasWorksApi {
         return this.post('/api/tile/3dtiles', params);
     }
 
+    async createVectorTiles(params) {
+        return this.post('/api/tile/mvt', params);
+    }
+
     async recommendConfig(params) {
         return this.post('/api/config/recommend', params);
     }

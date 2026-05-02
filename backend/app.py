@@ -50,6 +50,16 @@ CORS(
             "methods": ["GET", "HEAD", "OPTIONS"],
             "allow_headers": ["Content-Type", "Authorization", "Range"],
         },
+        r"/publication-assets": {
+            "origins": "*",
+            "methods": ["GET", "HEAD", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization", "Range"],
+        },
+        r"/publication-assets/.*": {
+            "origins": "*",
+            "methods": ["GET", "HEAD", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization", "Range"],
+        },
         r"/wmts": {
             "origins": "*",
             "methods": ["GET", "HEAD", "OPTIONS"],

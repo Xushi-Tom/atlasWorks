@@ -595,8 +595,8 @@ _OPERATION_OVERRIDES = {
         },
     },
     ("/api/tile/mvt", "post"): {
-        "summary": "创建 MVT 矢量切片任务",
-        "description": "输入支持 .geojson/.shp/.gpkg，输出为静态 .pbf 目录结构。",
+        "summary": "创建二维矢量切片任务",
+        "description": "输入支持 .geojson/.json/.shp/.gpkg，输出为静态 MVT(.pbf) 或 GeoJSON 瓦片目录结构。GeoJSON 瓦片可选 levelField + levelRules，按用户指定字段在不同 zoom 上筛选要素；不传 levelField 时不做行政区层级过滤。",
         "requestBody": {
             "required": True,
             "content": {
@@ -612,6 +612,28 @@ _OPERATION_OVERRIDES = {
                                 "minZoom": 0,
                                 "maxZoom": 14,
                                 "datasetName": "atlasworks_buildings",
+                                "tileFormat": "mvt",
+                                "overwrite": False,
+                            },
+                        },
+                        "geojson_level_rules": {
+                            "summary": "GeoJSON 瓦片按自定义层级字段过滤",
+                            "value": {
+                                "folderPaths": ["admin-demo"],
+                                "filePatterns": ["admin_multilevel.geojson"],
+                                "outputPath": "admin-demo/geojson-tiles",
+                                "minZoom": 0,
+                                "maxZoom": 8,
+                                "datasetName": "admin_demo",
+                                "tileFormat": "geojson",
+                                "levelField": "level",
+                                "levelRules": [
+                                    {"values": ["country"], "minZoom": 0, "maxZoom": 2},
+                                    {"values": ["province"], "minZoom": 3, "maxZoom": 4},
+                                    {"values": ["city"], "minZoom": 5, "maxZoom": 6},
+                                    {"values": ["district"], "minZoom": 7, "maxZoom": 8},
+                                ],
+                                "unmatchedPolicy": "include",
                                 "overwrite": False,
                             },
                         }
@@ -910,7 +932,7 @@ _OPERATION_OVERRIDES = {
             {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码"},
             {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 10, "minimum": 1, "maximum": 200}, "description": "每页条数"},
             {"name": "keyword", "in": "query", "schema": {"type": "string"}, "description": "按发布 ID、别名、路径、任务和发布方式模糊搜索"},
-            {"name": "publishType", "in": "query", "schema": {"type": "string", "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "geo"]}, "description": "按发布类型过滤"},
+            {"name": "publishType", "in": "query", "schema": {"type": "string", "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "vector"]}, "description": "按发布类型过滤"},
             {"name": "status", "in": "query", "schema": {"$ref": "#/components/schemas/PublicationStatus"}, "description": "按发布状态过滤"},
         ],
         "responses": {
@@ -1378,8 +1400,8 @@ _PATH_DOCS = {
         "description": "创建基于空间索引的地图切片异步任务，支持网络源文件和多进程。",
     },
     "/api/tile/mvt": {
-        "summary": "创建 MVT 矢量切片任务",
-        "description": "创建静态 MVT 目录切片任务，支持 GeoJSON、SHP、GPKG 输入。",
+        "summary": "创建二维矢量切片任务",
+        "description": "创建静态二维矢量瓦片目录，支持 MVT(.pbf) 与 GeoJSON 瓦片输出。",
     },
     "/api/tile/convert": {
         "summary": "瓦片结构转换",
@@ -2174,8 +2196,24 @@ def _openapi_spec():
                         "outputPath": {"type": "string", "description": "输出目录；不传时自动生成。"},
                         "minZoom": {"type": "integer", "minimum": 0, "maximum": 22},
                         "maxZoom": {"type": "integer", "minimum": 0, "maximum": 22},
-                        "datasetName": {"type": "string", "description": "MVT 数据集名称。"},
+                        "datasetName": {"type": "string", "description": "矢量瓦片数据集名称。"},
                         "layerName": {"type": "string", "description": "兼容 datasetName 的别名字段。"},
+                        "tileFormat": {"type": "string", "enum": ["mvt", "geojson"], "description": "输出格式，mvt 生成 .pbf，geojson 生成 .geojson 瓦片。"},
+                        "levelField": {"type": "string", "description": "GeoJSON 瓦片可选层级字段名；留空时不按行政区或层级字段过滤。"},
+                        "levelRules": {
+                            "type": "array",
+                            "description": "GeoJSON 瓦片可选 zoom 过滤规则。仅在 levelField 非空时生效。",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "values": {"type": "array", "items": {"type": "string"}, "description": "该规则匹配的字段值。"},
+                                    "minZoom": {"type": "integer", "minimum": 0, "maximum": 22},
+                                    "maxZoom": {"type": "integer", "minimum": 0, "maximum": 22},
+                                },
+                                "required": ["values", "minZoom", "maxZoom"],
+                            },
+                        },
+                        "unmatchedPolicy": {"type": "string", "enum": ["include", "exclude"], "description": "GeoJSON 瓦片中没有匹配 levelRules 的要素处理方式，默认 include。"},
                         "overwrite": {"type": "boolean", "description": "outputPath 已存在时是否覆盖。"},
                     },
                     "required": ["filePatterns"],
@@ -2456,13 +2494,13 @@ def _openapi_spec():
                         },
                         "publishType": {
                             "type": "string",
-                            "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "geo"],
+                            "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "vector"],
                             "description": "发布类型，对应前端“发布类型”。",
                             "example": "imagery",
                         },
                         "publishMethod": {
                             "type": "string",
-                            "enum": ["xyz", "tms", "wmts", "mvt", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
+                            "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
                             "description": "发布方式，对应前端“发布方式”。",
                             "example": "wmts",
                         },
@@ -2507,11 +2545,11 @@ def _openapi_spec():
                 },
                 "PublicationPublishType": {
                     "type": "string",
-                    "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "geo"],
+                    "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "vector"],
                 },
                 "PublicationPublishMethod": {
                     "type": "string",
-                    "enum": ["xyz", "tms", "wmts", "mvt", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
+                    "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
                 },
                 "PublicationVisibility": {
                     "type": "string",

@@ -9,6 +9,7 @@ import { pushToast, useToastState } from './composables/useToast';
 import DashboardView from './views/DashboardView.vue';
 import DatasourceView from './views/DatasourceView.vue';
 import MapTilesView from './views/MapTilesView.vue';
+import VectorTilesView from './views/VectorTilesView.vue';
 import TerrainTilesView from './views/TerrainTilesView.vue';
 import Tiles3DView from './views/Tiles3DView.vue';
 import WorkspaceView from './views/WorkspaceView.vue';
@@ -43,6 +44,7 @@ const eggError = ref('');
 let clockTimer = null;
 const WINDOW_MIN_WIDTH = 520;
 const WINDOW_MIN_HEIGHT = 360;
+const DESKTOP_SHORTCUT_LANE_WIDTH = 150;
 const resizeHandleDirections = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'];
 
 const dragState = ref({
@@ -94,6 +96,7 @@ const desktopApps = [
     { section: 'dashboard', label: '系统仪表盘', subtitle: '平台状态总览', token: 'DB', tone: 'violet' },
     { section: 'datasource', label: '数据源管理', subtitle: '目录与接入', token: 'DS', tone: 'teal' },
     { section: 'map-tiles', label: '地图切片', subtitle: '二维生产工位', token: 'MP', tone: 'amber' },
+    { section: 'vector-tiles', label: '二维矢量切片', subtitle: '矢量生产工位', token: 'VT', tone: 'teal' },
     { section: 'terrain-tiles', label: '地形切片', subtitle: '地形生产工位', token: 'TR', tone: 'emerald' },
     { section: 'tiles-3d', label: '3D Tiles', subtitle: '三维生产工位', token: '3D', tone: 'indigo' },
     { section: 'workspace', label: '工作空间', subtitle: '产物目录管理', token: 'WS', tone: 'cyan' },
@@ -119,7 +122,7 @@ const desktopApps = [
 const startMenuSections = [
     { key: 'overview', title: '总览', sections: ['dashboard'] },
     { key: 'data', title: '数据管理', sections: ['datasource', 'workspace'] },
-    { key: 'processing', title: '数据处理', sections: ['map-tiles', 'terrain-tiles', 'tiles-3d'] },
+    { key: 'processing', title: '数据处理', sections: ['map-tiles', 'vector-tiles', 'terrain-tiles', 'tiles-3d'] },
     { key: 'flow', title: '流程管理', sections: ['publish', 'tasks'] },
     { key: 'analysis', title: '分析工具', sections: ['tool-nodata', 'tool-layer-json', 'tool-terrain-decompress', 'tool-preflight', 'tool-tile-converter', 'tool-split', 'tool-artifacts'] },
     { key: 'platform', title: '平台能力', sections: ['system-updates', 'system-routes', 'system-config'] }
@@ -133,6 +136,7 @@ const desktopShortcuts = [
     'publish',
     'tiles-3d',
     'terrain-tiles',
+    'vector-tiles',
     'map-tiles',
     'workspace'
 ];
@@ -141,6 +145,7 @@ const viewMap = {
     dashboard: DashboardView,
     datasource: DatasourceView,
     'map-tiles': MapTilesView,
+    'vector-tiles': VectorTilesView,
     'terrain-tiles': TerrainTilesView,
     'tiles-3d': Tiles3DView,
     workspace: WorkspaceView,
@@ -227,7 +232,7 @@ function getViewProps(section) {
             }
         };
     }
-    if (section === 'map-tiles' || section === 'terrain-tiles' || section === 'tiles-3d') {
+    if (section === 'map-tiles' || section === 'vector-tiles' || section === 'terrain-tiles' || section === 'tiles-3d') {
         return {
             onNavigate: navigateFromView
         };
@@ -311,7 +316,7 @@ function openWindow(section, subsection = '') {
         section,
         title: meta.label,
         subtitle: meta.subtitle,
-        x: 28 + (index % 5) * 34,
+        x: DESKTOP_SHORTCUT_LANE_WIDTH + (index % 5) * 34,
         y: 24 + (index % 4) * 28,
         width: Math.min(1200, viewWidth),
         height: Math.min(820, viewHeight),

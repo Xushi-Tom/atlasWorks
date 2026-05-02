@@ -55,6 +55,10 @@ const publishMethodCatalog = {
     ],
     '3dtiles': [
         { value: '3d-tiles', label: '3D Tiles 服务' }
+    ],
+    vector: [
+        { value: 'mvt', label: 'MVT 矢量瓦片' },
+        { value: 'geojson-tile', label: 'GeoJSON 瓦片' }
     ]
 };
 
@@ -62,7 +66,8 @@ const publishTypeLabelMap = {
     imagery: '地图 / 遥感',
     'electronic-map': '地图 / 电子地图',
     terrain: '地形',
-    '3dtiles': '3DTiles'
+    '3dtiles': '3DTiles',
+    vector: '二维矢量'
 };
 
 const visibilityLabelMap = {
@@ -277,7 +282,17 @@ watch(() => form.sourceMode, value => {
 
 watch(() => form.taskId, value => {
     const task = publishableTasks.value.find(item => item.taskId === value);
-    if (!task || form.alias) return;
+    if (!task) return;
+    const publishHints = task.result?.publishHints || {};
+    const hintedPublishType = publishHints.publishType === 'geo' ? 'vector' : publishHints.publishType;
+    if (hintedPublishType && publishMethodCatalog[hintedPublishType]) {
+        form.publishType = hintedPublishType;
+    }
+    const methodOptions = publishMethodCatalog[form.publishType] || [];
+    if (publishHints.publishMethod && methodOptions.some(item => item.value === publishHints.publishMethod)) {
+        form.publishMethod = publishHints.publishMethod;
+    }
+    if (form.alias) return;
     const path = getTaskResultPath(task);
     const pathParts = String(path || '').split('/').filter(Boolean);
     form.alias = pathParts[pathParts.length - 1] || task.taskId;
@@ -534,6 +549,7 @@ onBeforeUnmount(() => {
                         <el-option label="地图 / 电子地图" value="electronic-map" />
                         <el-option label="地形" value="terrain" />
                         <el-option label="3DTiles" value="3dtiles" />
+                        <el-option label="二维矢量" value="vector" />
                     </el-select>
                 </el-form-item>
 

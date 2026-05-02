@@ -41,6 +41,7 @@ def _artifact_type_for(job_type):
         "indexed_tiles": "xyz_tiles",
         "map_tiles": "xyz_tiles",
         "mvt_tiles": "vector_tiles",
+        "geojson_tiles": "vector_tiles",
         "vector_tiles": "vector_tiles",
         "tile_convert": "xyz_tiles",
         "3dtiles": "3dtiles",
@@ -59,6 +60,8 @@ def _output_format_for(job_type, task_snapshot):
         return "quantized-mesh"
     if normalized in ("mvt_tiles", "vector_tiles", "mvt"):
         return "mvt"
+    if normalized in ("geojson_tiles", "geojson", "geojson-tile"):
+        return "geojson"
     if normalized in {"3dtiles", "3dtiles-pointcloud", "3dtiles-vector", "3dtiles-model", "3dtiles-osgb"}:
         return "3d-tiles"
     render_options = result.get("renderOptions", {})

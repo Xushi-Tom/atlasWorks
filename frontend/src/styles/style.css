@@ -59,6 +59,11 @@ body.tf-app::after {
     z-index: 0;
 }
 
+body.tf-app > [id^="desktop_ai_web_reader"],
+body.tf-app > [id*="desktop_ai_web_reader"] {
+    pointer-events: none !important;
+}
+
 .tf-app *,
 .tf-app *::before,
 .tf-app *::after {

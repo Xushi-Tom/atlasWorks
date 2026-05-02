@@ -15,6 +15,7 @@ const primaryItems = [
     { id: 'dashboard', label: '仪表盘', tag: 'DB' },
     { id: 'datasource', label: '数据源管理', tag: 'DS' },
     { id: 'map-tiles', label: '地图切片', tag: 'MP' },
+    { id: 'vector-tiles', label: '二维矢量切片', tag: 'VT' },
     { id: 'terrain-tiles', label: '地形切片', tag: 'TR' },
     { id: 'tiles-3d', label: '3D Tiles', tag: '3D' },
     { id: 'workspace', label: '工作空间', tag: 'WS' },
