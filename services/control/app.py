@@ -17,12 +17,12 @@ from utils import logMessage
 
 
 def _resolve_static_folder():
-    base_dir = os.path.abspath(os.path.dirname(__file__))
     configured_static_dir = str(os.environ.get("ATLASWORKS_STATIC_DIR", "")).strip()
     candidate_dirs = [
         configured_static_dir,
-        os.path.join(base_dir, "static"),
-        os.path.abspath(os.path.join(base_dir, "..", "frontend", "dist")),
+        "/app/frontend",
+        "/app/static",
+        os.path.abspath(os.path.join(os.getcwd(), "frontend", "dist")),
     ]
 
     for candidate in candidate_dirs:
@@ -157,7 +157,7 @@ registerRoutes(app)
 
 if __name__ == "__main__":
     bootstrapApplication()
-    logMessage("AtlasWorks瓦片服务启动 - 模块化架构")
+    logMessage("AtlasWorks 控制面启动")
     logMessage(f"数据源目录: {config['dataSourceDir']}")
     logMessage(f"瓦片目录: {config['tilesDir']}")
     logMessage(f"日志目录: {config['logDir']}")
@@ -165,10 +165,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", config.get("port", 18000)))
     host = os.environ.get("HOST", config.get("host", "0.0.0.0"))
     debug = config.get("debug", False)
-
-    print("AtlasWorks服务启动中...")
-    print(f"监听地址: http://{host}:{port}")
-    print(f"调试模式: {debug}")
-    print(f"工作目录: {os.getcwd()}")
-    print("=" * 50)
     app.run(host=host, port=port, debug=debug, threaded=True)

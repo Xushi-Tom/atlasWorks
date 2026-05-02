@@ -46,7 +46,7 @@ def _bootstrap_publisher():
     os.makedirs(config["logDir"], exist_ok=True)
     os.makedirs(config["tilesDir"], exist_ok=True)
     initializeDatabase()
-    logMessage("AtlasWorks publisher 启动", "INFO")
+    logMessage("AtlasWorks 发布服务启动", "INFO")
 
 
 def _handle_publications():
@@ -84,7 +84,7 @@ def normalize_api_json_responses(response):
             return response
         return build_json_response(payload, response)
     except Exception as exc:
-        logMessage(f"publisher 响应封装失败: {exc}", "WARNING")
+        logMessage(f"发布服务响应封装失败: {exc}", "WARNING")
         return response
 
 

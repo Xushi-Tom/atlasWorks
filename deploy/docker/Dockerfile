@@ -15,6 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
     PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn \
+    PYTHONPATH=/app/backend:/app/services/control:/app/services/publisher:/app/services/tiling \
     LD_LIBRARY_PATH=/usr/local/lib \
     TZ=Asia/Shanghai
 
@@ -98,13 +99,14 @@ WORKDIR /app
 RUN mkdir -p /app/dataSource /app/tiles /app/log /app/logs \
     && chmod -R 777 /app
 
-COPY backend/ /app/
-COPY frontend/dist/ /app/static/
+COPY backend/ /app/backend/
+COPY services/ /app/services/
+COPY frontend/dist/ /app/frontend/
 COPY deploy/docker/entrypoint.sh /entrypoint.sh
 
 RUN sed -i 's/\r$//' /entrypoint.sh \
-    && chmod +x /app/app.py /entrypoint.sh \
-    && python3 -m py_compile /app/*.py \
+    && chmod +x /entrypoint.sh \
+    && python3 -m compileall -q /app/backend /app/services \
     && python3 -c "import flask, flask_cors, psutil, psycopg2, requests, lxml, laspy, trimesh; from osgeo import ogr; print('python-imports:ok')" \
     && ctb-tile --version >/tmp/ctb-version.txt \
     && gdalinfo --version >/tmp/gdal-version.txt \

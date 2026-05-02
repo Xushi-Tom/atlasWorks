@@ -17,7 +17,7 @@ _RUNNING = True
 def _handle_shutdown(signum, frame):
     global _RUNNING
     _RUNNING = False
-    logMessage(f"worker 收到退出信号: {signum}", "INFO")
+    logMessage(f"切片 worker 收到退出信号: {signum}", "INFO")
 
 
 def _dispatch_job(job):
@@ -31,7 +31,7 @@ def _dispatch_job(job):
         runVectorTileTask(task_id, payload)
         return True
 
-    logMessage(f"worker 当前镜像尚未接入该任务类型: {job_type}", "WARNING")
+    logMessage(f"切片 worker 当前尚未接入该任务类型: {job_type}", "WARNING")
     return False
 
 
@@ -53,7 +53,7 @@ def main():
         raise RuntimeError("worker 模式需要启用 TF_DB_ENABLED=1")
 
     reconcileInterruptedTasks()
-    logMessage(f"AtlasWorks worker 启动: {worker_id}, jobTypes={','.join(job_types) or '*'}", "INFO")
+    logMessage(f"AtlasWorks 切片 worker 启动: {worker_id}, jobTypes={','.join(job_types) or '*'}", "INFO")
 
     while _RUNNING:
         job = claimQueuedBuildJob(worker_id, job_types=job_types)
@@ -61,10 +61,10 @@ def main():
             time.sleep(poll_interval)
             continue
 
-        logMessage(f"worker 领取任务: {job.get('taskId')} ({job.get('jobType')})", "INFO")
+        logMessage(f"切片 worker 领取任务: {job.get('taskId')} ({job.get('jobType')})", "INFO")
         _dispatch_job(job)
 
-    logMessage("AtlasWorks worker 已退出", "INFO")
+    logMessage("AtlasWorks 切片 worker 已退出", "INFO")
 
 
 if __name__ == "__main__":
