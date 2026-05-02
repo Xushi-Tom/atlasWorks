@@ -16,6 +16,7 @@ from flask import jsonify, request
 from artifacts import finalizeTaskArtifact
 from config import config, taskLock, taskProcesses, taskStatus
 from dataSourceOps import findSourceFilesInFolders
+from db import enqueueBuildJob, fetchTaskSnapshot, isDatabaseEnabled, syncTaskSnapshot
 from taskState import appendTaskLog, createTaskRecord
 from utils import logMessage, normalizeInt, resolveTilesOutputPath, runCommandWithProcessTracking
 
@@ -55,7 +56,17 @@ def _dedupe_layer_name(value, used_names):
 
 def _task_was_stopped(task_id):
     with taskLock:
-        return str(taskStatus.get(task_id, {}).get("status", "")).lower() == "stopped"
+        if str(taskStatus.get(task_id, {}).get("status", "")).lower() == "stopped":
+            return True
+
+    persisted_task = fetchTaskSnapshot(task_id)
+    if str((persisted_task or {}).get("status", "")).lower() == "stopped":
+        with taskLock:
+            if task_id in taskStatus:
+                taskStatus[task_id]["status"] = "stopped"
+                taskStatus[task_id]["message"] = "任务已停止"
+        return True
+    return False
 
 
 def _ensure_task_not_stopped(task_id):
@@ -429,6 +440,312 @@ def _build_failed_task(task_id, errors):
     )
 
 
+def _sync_vector_task_snapshot(task_id):
+    with taskLock:
+        snapshot = taskStatus.get(task_id)
+        if not snapshot:
+            return
+        try:
+            snapshot = json.loads(json.dumps(snapshot, ensure_ascii=False, default=str))
+        except Exception:
+            snapshot = dict(snapshot)
+    if str(snapshot.get("status", "")).lower() not in {"completed", "failed", "stopped"}:
+        persisted_task = fetchTaskSnapshot(task_id)
+        if str((persisted_task or {}).get("status", "")).lower() == "stopped":
+            with taskLock:
+                if task_id in taskStatus:
+                    taskStatus[task_id]["status"] = "stopped"
+                    taskStatus[task_id]["message"] = "任务已停止"
+            return
+    syncTaskSnapshot(task_id, snapshot)
+
+
+def runVectorTileTask(task_id, task_payload):
+    tile_format = _normalize_vector_tile_format(task_payload.get("tileFormat"))
+    tile_extension = _vector_tile_extension(tile_format)
+    publish_method = _vector_publish_method(tile_format)
+    source_files = task_payload.get("sourceFiles") or []
+    output_path = task_payload.get("outputPath")
+    output_path_array = task_payload.get("outputPathArray")
+    overwrite = _as_bool(task_payload.get("overwrite"), False)
+    min_zoom = normalizeInt(task_payload.get("minZoom"), 0, 0, 22)
+    max_zoom = normalizeInt(task_payload.get("maxZoom"), 14, 0, 22)
+    dataset_name = _sanitize_layer_name(
+        task_payload.get("datasetName") or f"atlasworks_{tile_format}",
+        f"atlasworks_{tile_format}",
+    )
+    level_field = str(task_payload.get("levelField") or "").strip()
+    level_rules = _normalize_level_rules(task_payload.get("levelRules"))
+    unmatched_policy = str(task_payload.get("unmatchedPolicy") or "include").strip().lower()
+    if unmatched_policy not in {"include", "exclude"}:
+        unmatched_policy = "include"
+
+    temp_dir = None
+    try:
+        format_label = "GeoJSON" if tile_format == "geojson" else "MVT"
+        with taskLock:
+            existing_log = taskStatus.get(task_id, {}).get("processLog", [])
+            taskStatus[task_id] = createTaskRecord(
+                task_id=task_id,
+                status="running",
+                progress=0,
+                message=f"开始生成 {format_label} 矢量瓦片，共 {len(source_files)} 个源文件",
+                start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                current_stage="准备数据",
+                process_log=existing_log
+                or [
+                    {
+                        "stage": "任务创建",
+                        "status": "completed",
+                        "message": f"任务初始化完成，识别到 {len(source_files)} 个矢量源文件",
+                        "timestamp": datetime.now().isoformat(),
+                        "progress": 0,
+                    }
+                ],
+                files={"total": len(source_files), "completed": 0, "failed": 0, "current": None},
+                extra={
+                    "jobType": "geojson_tiles" if tile_format == "geojson" else "mvt_tiles",
+                    "workerId": task_payload.get("workerId"),
+                },
+            )
+        _sync_vector_task_snapshot(task_id)
+
+        _ensure_task_not_stopped(task_id)
+        temp_dir = tempfile.mkdtemp(prefix=f"atlasworks-vector-{task_id}-")
+        staging_output_path = os.path.join(temp_dir, f"{tile_format}_output")
+        merged_gpkg_path = os.path.join(temp_dir, "source_layers.gpkg")
+        layer_names = []
+        used_layer_names = set()
+
+        for index, file_info in enumerate(source_files):
+            _ensure_task_not_stopped(task_id)
+            source_layer_name = _dedupe_layer_name(os.path.splitext(file_info["filename"])[0], used_layer_names)
+            layer_names.append(source_layer_name)
+
+            with taskLock:
+                current_task = taskStatus.get(task_id)
+                if not current_task:
+                    return
+                current_task["files"]["current"] = file_info["filename"]
+                current_task["message"] = f"正在导入矢量源 {index + 1}/{len(source_files)}: {file_info['filename']}"
+                current_task["currentStage"] = "准备数据"
+            _sync_vector_task_snapshot(task_id)
+
+            import_command = ["ogr2ogr", "-f", "GPKG"]
+            if index > 0:
+                import_command.append("-update")
+            import_command.extend(
+                [
+                    merged_gpkg_path,
+                    file_info["fullPath"],
+                    "-nln",
+                    source_layer_name,
+                    "-skipfailures",
+                ]
+            )
+            import_result = runCommandWithProcessTracking(import_command, task_id)
+            if not import_result.get("success"):
+                if _task_was_stopped(task_id):
+                    raise RuntimeError("任务已停止")
+                raise RuntimeError(import_result.get("stderr") or import_result.get("error") or "导入矢量源失败")
+
+            progress = 10 + int(((index + 1) / len(source_files)) * 35)
+            with taskLock:
+                current_task = taskStatus.get(task_id)
+                if not current_task:
+                    return
+                current_task["files"]["completed"] = index + 1
+                current_task["progress"] = progress
+                appendTaskLog(
+                    current_task,
+                    "矢量导入",
+                    "completed",
+                    f"已导入矢量源: {file_info['filename']} -> {source_layer_name}",
+                    progress,
+                    sourceFile=file_info["relativePath"],
+                    layerName=source_layer_name,
+                )
+            _sync_vector_task_snapshot(task_id)
+
+        _ensure_task_not_stopped(task_id)
+        with taskLock:
+            current_task = taskStatus.get(task_id)
+            if not current_task:
+                return
+            current_task["progress"] = 55
+            current_task["message"] = f"正在生成 {format_label} 目录切片"
+            current_task["currentStage"] = f"生成 {format_label}"
+            appendTaskLog(current_task, f"{format_label} 生成", "running", f"开始生成 {format_label} 输出", 55)
+        _sync_vector_task_snapshot(task_id)
+
+        generated_bounds = None
+        if tile_format == "mvt":
+            build_command = [
+                "ogr2ogr",
+                "-f",
+                "MVT",
+                staging_output_path,
+                merged_gpkg_path,
+                "-dsco",
+                "FORMAT=DIRECTORY",
+                "-dsco",
+                f"MINZOOM={min_zoom}",
+                "-dsco",
+                f"MAXZOOM={max_zoom}",
+                "-dsco",
+                f"NAME={dataset_name}",
+            ]
+            build_result = runCommandWithProcessTracking(build_command, task_id)
+            if not build_result.get("success"):
+                if _task_was_stopped(task_id):
+                    raise RuntimeError("任务已停止")
+                raise RuntimeError(build_result.get("stderr") or build_result.get("error") or "生成 MVT 失败")
+        else:
+            geojson_result = _build_geojson_tiles(
+                merged_gpkg_path,
+                staging_output_path,
+                layer_names,
+                min_zoom,
+                max_zoom,
+                task_id,
+                level_field=level_field,
+                level_rules=level_rules,
+                unmatched_policy=unmatched_policy,
+            )
+            generated_bounds = geojson_result.get("bounds")
+            _sync_vector_task_snapshot(task_id)
+
+        _ensure_task_not_stopped(task_id)
+        tile_count = _count_vector_tiles(staging_output_path, tile_extension)
+        if tile_count <= 0:
+            raise RuntimeError(f"{format_label} 输出目录中未生成任何 {tile_extension} 瓦片")
+
+        if overwrite:
+            _clear_directory(output_path)
+        shutil.copytree(staging_output_path, output_path, dirs_exist_ok=True)
+        sample_tile = _find_sample_tile(output_path, tile_extension)
+        tileset_metadata_path = _write_tileset_metadata(
+            output_path,
+            dataset_name,
+            layer_names,
+            min_zoom,
+            max_zoom,
+            bounds=generated_bounds,
+            tile_format=tile_format,
+        )
+
+        with taskLock:
+            current_task = taskStatus.get(task_id, {})
+            existing_log = current_task.get("processLog", [])
+            start_time = current_task.get("startTime")
+            taskStatus[task_id] = createTaskRecord(
+                task_id=task_id,
+                status="completed",
+                progress=100,
+                message=f"{format_label} 切片完成，共生成 {tile_count} 个矢量瓦片",
+                start_time=start_time,
+                end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                current_stage="已完成",
+                process_log=existing_log,
+                result={
+                    "outputPath": output_path,
+                    "outputPathArray": output_path_array,
+                    "totalTiles": tile_count,
+                    "minZoom": min_zoom,
+                    "maxZoom": max_zoom,
+                    "layers": layer_names,
+                    "sampleTile": sample_tile,
+                    "sourceFiles": [item["relativePath"] for item in source_files],
+                    "tilesetFile": tileset_metadata_path,
+                    "format": tile_format,
+                    "tileExtension": tile_extension,
+                    "bounds": generated_bounds,
+                    "levelField": level_field or None,
+                    "levelRules": [
+                        {"values": sorted(rule["values"]), "minZoom": rule["minZoom"], "maxZoom": rule["maxZoom"]}
+                        for rule in level_rules
+                    ],
+                    "unmatchedPolicy": unmatched_policy,
+                    "method": f"{tile_format}-static",
+                    "publishHints": {"publishType": "vector", "publishMethod": publish_method},
+                },
+                stats={
+                    "totalTiles": tile_count,
+                    "processedTiles": tile_count,
+                    "failedTiles": 0,
+                    "remainingTiles": 0,
+                    "averageSpeed": 0,
+                    "successRate": "100%",
+                },
+                files={"total": len(source_files), "completed": len(source_files), "failed": 0, "current": None},
+            )
+            appendTaskLog(
+                taskStatus[task_id],
+                "任务完成",
+                "completed",
+                f"{format_label} 切片任务完成，生成 {tile_count} 个 {tile_extension} 瓦片",
+                100,
+                outputPath=output_path,
+                layers=layer_names,
+            )
+        _sync_vector_task_snapshot(task_id)
+
+        finalizeTaskArtifact(
+            task_id,
+            source_files=[item["relativePath"] for item in source_files],
+            build_parameters={
+                "jobType": "geojson_tiles" if tile_format == "geojson" else "mvt_tiles",
+                "outputPath": output_path_array,
+                "minZoom": min_zoom,
+                "maxZoom": max_zoom,
+                "datasetName": dataset_name,
+                "tileFormat": tile_format,
+                "levelField": level_field or None,
+                "levelRules": [
+                    {"values": sorted(rule["values"]), "minZoom": rule["minZoom"], "maxZoom": rule["maxZoom"]}
+                    for rule in level_rules
+                ],
+                "unmatchedPolicy": unmatched_policy,
+                "overwrite": overwrite,
+            },
+        )
+        _sync_vector_task_snapshot(task_id)
+        logMessage(f"{format_label} 切片任务完成: {task_id}", "INFO")
+    except Exception as exc:
+        stopped = str(exc) == "任务已停止"
+        failure_label = "GeoJSON" if tile_format == "geojson" else "MVT"
+        with taskLock:
+            current_task = taskStatus.get(task_id, {})
+            taskStatus[task_id] = createTaskRecord(
+                task_id=task_id,
+                status="stopped" if stopped else "failed",
+                progress=current_task.get("progress", 0),
+                message=f"{failure_label} 切片任务已停止" if stopped else f"{failure_label} 切片失败: {exc}",
+                start_time=current_task.get("startTime", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                current_stage="已停止" if stopped else "失败",
+                process_log=current_task.get("processLog", []),
+                result=current_task.get("result", {}),
+                files=current_task.get("files", {"total": len(source_files), "completed": 0, "failed": 0, "current": None}),
+                stats=current_task.get("stats"),
+                error=None if stopped else str(exc),
+            )
+            appendTaskLog(
+                taskStatus[task_id],
+                "任务停止" if stopped else "异常退出",
+                "stopped" if stopped else "failed",
+                "任务已停止" if stopped else str(exc),
+                current_task.get("progress", 0),
+            )
+        _sync_vector_task_snapshot(task_id)
+        logMessage(f"{failure_label} 切片任务{'停止' if stopped else '失败'}: {task_id} - {exc}", "WARNING" if stopped else "ERROR")
+    finally:
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        with taskLock:
+            taskProcesses.pop(task_id, None)
+
+
 def createVectorTiles():
     try:
         logMessage("收到二维矢量切片创建请求", "INFO")
@@ -515,261 +832,74 @@ def createVectorTiles():
                 taskStatus[task_id] = _build_failed_task(task_id, ["没有找到有效的矢量源文件"])
             return jsonify({"success": False, "taskId": task_id, "message": "没有找到有效的矢量源文件", "statusUrl": f"/api/tasks/{task_id}"}), 200
 
-        def run_vector_tile_task():
-            temp_dir = None
-            try:
-                format_label = "GeoJSON" if tile_format == "geojson" else "MVT"
+        task_payload = {
+            "taskId": task_id,
+            "jobType": "geojson_tiles" if tile_format == "geojson" else "mvt_tiles",
+            "tileFormat": tile_format,
+            "sourceFiles": source_files,
+            "outputPath": output_path,
+            "outputPathArray": output_path_array,
+            "minZoom": min_zoom,
+            "maxZoom": max_zoom,
+            "datasetName": dataset_name,
+            "levelField": level_field or None,
+            "levelRules": [
+                {"values": sorted(rule["values"]), "minZoom": rule["minZoom"], "maxZoom": rule["maxZoom"]}
+                for rule in level_rules
+            ],
+            "unmatchedPolicy": unmatched_policy,
+            "overwrite": overwrite,
+        }
+
+        queued_record = createTaskRecord(
+            task_id=task_id,
+            status="queued",
+            progress=0,
+            message=f"二维矢量切片任务已入队，识别到 {len(source_files)} 个源文件",
+            start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            current_stage="排队中",
+            process_log=[
+                {
+                    "stage": "任务创建",
+                    "status": "queued",
+                    "message": f"任务已入队，识别到 {len(source_files)} 个矢量源文件",
+                    "timestamp": datetime.now().isoformat(),
+                    "progress": 0,
+                }
+            ],
+            files={"total": len(source_files), "completed": 0, "failed": 0, "current": None},
+            extra={
+                "jobType": task_payload["jobType"],
+                "workerPayload": task_payload,
+            },
+        )
+        should_queue = (
+            str(config.get("taskDispatch") or "").strip().lower() in {"db", "queue", "worker"}
+            and isDatabaseEnabled()
+        )
+        if should_queue:
+            if not enqueueBuildJob(task_id, task_payload["jobType"], queued_record):
+                should_queue = False
                 with taskLock:
-                    taskStatus[task_id] = createTaskRecord(
-                        task_id=task_id,
-                        status="running",
-                        progress=0,
-                        message=f"开始生成 {format_label} 矢量瓦片，共 {len(source_files)} 个源文件",
-                        start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        current_stage="准备数据",
-                        process_log=[
-                            {
-                                "stage": "任务创建",
-                                "status": "completed",
-                                "message": f"任务初始化完成，识别到 {len(source_files)} 个矢量源文件",
-                                "timestamp": datetime.now().isoformat(),
-                                "progress": 0,
-                            }
-                        ],
-                        files={"total": len(source_files), "completed": 0, "failed": 0, "current": None},
-                    )
-
-                _ensure_task_not_stopped(task_id)
-                temp_dir = tempfile.mkdtemp(prefix=f"atlasworks-vector-{task_id}-")
-                staging_output_path = os.path.join(temp_dir, f"{tile_format}_output")
-                merged_gpkg_path = os.path.join(temp_dir, "source_layers.gpkg")
-                layer_names = []
-                used_layer_names = set()
-
-                for index, file_info in enumerate(source_files):
-                    _ensure_task_not_stopped(task_id)
-                    source_layer_name = _dedupe_layer_name(os.path.splitext(file_info["filename"])[0], used_layer_names)
-                    layer_names.append(source_layer_name)
-
-                    with taskLock:
-                        current_task = taskStatus.get(task_id)
-                        if not current_task:
-                            return
-                        current_task["files"]["current"] = file_info["filename"]
-                        current_task["message"] = f"正在导入矢量源 {index + 1}/{len(source_files)}: {file_info['filename']}"
-                        current_task["currentStage"] = "准备数据"
-
-                    import_command = ["ogr2ogr", "-f", "GPKG"]
-                    if index > 0:
-                        import_command.append("-update")
-                    import_command.extend(
-                        [
-                            merged_gpkg_path,
-                            file_info["fullPath"],
-                            "-nln",
-                            source_layer_name,
-                            "-skipfailures",
-                        ]
-                    )
-                    import_result = runCommandWithProcessTracking(import_command, task_id)
-                    if not import_result.get("success"):
-                        if _task_was_stopped(task_id):
-                            raise RuntimeError("任务已停止")
-                        raise RuntimeError(import_result.get("stderr") or import_result.get("error") or "导入矢量源失败")
-
-                    progress = 10 + int(((index + 1) / len(source_files)) * 35)
-                    with taskLock:
-                        current_task = taskStatus.get(task_id)
-                        if not current_task:
-                            return
-                        current_task["files"]["completed"] = index + 1
-                        current_task["progress"] = progress
-                        appendTaskLog(
-                            current_task,
-                            "矢量导入",
-                            "completed",
-                            f"已导入矢量源: {file_info['filename']} -> {source_layer_name}",
-                            progress,
-                            sourceFile=file_info["relativePath"],
-                            layerName=source_layer_name,
-                        )
-
-                _ensure_task_not_stopped(task_id)
+                    taskStatus[task_id] = queued_record
+                task_thread = threading.Thread(target=runVectorTileTask, args=(task_id, task_payload), daemon=True)
                 with taskLock:
-                    current_task = taskStatus.get(task_id)
-                    if not current_task:
-                        return
-                    current_task["progress"] = 55
-                    current_task["message"] = f"正在生成 {format_label} 目录切片"
-                    current_task["currentStage"] = f"生成 {format_label}"
-                    appendTaskLog(current_task, f"{format_label} 生成", "running", f"开始生成 {format_label} 输出", 55)
-
-                generated_bounds = None
-                if tile_format == "mvt":
-                    build_command = [
-                        "ogr2ogr",
-                        "-f",
-                        "MVT",
-                        staging_output_path,
-                        merged_gpkg_path,
-                        "-dsco",
-                        "FORMAT=DIRECTORY",
-                        "-dsco",
-                        f"MINZOOM={min_zoom}",
-                        "-dsco",
-                        f"MAXZOOM={max_zoom}",
-                        "-dsco",
-                        f"NAME={dataset_name}",
-                    ]
-                    build_result = runCommandWithProcessTracking(build_command, task_id)
-                    if not build_result.get("success"):
-                        if _task_was_stopped(task_id):
-                            raise RuntimeError("任务已停止")
-                        raise RuntimeError(build_result.get("stderr") or build_result.get("error") or "生成 MVT 失败")
-                else:
-                    geojson_result = _build_geojson_tiles(
-                        merged_gpkg_path,
-                        staging_output_path,
-                        layer_names,
-                        min_zoom,
-                        max_zoom,
-                        task_id,
-                        level_field=level_field,
-                        level_rules=level_rules,
-                        unmatched_policy=unmatched_policy,
-                    )
-                    generated_bounds = geojson_result.get("bounds")
-
-                _ensure_task_not_stopped(task_id)
-                tile_count = _count_vector_tiles(staging_output_path, tile_extension)
-                if tile_count <= 0:
-                    raise RuntimeError(f"{format_label} 输出目录中未生成任何 {tile_extension} 瓦片")
-
-                if overwrite:
-                    _clear_directory(output_path)
-                shutil.copytree(staging_output_path, output_path, dirs_exist_ok=True)
-                sample_tile = _find_sample_tile(output_path, tile_extension)
-                tileset_metadata_path = _write_tileset_metadata(output_path, dataset_name, layer_names, min_zoom, max_zoom, bounds=generated_bounds, tile_format=tile_format)
-
-                with taskLock:
-                    current_task = taskStatus.get(task_id, {})
-                    existing_log = current_task.get("processLog", [])
-                    start_time = current_task.get("startTime")
-                    taskStatus[task_id] = createTaskRecord(
-                        task_id=task_id,
-                        status="completed",
-                        progress=100,
-                        message=f"{format_label} 切片完成，共生成 {tile_count} 个矢量瓦片",
-                        start_time=start_time,
-                        end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        current_stage="已完成",
-                        process_log=existing_log,
-                        result={
-                            "outputPath": output_path,
-                            "outputPathArray": output_path_array,
-                            "totalTiles": tile_count,
-                            "minZoom": min_zoom,
-                            "maxZoom": max_zoom,
-                            "layers": layer_names,
-                            "sampleTile": sample_tile,
-                            "sourceFiles": [item["relativePath"] for item in source_files],
-                            "tilesetFile": tileset_metadata_path,
-                            "format": tile_format,
-                            "tileExtension": tile_extension,
-                            "bounds": generated_bounds,
-                            "levelField": level_field or None,
-                            "levelRules": [
-                                {"values": sorted(rule["values"]), "minZoom": rule["minZoom"], "maxZoom": rule["maxZoom"]}
-                                for rule in level_rules
-                            ],
-                            "unmatchedPolicy": unmatched_policy,
-                            "method": f"{tile_format}-static",
-                            "publishHints": {"publishType": "vector", "publishMethod": publish_method},
-                        },
-                        stats={
-                            "totalTiles": tile_count,
-                            "processedTiles": tile_count,
-                            "failedTiles": 0,
-                            "remainingTiles": 0,
-                            "averageSpeed": 0,
-                            "successRate": "100%",
-                        },
-                        files={"total": len(source_files), "completed": len(source_files), "failed": 0, "current": None},
-                    )
-                    appendTaskLog(
-                        taskStatus[task_id],
-                        "任务完成",
-                        "completed",
-                        f"{format_label} 切片任务完成，生成 {tile_count} 个 {tile_extension} 瓦片",
-                        100,
-                        outputPath=output_path,
-                        layers=layer_names,
-                    )
-
-                finalizeTaskArtifact(
-                    task_id,
-                    source_files=[item["relativePath"] for item in source_files],
-                    build_parameters={
-                        "jobType": "geojson_tiles" if tile_format == "geojson" else "mvt_tiles",
-                        "outputPath": output_path_array,
-                        "minZoom": min_zoom,
-                        "maxZoom": max_zoom,
-                        "datasetName": dataset_name,
-                        "tileFormat": tile_format,
-                        "levelField": level_field or None,
-                        "levelRules": [
-                            {"values": sorted(rule["values"]), "minZoom": rule["minZoom"], "maxZoom": rule["maxZoom"]}
-                            for rule in level_rules
-                        ],
-                        "unmatchedPolicy": unmatched_policy,
-                        "overwrite": overwrite,
-                    },
-                )
-                logMessage(f"{format_label} 切片任务完成: {task_id}", "INFO")
-            except Exception as exc:
-                stopped = str(exc) == "任务已停止"
-                failure_label = "GeoJSON" if tile_format == "geojson" else "MVT"
-                with taskLock:
-                    current_task = taskStatus.get(task_id, {})
-                    taskStatus[task_id] = createTaskRecord(
-                        task_id=task_id,
-                        status="stopped" if stopped else "failed",
-                        progress=current_task.get("progress", 0),
-                        message=f"{failure_label} 切片任务已停止" if stopped else f"{failure_label} 切片失败: {exc}",
-                        start_time=current_task.get("startTime", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                        end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        current_stage="已停止" if stopped else "失败",
-                        process_log=current_task.get("processLog", []),
-                        result=current_task.get("result", {}),
-                        files=current_task.get("files", {"total": len(source_files), "completed": 0, "failed": 0, "current": None}),
-                        stats=current_task.get("stats"),
-                        error=None if stopped else str(exc),
-                    )
-                    appendTaskLog(
-                        taskStatus[task_id],
-                        "任务停止" if stopped else "异常退出",
-                        "stopped" if stopped else "failed",
-                        "任务已停止" if stopped else str(exc),
-                        current_task.get("progress", 0),
-                    )
-                logMessage(f"{failure_label} 切片任务{'停止' if stopped else '失败'}: {task_id} - {exc}", "WARNING" if stopped else "ERROR")
-            finally:
-                if temp_dir and os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                with taskLock:
-                    taskProcesses.pop(task_id, None)
-
-        task_thread = threading.Thread(target=run_vector_tile_task, daemon=True)
-        with taskLock:
-            taskProcesses[task_id] = task_thread
-        task_thread.start()
+                    taskProcesses[task_id] = task_thread
+                task_thread.start()
+        else:
+            with taskLock:
+                taskStatus[task_id] = queued_record
+            task_thread = threading.Thread(target=runVectorTileTask, args=(task_id, task_payload), daemon=True)
+            with taskLock:
+                taskProcesses[task_id] = task_thread
+            task_thread.start()
 
         return jsonify(
             {
                 "success": True,
                 "taskId": task_id,
-                "status": "running",
-                "message": f"二维矢量切片任务已启动，识别到 {len(source_files)} 个源文件",
+                "status": "queued" if should_queue else "running",
+                "message": f"二维矢量切片任务{'已入队' if should_queue else '已启动'}，识别到 {len(source_files)} 个源文件",
                 "statusUrl": f"/api/tasks/{task_id}",
                 "parameters": {
                     "totalFiles": len(source_files),

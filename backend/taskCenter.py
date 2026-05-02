@@ -7,7 +7,7 @@ from datetime import datetime
 from flask import jsonify, request
 
 from config import taskLock, taskProcesses, taskStatus
-from db import countTableRows, deleteTaskSnapshot
+from db import countTableRows, deleteTaskSnapshot, syncTaskSnapshot
 from db import fetchTaskSnapshot, listTaskEvents, listTaskSnapshots, pruneTaskSnapshots
 from pagination import paginate_items, parse_pagination_args
 from taskState import normalizeTaskRecord
@@ -285,6 +285,20 @@ def stopTask(taskId):
                 "success": True,
                 "message": "任务已停止",
                 "taskId": taskId,
+            })
+
+        persisted_task = fetchTaskSnapshot(taskId)
+        if persisted_task and persisted_task.get("status") in {"queued", "running"}:
+            persisted_task["status"] = "stopped"
+            persisted_task["message"] = "任务已停止"
+            persisted_task["endTime"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            persisted_task["currentStage"] = "已停止"
+            syncTaskSnapshot(taskId, persisted_task)
+            return jsonify({
+                "success": True,
+                "message": "任务已标记为停止",
+                "taskId": taskId,
+                "remote": True,
             })
 
         logMessage(f"任务停止失败: 任务不存在或无法停止 {taskId}", "WARNING")

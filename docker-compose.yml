@@ -5,12 +5,17 @@ services:
   atlasworks-api:
     # API 服务镜像名称与版本
     image: atlasworks:release-2.1.0
+    platform: linux/amd64
     # 构建配置
     build:
       # 构建上下文目录
       context: .
       # 构建使用的 Dockerfile 路径
       dockerfile: deploy/docker/Dockerfile
+      args:
+        BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye-amd64}
+        APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
+        APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
     # 固定容器名称
     container_name: atlasworks-api
     # 重启策略：除非手动停止，否则自动重启
@@ -88,6 +93,8 @@ services:
       - TF_TASK_SYNC_ENABLED=1
       # 任务状态同步间隔（秒）
       - TF_TASK_SYNC_INTERVAL=2
+      # API 只负责入队，worker 容器负责执行已迁移的任务
+      - ATLASWORKS_TASK_DISPATCH=worker
     # 端口映射配置
     ports:
       # 主机端口映射到容器同端口
@@ -111,4 +118,56 @@ services:
       # 挂载宿主机瓦片目录到容器
       - "D:/tiles:/app/tiles"
       # 挂载宿主机日志目录到容器
+      - ./runtime/log:/app/log
+
+  # 服务名：AtlasWorks Worker 服务，执行切片等重任务
+  atlasworks-worker:
+    image: atlasworks:release-2.1.0
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye-amd64}
+        APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
+        APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
+    container_name: atlasworks-worker
+    restart: unless-stopped
+    cpus: ${ATLASWORKS_WORKER_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_WORKER_MEM_LIMIT:-8g}
+    mem_reservation: ${ATLASWORKS_WORKER_MEM_RESERVATION:-2g}
+    shm_size: ${ATLASWORKS_WORKER_SHM_SIZE:-1g}
+    pids_limit: ${ATLASWORKS_WORKER_PIDS_LIMIT:-2048}
+    ulimits:
+      nofile:
+        soft: ${ATLASWORKS_WORKER_NOFILE_SOFT:-65535}
+        hard: ${ATLASWORKS_WORKER_NOFILE_HARD:-65535}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
+    environment:
+      - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
+      - ATLASWORKS_ROLE=worker
+      - ATLASWORKS_WORKER_ID=${ATLASWORKS_WORKER_ID:-atlasworks-worker-1}
+      - ATLASWORKS_WORKER_POLL_INTERVAL=${ATLASWORKS_WORKER_POLL_INTERVAL:-2}
+      - ATLASWORKS_WORKER_JOB_TYPES=${ATLASWORKS_WORKER_JOB_TYPES:-mvt_tiles,geojson_tiles,vector_tiles}
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      - ATLASWORKS_DATA_SOURCE_HOST_DIR=D:/TIF
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      - ATLASWORKS_TILES_HOST_DIR=D:/tiles
+      - ATLASWORKS_LOG_DIR=/app/log
+      - ATLASWORKS_LOG_HOST_DIR=./runtime/log
+      - TF_DB_ENABLED=1
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+      - TF_TASK_SYNC_ENABLED=0
+      - ATLASWORKS_TASK_DISPATCH=inline
+    volumes:
+      - "D:/TIF:/app/dataSource"
+      - "D:/tiles:/app/tiles"
       - ./runtime/log:/app/log

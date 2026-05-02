@@ -43,6 +43,10 @@ SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_tf_build_jobs_status ON tf_build_jobs(status)",
     "CREATE INDEX IF NOT EXISTS idx_tf_build_jobs_updated_at ON tf_build_jobs(updated_at DESC)",
+    "ALTER TABLE tf_build_jobs ADD COLUMN IF NOT EXISTS lease_owner TEXT",
+    "ALTER TABLE tf_build_jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ",
+    "ALTER TABLE tf_build_jobs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0",
+    "CREATE INDEX IF NOT EXISTS idx_tf_build_jobs_worker_claim ON tf_build_jobs(status, job_type, updated_at)",
     """
     CREATE TABLE IF NOT EXISTS tf_job_events (
         id BIGSERIAL PRIMARY KEY,
@@ -257,7 +261,7 @@ def reconcileInterruptedTasks():
                 """
                 SELECT id, payload::text
                 FROM tf_build_jobs
-                WHERE status IN ('running', 'queued')
+                WHERE status = 'running'
                 """
             )
             rows = cursor.fetchall()
@@ -957,6 +961,165 @@ def fetchPublicationRecord(publication_id):
         if conn:
             conn.rollback()
         _log_db_message(f"读取发布记录失败 {publication_id}: {exc}", "WARNING")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def enqueueBuildJob(task_id, job_type, payload):
+    if not isDatabaseEnabled():
+        return False
+
+    job_payload = _json_safe(payload if isinstance(payload, dict) else {})
+    job_payload["taskId"] = str(task_id)
+    job_payload["jobType"] = str(job_type)
+    job_payload["status"] = "queued"
+    job_payload["progress"] = int(job_payload.get("progress", 0) or 0)
+    job_payload.setdefault("message", "任务已入队，等待 worker 执行")
+    job_payload.setdefault("currentStage", "排队中")
+    job_payload.setdefault("createdAt", datetime.now().isoformat())
+
+    conn = None
+    try:
+        conn = _get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO tf_build_jobs (
+                    id, job_type, status, progress, current_stage, message,
+                    output_path, created_at, updated_at, payload,
+                    lease_owner, lease_expires_at, attempt_count
+                )
+                VALUES (
+                    %s, %s, 'queued', %s, %s, %s,
+                    %s, NOW(), NOW(), %s::jsonb,
+                    NULL, NULL, 0
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    job_type = EXCLUDED.job_type,
+                    status = 'queued',
+                    progress = EXCLUDED.progress,
+                    current_stage = EXCLUDED.current_stage,
+                    message = EXCLUDED.message,
+                    output_path = EXCLUDED.output_path,
+                    updated_at = NOW(),
+                    payload = EXCLUDED.payload,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL
+                """,
+                (
+                    str(task_id),
+                    str(job_type),
+                    max(0, min(int(job_payload.get("progress", 0) or 0), 100)),
+                    job_payload.get("currentStage"),
+                    job_payload.get("message"),
+                    _extract_output_path(job_payload),
+                    json.dumps(job_payload, ensure_ascii=False),
+                ),
+            )
+            _insert_job_event(
+                cursor,
+                task_id,
+                "task.queued",
+                {"jobType": job_type, "message": job_payload.get("message")},
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        _log_db_message(f"任务入队失败 {task_id}: {exc}", "WARNING")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def claimQueuedBuildJob(worker_id, job_types=None, lease_seconds=300):
+    if not isDatabaseEnabled():
+        return None
+
+    normalized_job_types = [str(item).strip() for item in (job_types or []) if str(item).strip()]
+    conn = None
+    try:
+        conn = _get_connection()
+        with conn.cursor() as cursor:
+            if normalized_job_types:
+                cursor.execute(
+                    """
+                    SELECT id, job_type, payload::text
+                    FROM tf_build_jobs
+                    WHERE status = 'queued'
+                      AND job_type = ANY(%s)
+                    ORDER BY updated_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    """,
+                    (normalized_job_types,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, job_type, payload::text
+                    FROM tf_build_jobs
+                    WHERE status = 'queued'
+                    ORDER BY updated_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    """
+                )
+            row = cursor.fetchone()
+            if not row:
+                conn.commit()
+                return None
+
+            task_id, job_type, payload_text = row
+            payload = json.loads(payload_text) if payload_text else {}
+            if not isinstance(payload, dict):
+                payload = {}
+            payload["status"] = "running"
+            payload["message"] = "worker 已领取任务，准备执行"
+            payload["currentStage"] = "准备执行"
+            payload["workerId"] = str(worker_id)
+
+            cursor.execute(
+                """
+                UPDATE tf_build_jobs
+                SET status = 'running',
+                    progress = %s,
+                    current_stage = %s,
+                    message = %s,
+                    started_at = COALESCE(started_at, NOW()),
+                    updated_at = NOW(),
+                    payload = %s::jsonb,
+                    lease_owner = %s,
+                    lease_expires_at = NOW() + (%s || ' seconds')::interval,
+                    attempt_count = attempt_count + 1
+                WHERE id = %s
+                """,
+                (
+                    max(0, min(int(payload.get("progress", 0) or 0), 100)),
+                    payload.get("currentStage"),
+                    payload.get("message"),
+                    json.dumps(_json_safe(payload), ensure_ascii=False),
+                    str(worker_id),
+                    int(lease_seconds),
+                    str(task_id),
+                ),
+            )
+            _insert_job_event(
+                cursor,
+                task_id,
+                "task.claimed",
+                {"workerId": worker_id, "jobType": job_type},
+            )
+        conn.commit()
+        return {"taskId": str(task_id), "jobType": str(job_type), "payload": payload}
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        _log_db_message(f"领取队列任务失败: {exc}", "WARNING")
         return None
     finally:
         if conn:

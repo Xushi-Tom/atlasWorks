@@ -112,6 +112,16 @@ config = {
         "enabled": _as_bool(os.environ.get("TF_TASK_SYNC_ENABLED"), True),
         "intervalSeconds": max(1, _as_int(os.environ.get("TF_TASK_SYNC_INTERVAL"), 2)),
     },
+    "taskDispatch": _env("ATLASWORKS_TASK_DISPATCH", default="inline"),
+    "worker": {
+        "id": _env("ATLASWORKS_WORKER_ID", default="atlasworks-worker"),
+        "pollIntervalSeconds": max(1, _as_int(os.environ.get("ATLASWORKS_WORKER_POLL_INTERVAL"), 2)),
+        "jobTypes": [
+            item.strip()
+            for item in _env("ATLASWORKS_WORKER_JOB_TYPES", default="mvt_tiles,geojson_tiles,vector_tiles").split(",")
+            if item.strip()
+        ],
+    },
 }
 
 # 任务状态管理

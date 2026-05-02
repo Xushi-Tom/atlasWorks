@@ -11,6 +11,9 @@ if [ -n "${TZ:-}" ] && [ -f "/usr/share/zoneinfo/${TZ}" ]; then
 fi
 
 if [ $# -eq 0 ]; then
+    if [ "${ATLASWORKS_ROLE:-api}" = "worker" ]; then
+        set -- python3 /app/worker.py
+    else
     : "${HOST:=0.0.0.0}"
     : "${PORT:=18000}"
     : "${ATLASWORKS_WORKERS:=1}"
@@ -23,6 +26,7 @@ if [ $# -eq 0 ]; then
         --worker-class gthread \
         --timeout "${ATLASWORKS_TIMEOUT}" \
         app:app
+    fi
 fi
 
 exec "$@"
