@@ -143,13 +143,19 @@ def _matches_task_filters(task, keyword="", date_from=None, date_to=None, status
 def getTaskStatus(taskId):
     try:
         logMessage(f"收到任务状态查询请求: {taskId}", "INFO")
+        persisted_task = fetchTaskSnapshot(taskId)
+        if persisted_task:
+            persisted_status = str(persisted_task.get("status") or "").lower()
+            if persisted_status not in {"queued", ""}:
+                logMessage(f"任务状态查询命中数据库快照: {taskId}", "INFO")
+                return jsonify(normalizeTaskRecord(taskId, persisted_task))
+
         with taskLock:
             if taskId in taskStatus:
                 task_info = normalizeTaskRecord(taskId, taskStatus[taskId])
                 logMessage(f"任务状态查询成功: {taskId}, 状态: {task_info.get('status', 'unknown')}", "INFO")
                 return jsonify(task_info)
 
-        persisted_task = fetchTaskSnapshot(taskId)
         if persisted_task:
             logMessage(f"任务状态查询命中数据库快照: {taskId}", "INFO")
             return jsonify(normalizeTaskRecord(taskId, persisted_task))

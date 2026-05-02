@@ -149,6 +149,7 @@ services:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
       - ATLASWORKS_TILING_SERVICE=vector
+      - ATLASWORKS_WORKER_SKIP_DB_INIT=1
       - ATLASWORKS_WORKER_ID=${ATLASWORKS_VECTOR_WORKER_ID:-atlasworks-vector-worker-1}
       - ATLASWORKS_WORKER_POLL_INTERVAL=${ATLASWORKS_WORKER_POLL_INTERVAL:-2}
       - ATLASWORKS_WORKER_JOB_TYPES=${ATLASWORKS_WORKER_JOB_TYPES:-mvt_tiles,geojson_tiles,vector_tiles}
@@ -166,7 +167,7 @@ services:
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
-      - TF_TASK_SYNC_ENABLED=0
+      - TF_TASK_SYNC_ENABLED=1
       - ATLASWORKS_TASK_DISPATCH=inline
     volumes:
       - "D:/TIF:/app/dataSource"
@@ -177,17 +178,20 @@ services:
   atlasworks-raster-worker:
     image: atlasworks:release-2.1.0
     platform: linux/amd64
-    profiles: ["workers-all"]
     container_name: atlasworks-raster-worker
     restart: unless-stopped
     cpus: ${ATLASWORKS_RASTER_WORKER_CPUS:-4.0}
     mem_limit: ${ATLASWORKS_RASTER_WORKER_MEM_LIMIT:-8g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
     environment:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
       - ATLASWORKS_TILING_SERVICE=raster
+      - ATLASWORKS_WORKER_SKIP_DB_INIT=1
       - ATLASWORKS_WORKER_ID=${ATLASWORKS_RASTER_WORKER_ID:-atlasworks-raster-worker-1}
-      - ATLASWORKS_WORKER_JOB_TYPES=indexed_tiles,map_tiles,tile_convert
+      - ATLASWORKS_WORKER_JOB_TYPES=indexed_tiles,map_tiles
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
       - ATLASWORKS_TILES_DIR=/app/tiles
       - ATLASWORKS_LOG_DIR=/app/log
@@ -199,7 +203,7 @@ services:
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
-      - TF_TASK_SYNC_ENABLED=0
+      - TF_TASK_SYNC_ENABLED=1
     volumes:
       - "D:/TIF:/app/dataSource"
       - "D:/tiles:/app/tiles"
@@ -209,15 +213,18 @@ services:
   atlasworks-terrain-worker:
     image: atlasworks:release-2.1.0
     platform: linux/amd64
-    profiles: ["workers-all"]
     container_name: atlasworks-terrain-worker
     restart: unless-stopped
     cpus: ${ATLASWORKS_TERRAIN_WORKER_CPUS:-4.0}
     mem_limit: ${ATLASWORKS_TERRAIN_WORKER_MEM_LIMIT:-8g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
     environment:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
       - ATLASWORKS_TILING_SERVICE=terrain
+      - ATLASWORKS_WORKER_SKIP_DB_INIT=1
       - ATLASWORKS_WORKER_ID=${ATLASWORKS_TERRAIN_WORKER_ID:-atlasworks-terrain-worker-1}
       - ATLASWORKS_WORKER_JOB_TYPES=terrain_tiles,terrain
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
@@ -231,7 +238,7 @@ services:
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
-      - TF_TASK_SYNC_ENABLED=0
+      - TF_TASK_SYNC_ENABLED=1
     volumes:
       - "D:/TIF:/app/dataSource"
       - "D:/tiles:/app/tiles"
@@ -241,15 +248,18 @@ services:
   atlasworks-3dtiles-worker:
     image: atlasworks:release-2.1.0
     platform: linux/amd64
-    profiles: ["workers-all"]
     container_name: atlasworks-3dtiles-worker
     restart: unless-stopped
     cpus: ${ATLASWORKS_3DTILES_WORKER_CPUS:-4.0}
     mem_limit: ${ATLASWORKS_3DTILES_WORKER_MEM_LIMIT:-8g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
     environment:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
       - ATLASWORKS_TILING_SERVICE=tiles3d
+      - ATLASWORKS_WORKER_SKIP_DB_INIT=1
       - ATLASWORKS_WORKER_ID=${ATLASWORKS_3DTILES_WORKER_ID:-atlasworks-3dtiles-worker-1}
       - ATLASWORKS_WORKER_JOB_TYPES=3dtiles,3dtiles-pointcloud,3dtiles-vector,3dtiles-model,3dtiles-osgb
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
@@ -263,7 +273,7 @@ services:
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
-      - TF_TASK_SYNC_ENABLED=0
+      - TF_TASK_SYNC_ENABLED=1
     volumes:
       - "D:/TIF:/app/dataSource"
       - "D:/tiles:/app/tiles"

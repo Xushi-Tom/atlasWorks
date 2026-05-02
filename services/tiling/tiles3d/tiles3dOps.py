@@ -18,6 +18,7 @@ from flask import jsonify, request
 from artifacts import finalizeTaskArtifact
 from config import config, taskLock, taskProcesses, taskStatus, taskStopFlags
 from dataSourceOps import findSourceFilesInFolders
+from db import enqueueBuildJob, isDatabaseEnabled
 from taskState import appendTaskLog, createTaskRecord
 from utils import (
     logMessage,
@@ -2459,7 +2460,9 @@ def create3DTiles():
 
         data_type = str(data.get("dataType") or "").strip().lower()
         anchor_mode = _normalize_anchor_mode(data.get("anchorMode"), "manual")
-        task_id = f"tiles3d{int(time.time())}"
+        task_id = str(data.get("taskId") or f"tiles3d{int(time.time())}")
+        worker_run = bool(data.get("_workerRun"))
+        run_synchronously = bool(data.get("_runSynchronously"))
         errors = []
 
         if data_type not in SUPPORTED_3DTILES_TYPES:
@@ -2584,15 +2587,71 @@ def create3DTiles():
                     taskProcesses.pop(task_id, None)
                     taskStopFlags.pop(task_id, None)
 
-        task_thread = threading.Thread(target=run_task, daemon=True)
-        with taskLock:
-            taskProcesses[task_id] = task_thread
-        task_thread.start()
+        should_queue = (
+            not worker_run
+            and str(config.get("taskDispatch") or "").strip().lower() in {"db", "queue", "worker"}
+            and isDatabaseEnabled()
+        )
+        if should_queue:
+            method_job_type = f"3dtiles-{data_type}" if data_type else "3dtiles"
+            worker_payload = dict(data)
+            worker_payload.update(
+                {
+                    "taskId": task_id,
+                    "dataType": data_type,
+                    "outputPath": data.get("outputPath"),
+                }
+            )
+            queued_record = createTaskRecord(
+                task_id=task_id,
+                status="queued",
+                progress=0,
+                message="3D Tiles 任务已入队",
+                start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                current_stage="排队中",
+                process_log=[
+                    {
+                        "stage": "任务创建",
+                        "status": "queued",
+                        "message": "3D Tiles 任务已入队，等待 worker 执行",
+                        "timestamp": datetime.now().isoformat(),
+                        "progress": 0,
+                    }
+                ],
+                files={
+                    "total": 1,
+                    "completed": 0,
+                    "failed": 0,
+                    "current": os.path.basename(source_rel_path[0]) if isinstance(source_rel_path, (list, tuple)) and source_rel_path else os.path.basename(str(source_rel_path)),
+                },
+                result={},
+                extra={"jobType": method_job_type, "dataType": data_type, "workerPayload": worker_payload},
+            )
+            if enqueueBuildJob(task_id, method_job_type, queued_record):
+                return jsonify({
+                    "success": True,
+                    "taskId": task_id,
+                    "status": "queued",
+                    "message": "3D Tiles 任务已入队",
+                    "statusUrl": f"/api/tasks/{task_id}",
+                    "dataType": data_type,
+                    "outputPath": output_path,
+                    "sourceFile": _source_for_result(source_rel_path),
+                })
+
+        if run_synchronously:
+            run_task()
+        else:
+            task_thread = threading.Thread(target=run_task, daemon=True)
+            with taskLock:
+                taskProcesses[task_id] = task_thread
+            task_thread.start()
 
         return jsonify({
             "success": True,
             "taskId": task_id,
-            "message": "3D Tiles 任务已启动",
+            "status": "running" if worker_run else "queued",
+            "message": "3D Tiles 任务已启动" if worker_run else "3D Tiles 任务已创建",
             "statusUrl": f"/api/tasks/{task_id}",
             "dataType": data_type,
             "outputPath": output_path,

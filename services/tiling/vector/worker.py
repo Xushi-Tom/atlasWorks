@@ -23,7 +23,10 @@ def _handle_shutdown(signum, frame):
 def _dispatch_job(job):
     job_type = str(job.get("jobType") or "").strip().lower()
     snapshot = job.get("payload") if isinstance(job.get("payload"), dict) else {}
-    payload = snapshot.get("workerPayload") if isinstance(snapshot.get("workerPayload"), dict) else snapshot
+    extra = snapshot.get("extra") if isinstance(snapshot.get("extra"), dict) else {}
+    payload = snapshot.get("workerPayload") if isinstance(snapshot.get("workerPayload"), dict) else None
+    if payload is None:
+        payload = extra.get("workerPayload") if isinstance(extra.get("workerPayload"), dict) else snapshot
     task_id = job.get("taskId") or payload.get("taskId") or snapshot.get("taskId")
     payload["workerId"] = config.get("worker", {}).get("id")
 
@@ -48,7 +51,8 @@ def main():
     os.makedirs(config["tilesDir"], exist_ok=True)
     os.makedirs(config["dataSourceDir"], exist_ok=True)
 
-    initializeDatabase()
+    if str(os.environ.get("ATLASWORKS_WORKER_SKIP_DB_INIT", "")).strip().lower() not in {"1", "true", "yes", "on"}:
+        initializeDatabase()
     if not isDatabaseEnabled():
         raise RuntimeError("worker 模式需要启用 TF_DB_ENABLED=1")
 

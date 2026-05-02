@@ -15,6 +15,7 @@ from flask import jsonify, request
 from artifacts import finalizeTaskArtifact
 from config import config, taskLock, taskProcesses, taskStatus
 from dataSourceOps import findTifFilesInFolders
+from db import enqueueBuildJob, isDatabaseEnabled
 from taskState import appendTaskLog, createTaskRecord
 from utils import convertMemoryToBytes, convertMemoryToMb, logMessage, normalizeInt, resolveTilesOutputPath, runCommand
 
@@ -383,7 +384,9 @@ def createTerrainTiles():
         maxMemory = data.get("maxMemory", "8m")
         threads = normalizeInt(data.get("threads"), min(4, config["maxThreads"]), 1, max(1, config["maxThreads"]))
         mergeTerrains = data.get("mergeTerrains", False)
-        taskId = f"terrain{int(time.time())}"
+        taskId = str(data.get("taskId") or f"terrain{int(time.time())}")
+        workerRun = bool(data.get("_workerRun"))
+        runSynchronously = bool(data.get("_runSynchronously"))
 
         errors = []
         if endZoom < 8:
@@ -730,17 +733,76 @@ def createTerrainTiles():
                     appendTaskLog(taskStatus[taskId], "异常退出", "failed", str(exc), current_task.get("progress", 0))
                 logMessage(f"地形切片失败: {taskId} - {exc}", "ERROR")
 
-        taskThread = threading.Thread(target=runTerrainTask)
-        taskThread.daemon = True
-        with taskLock:
-            taskProcesses[taskId] = taskThread
-        taskThread.start()
+        shouldQueue = (
+            not workerRun
+            and str(config.get("taskDispatch") or "").strip().lower() in {"db", "queue", "worker"}
+            and isDatabaseEnabled()
+        )
+        if shouldQueue:
+            workerPayload = dict(data)
+            workerPayload.update(
+                {
+                    "taskId": taskId,
+                    "outputPath": outputPathArray,
+                    "startZoom": startZoom,
+                    "endZoom": endZoom,
+                    "maxTriangles": maxTriangles,
+                    "bounds": bounds,
+                    "compression": useCompression,
+                    "decompress": decompressOutput,
+                    "autoZoom": autoZoom,
+                    "zoomStrategy": zoomStrategy,
+                    "maxMemory": maxMemory,
+                    "threads": threads,
+                    "mergeTerrains": mergeTerrains,
+                }
+            )
+            queuedRecord = createTaskRecord(
+                task_id=taskId,
+                status="queued",
+                progress=0,
+                message=f"地形切片任务已入队，将处理 {len(tifFiles)} 个文件",
+                start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                current_stage="排队中",
+                process_log=[
+                    {
+                        "stage": "任务创建",
+                        "status": "queued",
+                        "message": f"任务已入队，准备处理 {len(tifFiles)} 个文件",
+                        "timestamp": datetime.now().isoformat(),
+                        "progress": 0,
+                    }
+                ],
+                files={"total": len(tifFiles), "completed": 0, "failed": 0, "current": None},
+                stats={"totalTiles": 0, "processedTiles": 0, "failedTiles": 0, "remainingTiles": 0},
+                extra={"jobType": "terrain_tiles", "workerPayload": workerPayload},
+            )
+            if enqueueBuildJob(taskId, "terrain_tiles", queuedRecord):
+                return jsonify(
+                    {
+                        "success": True,
+                        "taskId": taskId,
+                        "status": "queued",
+                        "message": f"地形切片任务已入队，将处理 {len(tifFiles)} 个文件",
+                        "statusUrl": f"/api/tasks/{taskId}",
+                    }
+                )
+
+        if runSynchronously:
+            runTerrainTask()
+        else:
+            taskThread = threading.Thread(target=runTerrainTask)
+            taskThread.daemon = True
+            with taskLock:
+                taskProcesses[taskId] = taskThread
+            taskThread.start()
 
         return jsonify(
             {
                 "success": True,
                 "taskId": taskId,
-                "message": f"地形切片任务已启动，将处理 {len(tifFiles)} 个文件",
+                "status": "running" if workerRun else "queued",
+                "message": f"地形切片任务已{'启动' if workerRun else '创建'}，将处理 {len(tifFiles)} 个文件",
                 "statusUrl": f"/api/tasks/{taskId}",
                 "parameters": {
                     "totalFiles": len(tifFiles),

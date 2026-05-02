@@ -380,7 +380,15 @@ def syncTaskSnapshot(task_id, task_data):
                     started_at = COALESCE(EXCLUDED.started_at, tf_build_jobs.started_at),
                     finished_at = EXCLUDED.finished_at,
                     updated_at = NOW(),
-                    payload = EXCLUDED.payload
+                    payload = EXCLUDED.payload,
+                    lease_owner = CASE
+                        WHEN EXCLUDED.status IN ('completed', 'failed', 'stopped', 'interrupted') THEN NULL
+                        ELSE tf_build_jobs.lease_owner
+                    END,
+                    lease_expires_at = CASE
+                        WHEN EXCLUDED.status IN ('completed', 'failed', 'stopped', 'interrupted') THEN NULL
+                        ELSE tf_build_jobs.lease_expires_at
+                    END
                 """,
                 (
                     str(task_id),

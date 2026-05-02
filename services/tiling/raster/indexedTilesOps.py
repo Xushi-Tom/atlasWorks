@@ -18,6 +18,7 @@ from flask import jsonify, request
 from artifacts import finalizeTaskArtifact
 from config import config, taskLock, taskProcesses, taskStatus
 from dataSourceOps import findTifFilesInFolders, getSourceBandInfoCached
+from db import enqueueBuildJob, isDatabaseEnabled
 from taskState import appendTaskLog, createTaskRecord
 from utils import (
     logMessage,
@@ -1710,7 +1711,9 @@ def processIndexedTilesInternal(folderPaths, filePatterns, outputPath, minZoom, 
 def createIndexedTiles():
     try:
         data = request.get_json(silent=True) or {}
-        taskId = f"indexedTiles{int(time.time())}"
+        taskId = str(data.get("taskId") or f"indexedTiles{int(time.time())}")
+        workerRun = bool(data.get("_workerRun"))
+        runSynchronously = bool(data.get("_runSynchronously"))
         folderPaths = data.get("folderPaths", [])
         filePatterns = data.get("filePatterns", [])
         outputPathArray = data.get("outputPath", [])
@@ -2035,15 +2038,88 @@ def createIndexedTiles():
                 with taskLock:
                     taskProcesses.pop(taskId, None)
 
-        taskThread = threading.Thread(target=runIndexedTileTask, daemon=True)
-        with taskLock:
-            taskProcesses[taskId] = taskThread
-        taskThread.start()
+        shouldQueue = (
+            not workerRun
+            and str(config.get("taskDispatch") or "").strip().lower() in {"db", "queue", "worker"}
+            and isDatabaseEnabled()
+        )
+        if shouldQueue:
+            workerPayload = dict(data)
+            workerPayload.update(
+                {
+                    "taskId": taskId,
+                    "outputPath": outputPathArray,
+                    "minZoom": minZoom,
+                    "maxZoom": maxZoom,
+                    "tileSize": tileSize,
+                    "processes": processes,
+                    "threads": threads,
+                    "maxMemory": maxMemory,
+                    "resampling": resampling,
+                    "projection": projection,
+                    "dataFormat": dataFormat,
+                    "imageFormat": imageFormat,
+                    "tileScheme": tileScheme,
+                    "generateShpIndex": generateShpIndex,
+                    "enableIncrementalUpdate": enableIncrementalUpdate,
+                    "skipNodataTiles": skipNodataTiles,
+                }
+            )
+            queuedRecord = createTaskRecord(
+                task_id=taskId,
+                status="queued",
+                progress=0,
+                message=f"切图任务已入队，识别到 {len(tifFiles)} 个源文件",
+                start_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                current_stage="排队中",
+                process_log=[
+                    {
+                        "stage": "任务创建",
+                        "status": "queued",
+                        "message": f"任务已入队，已解析到 {len(tifFiles)} 个源文件",
+                        "timestamp": datetime.now().isoformat(),
+                        "progress": 0,
+                        "fileCount": len(tifFiles),
+                    }
+                ],
+                stats={
+                    "totalTiles": 0,
+                    "processedTiles": 0,
+                    "failedTiles": 0,
+                    "remainingTiles": 0,
+                    "currentSpeed": 0,
+                    "averageSpeed": 0,
+                    "estimatedTimeRemaining": "等待调度",
+                    "estimatedTimeRemainingSeconds": 0,
+                    "batchesCompleted": 0,
+                    "totalBatches": 0,
+                    "successRate": "0%",
+                },
+                processing_info=previewResourcePlan,
+                extra={"jobType": "indexed_tiles", "workerPayload": workerPayload},
+            )
+            if enqueueBuildJob(taskId, "indexed_tiles", queuedRecord):
+                return jsonify({
+                    "success": True,
+                    "taskId": taskId,
+                    "status": "queued",
+                    "message": f"切图任务已入队，识别到 {len(tifFiles)} 个源文件",
+                    "statusUrl": f"/api/tasks/{taskId}",
+                    "method": "indexedTiles-grid-index",
+                })
+
+        if runSynchronously:
+            runIndexedTileTask()
+        else:
+            taskThread = threading.Thread(target=runIndexedTileTask, daemon=True)
+            with taskLock:
+                taskProcesses[taskId] = taskThread
+            taskThread.start()
         return jsonify({
             "success": True,
             "taskId": taskId,
-            "status": "queued",
-            "message": f"切图任务已创建，识别到 {len(tifFiles)} 个源文件",
+            "status": "running" if workerRun else "queued",
+            "message": f"切图任务已{'启动' if workerRun else '创建'}，识别到 {len(tifFiles)} 个源文件",
             "statusUrl": f"/api/tasks/{taskId}",
             "method": "indexedTiles-grid-index",
             "indexInfo": {
