@@ -25,13 +25,14 @@ docker tag debian:bullseye debian:bullseye-amd64
 docker build --pull=false --progress=plain -t atlasworks:release-2.1.0 --build-arg BASE_IMAGE=debian:bullseye-amd64 --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security -f deploy/docker/Dockerfile .
 
 
-5、启动 API + Worker，不重新构建
-docker compose up -d --no-build --force-recreate atlasworks-api atlasworks-worker
+5、启动控制面、二维矢量切片 Worker、发布服务，不重新构建
+docker compose up -d --no-build --force-recreate atlasworks-api atlasworks-vector-worker atlasworks-publisher
 
 
 6、查看状态
 docker compose ps
 curl.exe -s http://127.0.0.1:18000/api/health
+curl.exe -s http://127.0.0.1:18001/api/health
 
 
 7、导出 x86 镜像包

@@ -1,7 +1,7 @@
 # 顶层配置：定义所有容器服务
 services:
 
-  # 服务名：AtlasWorks API 服务
+  # 服务名：AtlasWorks API 控制面
   atlasworks-api:
     # API 服务镜像名称与版本
     image: atlasworks:release-2.1.0
@@ -93,7 +93,7 @@ services:
       - TF_TASK_SYNC_ENABLED=1
       # 任务状态同步间隔（秒）
       - TF_TASK_SYNC_INTERVAL=2
-      # API 只负责入队，worker 容器负责执行已迁移的任务
+      # API 只负责入队，切片 worker 容器负责执行已迁移的任务
       - ATLASWORKS_TASK_DISPATCH=worker
     # 端口映射配置
     ports:
@@ -120,8 +120,8 @@ services:
       # 挂载宿主机日志目录到容器
       - ./runtime/log:/app/log
 
-  # 服务名：AtlasWorks Worker 服务，执行切片等重任务
-  atlasworks-worker:
+  # 服务名：二维矢量切片 Worker，执行 MVT / GeoJSON 金字塔切片
+  atlasworks-vector-worker:
     image: atlasworks:release-2.1.0
     platform: linux/amd64
     build:
@@ -131,7 +131,7 @@ services:
         BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye-amd64}
         APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
         APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
-    container_name: atlasworks-worker
+    container_name: atlasworks-vector-worker
     restart: unless-stopped
     cpus: ${ATLASWORKS_WORKER_CPUS:-4.0}
     mem_limit: ${ATLASWORKS_WORKER_MEM_LIMIT:-8g}
@@ -148,7 +148,7 @@ services:
     environment:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
-      - ATLASWORKS_WORKER_ID=${ATLASWORKS_WORKER_ID:-atlasworks-worker-1}
+      - ATLASWORKS_WORKER_ID=${ATLASWORKS_VECTOR_WORKER_ID:-atlasworks-vector-worker-1}
       - ATLASWORKS_WORKER_POLL_INTERVAL=${ATLASWORKS_WORKER_POLL_INTERVAL:-2}
       - ATLASWORKS_WORKER_JOB_TYPES=${ATLASWORKS_WORKER_JOB_TYPES:-mvt_tiles,geojson_tiles,vector_tiles}
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
@@ -167,6 +167,144 @@ services:
       - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
       - TF_TASK_SYNC_ENABLED=0
       - ATLASWORKS_TASK_DISPATCH=inline
+    volumes:
+      - "D:/TIF:/app/dataSource"
+      - "D:/tiles:/app/tiles"
+      - ./runtime/log:/app/log
+
+  # 服务名：影像切片 Worker，占位容器边界；待 indexed/map tile 任务迁移到队列后启用
+  atlasworks-raster-worker:
+    image: atlasworks:release-2.1.0
+    platform: linux/amd64
+    profiles: ["workers-all"]
+    container_name: atlasworks-raster-worker
+    restart: unless-stopped
+    cpus: ${ATLASWORKS_RASTER_WORKER_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_RASTER_WORKER_MEM_LIMIT:-8g}
+    environment:
+      - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
+      - ATLASWORKS_ROLE=worker
+      - ATLASWORKS_WORKER_ID=${ATLASWORKS_RASTER_WORKER_ID:-atlasworks-raster-worker-1}
+      - ATLASWORKS_WORKER_JOB_TYPES=indexed_tiles,map_tiles,tile_convert
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      - ATLASWORKS_LOG_DIR=/app/log
+      - TF_DB_ENABLED=1
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+      - TF_TASK_SYNC_ENABLED=0
+    volumes:
+      - "D:/TIF:/app/dataSource"
+      - "D:/tiles:/app/tiles"
+      - ./runtime/log:/app/log
+
+  # 服务名：地形切片 Worker，占位容器边界；待 terrain task 迁移到队列后启用
+  atlasworks-terrain-worker:
+    image: atlasworks:release-2.1.0
+    platform: linux/amd64
+    profiles: ["workers-all"]
+    container_name: atlasworks-terrain-worker
+    restart: unless-stopped
+    cpus: ${ATLASWORKS_TERRAIN_WORKER_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_TERRAIN_WORKER_MEM_LIMIT:-8g}
+    environment:
+      - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
+      - ATLASWORKS_ROLE=worker
+      - ATLASWORKS_WORKER_ID=${ATLASWORKS_TERRAIN_WORKER_ID:-atlasworks-terrain-worker-1}
+      - ATLASWORKS_WORKER_JOB_TYPES=terrain_tiles,terrain
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      - ATLASWORKS_LOG_DIR=/app/log
+      - TF_DB_ENABLED=1
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+      - TF_TASK_SYNC_ENABLED=0
+    volumes:
+      - "D:/TIF:/app/dataSource"
+      - "D:/tiles:/app/tiles"
+      - ./runtime/log:/app/log
+
+  # 服务名：3D Tiles Worker，占位容器边界；待 3dtiles task 迁移到队列后启用
+  atlasworks-3dtiles-worker:
+    image: atlasworks:release-2.1.0
+    platform: linux/amd64
+    profiles: ["workers-all"]
+    container_name: atlasworks-3dtiles-worker
+    restart: unless-stopped
+    cpus: ${ATLASWORKS_3DTILES_WORKER_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_3DTILES_WORKER_MEM_LIMIT:-8g}
+    environment:
+      - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
+      - ATLASWORKS_ROLE=worker
+      - ATLASWORKS_WORKER_ID=${ATLASWORKS_3DTILES_WORKER_ID:-atlasworks-3dtiles-worker-1}
+      - ATLASWORKS_WORKER_JOB_TYPES=3dtiles,3dtiles-pointcloud,3dtiles-vector,3dtiles-model,3dtiles-osgb
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      - ATLASWORKS_LOG_DIR=/app/log
+      - TF_DB_ENABLED=1
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+      - TF_TASK_SYNC_ENABLED=0
+    volumes:
+      - "D:/TIF:/app/dataSource"
+      - "D:/tiles:/app/tiles"
+      - ./runtime/log:/app/log
+
+  # 服务名：发布服务，负责发布记录、静态发布资源、WMTS 等访问
+  atlasworks-publisher:
+    image: atlasworks:release-2.1.0
+    platform: linux/amd64
+    container_name: atlasworks-publisher
+    restart: unless-stopped
+    cpus: ${ATLASWORKS_PUBLISHER_CPUS:-2.0}
+    mem_limit: ${ATLASWORKS_PUBLISHER_MEM_LIMIT:-4g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
+    environment:
+      - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
+      - ATLASWORKS_ROLE=publisher
+      - HOST=0.0.0.0
+      - PORT=18001
+      - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_URL:-}
+      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-10.168.1.113}
+      - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
+      - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_PORT:-18001}
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      - ATLASWORKS_LOG_DIR=/app/log
+      - TF_DB_ENABLED=1
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+      - TF_TASK_SYNC_ENABLED=0
+    ports:
+      - "${ATLASWORKS_PUBLISHER_HOST_PORT:-18001}:18001"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18001/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     volumes:
       - "D:/TIF:/app/dataSource"
       - "D:/tiles:/app/tiles"

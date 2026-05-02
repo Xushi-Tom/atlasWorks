@@ -31,7 +31,7 @@ def _dispatch_job(job):
         runVectorTileTask(task_id, payload)
         return True
 
-    logMessage(f"worker 不支持的任务类型: {job_type}", "WARNING")
+    logMessage(f"worker 当前镜像尚未接入该任务类型: {job_type}", "WARNING")
     return False
 
 

@@ -13,6 +13,19 @@ fi
 if [ $# -eq 0 ]; then
     if [ "${ATLASWORKS_ROLE:-api}" = "worker" ]; then
         set -- python3 /app/worker.py
+    elif [ "${ATLASWORKS_ROLE:-api}" = "publisher" ]; then
+        : "${HOST:=0.0.0.0}"
+        : "${PORT:=18001}"
+        : "${ATLASWORKS_PUBLISHER_WORKERS:=1}"
+        : "${ATLASWORKS_PUBLISHER_THREADS:=4}"
+        : "${ATLASWORKS_TIMEOUT:=600}"
+        set -- gunicorn \
+            --bind "${HOST}:${PORT}" \
+            --workers "${ATLASWORKS_PUBLISHER_WORKERS}" \
+            --threads "${ATLASWORKS_PUBLISHER_THREADS}" \
+            --worker-class gthread \
+            --timeout "${ATLASWORKS_TIMEOUT}" \
+            publisher:app
     else
     : "${HOST:=0.0.0.0}"
     : "${PORT:=18000}"
