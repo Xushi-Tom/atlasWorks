@@ -174,7 +174,7 @@ services:
       - "D:/tiles:/app/tiles"
       - ./runtime/log:/app/log
 
-  # 服务名：影像切片 Worker，占位容器边界；待 indexed/map tile 任务迁移到队列后启用
+  # 服务名：影像切片 Worker，执行 indexed/map 栅格切片队列任务
   atlasworks-raster-worker:
     image: atlasworks:release-2.1.0
     platform: linux/amd64
@@ -209,7 +209,7 @@ services:
       - "D:/tiles:/app/tiles"
       - ./runtime/log:/app/log
 
-  # 服务名：地形切片 Worker，占位容器边界；待 terrain task 迁移到队列后启用
+  # 服务名：地形切片 Worker，执行 terrain 切片队列任务
   atlasworks-terrain-worker:
     image: atlasworks:release-2.1.0
     platform: linux/amd64
@@ -244,7 +244,7 @@ services:
       - "D:/tiles:/app/tiles"
       - ./runtime/log:/app/log
 
-  # 服务名：3D Tiles Worker，占位容器边界；待 3dtiles task 迁移到队列后启用
+  # 服务名：3D Tiles Worker，执行 3D Tiles 转换队列任务
   atlasworks-3dtiles-worker:
     image: atlasworks:release-2.1.0
     platform: linux/amd64

@@ -1,39 +1,46 @@
-AtlasWorks x86 镜像打包命令
+AtlasWorks x86 打包 / 导出 / 启动命令
 
 说明：
-1、当前只打 x86_64 / amd64 镜像，不使用 buildx，不做 arm64 或多架构构建。
-2、正式打镜像前，先执行前端构建，确保 frontend/dist 已生成。
-3、如果本机还没有 amd64 基础镜像，先拉取 debian:bullseye 并打本地别名 debian:bullseye-amd64。
-4、compose 启动时使用 --no-build，避免 docker compose build 触发 buildx/bake。
+1. 只打 amd64 / x86_64 单架构镜像，不使用 buildx。
+2. 默认外部数据库版使用 docker-compose.yml。
+3. 内置 PostgreSQL 15 版使用 docker-compose.yml + docker-compose.pg15.yml。
 
 
-1、前端打包
-Set-Location D:\map\atlasWorks\frontend
-npm run build
-
-
-2、回到项目根目录
-Set-Location D:\map\atlasWorks
-
-
-3、准备 x86 基础镜像
+首次准备 amd64 基础镜像：
 docker pull --platform linux/amd64 debian:bullseye
 docker tag debian:bullseye debian:bullseye-amd64
 
 
-4、普通 x86 构建，不使用 buildx
-docker build --pull=false --progress=plain -t atlasworks:release-2.1.0 --build-arg BASE_IMAGE=debian:bullseye-amd64 --build-arg APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian --build-arg APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security -f deploy/docker/Dockerfile .
+1. 前端打包
+cd /d D:\map\atlasWorks\frontend
+npm run build
 
 
-5、启动控制面、二维矢量切片 Worker、发布服务，不重新构建
-docker compose up -d --no-build --force-recreate atlasworks-api atlasworks-vector-worker atlasworks-publisher
+2. 镜像打包
+cd /d D:\map\atlasWorks
+docker build --pull=false --progress=plain -t atlasworks:release-2.1.0 -f deploy/docker/Dockerfile .
 
 
-6、查看状态
+3. 导出镜像
+docker save -o atlasworks-release-2.1.0-amd64.tar atlasworks:release-2.1.0
+
+
+4A. 启动：连接外部 PostgreSQL
+docker compose -f docker-compose.yml -f docker-compose.external-db.yml up -d --no-build --force-recreate
+
+
+4B. 启动：使用内置 PostgreSQL 15
+docker compose -f docker-compose.yml -f docker-compose.pg15.yml up -d --no-build --force-recreate
+
+
+5. 查看状态
 docker compose ps
 curl.exe -s http://127.0.0.1:18000/api/health
 curl.exe -s http://127.0.0.1:18001/api/health
 
 
-7、导出 x86 镜像包
-docker save -o .\atlasworks-release-2.1.0-amd64.tar atlasworks:release-2.1.0
+6. 停止
+docker compose -f docker-compose.yml -f docker-compose.external-db.yml down
+
+内置 PostgreSQL 15 版停止：
+docker compose -f docker-compose.yml -f docker-compose.pg15.yml down

@@ -661,7 +661,7 @@ def processHighPerformanceTiles(tileIndex, outputPath, resampling="near", max_wo
 
         threading.Thread(target=stop_checker, daemon=True).start()
 
-    batch_size = calculateOptimalBatchSize(totalTiles, max_workers)
+    batch_size = max(1, int(batch_size or calculateOptimalBatchSize(totalTiles, max_workers)))
     batches = []
     for index in range(0, totalTiles, batch_size):
         batches.append({"tiles": tileIndex[index : index + batch_size], "batch_idx": index // batch_size, "stop_flag_file": stopFlagFile})
@@ -694,6 +694,21 @@ def processHighPerformanceTiles(tileIndex, outputPath, resampling="near", max_wo
                     remain = 5 - len(errorSamples)
                     if remain > 0:
                         errorSamples.extend(result["errors"][:remain])
+                if taskId:
+                    progress = 10 + int(((processedTiles + failedTiles) / max(1, totalTiles)) * 85)
+                    with taskLock:
+                        taskData = taskStatus.get(taskId)
+                        if taskData:
+                            taskData["progress"] = min(95, max(taskData.get("progress", 0), progress))
+                            taskData["currentStage"] = "瓦片批处理"
+                            taskData["message"] = f"切片处理中 {processedTiles}/{totalTiles}，失败 {failedTiles}"
+                            taskData.setdefault("stats", {})
+                            taskData["stats"]["totalTiles"] = totalTiles
+                            taskData["stats"]["processedTiles"] = processedTiles
+                            taskData["stats"]["failedTiles"] = failedTiles
+                            taskData["stats"]["remainingTiles"] = max(0, totalTiles - processedTiles - failedTiles)
+                            taskData["stats"]["currentSpeed"] = round(processedTiles / max(0.001, time.time() - startTime), 2)
+                            taskData["stats"]["successRate"] = f"{processedTiles / max(1, totalTiles) * 100:.1f}%"
                 if result.get("stopped", False):
                     for pendingFuture in futureToBatch:
                         if not pendingFuture.done():

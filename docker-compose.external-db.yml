@@ -1,0 +1,56 @@
+# 覆盖配置：连接外部 PostgreSQL。
+# 用法：docker compose -f docker-compose.yml -f docker-compose.external-db.yml up -d --no-build
+services:
+  atlasworks-api:
+    environment:
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+
+  atlasworks-vector-worker:
+    environment:
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+
+  atlasworks-raster-worker:
+    environment:
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+
+  atlasworks-terrain-worker:
+    environment:
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+
+  atlasworks-3dtiles-worker:
+    environment:
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}
+
+  atlasworks-publisher:
+    environment:
+      - TF_DB_HOST=${ATLASWORKS_DB_HOST:-host.docker.internal}
+      - TF_DB_PORT=${ATLASWORKS_DB_PORT:-5432}
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=${ATLASWORKS_DB_SSLMODE:-disable}

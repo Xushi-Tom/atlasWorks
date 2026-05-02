@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=debian:bullseye
+ARG BASE_IMAGE=debian:bullseye-amd64
 FROM ${BASE_IMAGE}
 
 LABEL maintainer="AtlasWorks Team"

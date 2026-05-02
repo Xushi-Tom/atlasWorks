@@ -1,0 +1,80 @@
+# 覆盖配置：在本机一起启动 PostgreSQL 15。
+# 用法：docker compose -f docker-compose.yml -f docker-compose.pg15.yml up -d --no-build
+services:
+  atlasworks-postgres:
+    image: postgres:15
+    platform: linux/amd64
+    container_name: atlasworks-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${ATLASWORKS_DB_NAME:-atlasworks}
+      - POSTGRES_USER=${ATLASWORKS_DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
+    ports:
+      - "${ATLASWORKS_POSTGRES_HOST_PORT:-15432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - ./runtime/postgres15:/var/lib/postgresql/data
+
+  atlasworks-api:
+    depends_on:
+      atlasworks-postgres:
+        condition: service_healthy
+    environment:
+      - TF_DB_HOST=atlasworks-postgres
+      - TF_DB_PORT=5432
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=disable
+
+  atlasworks-vector-worker:
+    environment:
+      - TF_DB_HOST=atlasworks-postgres
+      - TF_DB_PORT=5432
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=disable
+
+  atlasworks-raster-worker:
+    environment:
+      - TF_DB_HOST=atlasworks-postgres
+      - TF_DB_PORT=5432
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=disable
+
+  atlasworks-terrain-worker:
+    environment:
+      - TF_DB_HOST=atlasworks-postgres
+      - TF_DB_PORT=5432
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=disable
+
+  atlasworks-3dtiles-worker:
+    environment:
+      - TF_DB_HOST=atlasworks-postgres
+      - TF_DB_PORT=5432
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=disable
+
+  atlasworks-publisher:
+    environment:
+      - TF_DB_HOST=atlasworks-postgres
+      - TF_DB_PORT=5432
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_SSLMODE=disable
