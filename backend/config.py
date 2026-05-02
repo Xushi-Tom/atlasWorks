@@ -86,6 +86,7 @@ config = {
         ".las",
         ".laz",
         ".geojson",
+        ".gpkg",
         ".shp",
         ".dbf",
         ".prj",

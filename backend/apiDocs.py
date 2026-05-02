@@ -9,6 +9,7 @@ from flask import Response, current_app, jsonify, request
 
 from api_response import normalize_envelope
 from config import config
+from version import APP_VERSION
 
 
 _PATH_PARAM_PATTERN = re.compile(r"<(?:[^:>]+:)?([^>]+)>")
@@ -29,7 +30,7 @@ _OPERATION_OVERRIDES = {
                                 "value": {
                                     "status": "healthy",
                                     "timestamp": "2026-03-25 00:30:00",
-                                    "version": "2.0.0",
+                                    "version": APP_VERSION,
                                     "database": {"enabled": True, "status": "healthy", "connected": True},
                                     "tasks": {"inMemoryTotal": 2, "running": 1, "queued": 0},
                                     "catalog": {"artifacts": 5, "publications": 3, "taskEvents": 18},
@@ -53,7 +54,7 @@ _OPERATION_OVERRIDES = {
                                 "summary": "系统信息示例",
                                 "value": {
                                     "timestamp": "2026-03-25T00:30:00",
-                                    "version": "2.0.0",
+                                    "version": APP_VERSION,
                                     "config": {
                                         "dataSourceDir": "/app/dataSource",
                                         "tilesDir": "/app/tiles",
@@ -593,6 +594,63 @@ _OPERATION_OVERRIDES = {
             },
         },
     },
+    ("/api/tile/mvt", "post"): {
+        "summary": "创建 MVT 矢量切片任务",
+        "description": "输入支持 .geojson/.shp/.gpkg，输出为静态 .pbf 目录结构。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/VectorTilesRequest"},
+                    "examples": {
+                        "vector_sources": {
+                            "summary": "GeoJSON / SHP 生成 MVT",
+                            "value": {
+                                "folderPaths": ["20260422/vector"],
+                                "filePatterns": ["*.geojson", "*.shp"],
+                                "outputPath": "mvt/demo-buildings",
+                                "minZoom": 0,
+                                "maxZoom": 14,
+                                "datasetName": "atlasworks_buildings",
+                                "overwrite": False,
+                            },
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "任务创建成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskCreate"},
+                        "examples": {
+                            "task_started": {
+                                "value": {
+                                    "success": True,
+                                    "taskId": "mvt1774351000",
+                                    "status": "running",
+                                    "message": "MVT 切片任务已启动",
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {
+                            "invalid": {"value": {"error": "缺少参数: filePatterns"}}
+                        }
+                    }
+                },
+            },
+        },
+    },
     ("/api/tile/terrain", "post"): {
         "summary": "创建地形切片任务",
         "description": "filePatterns 支持通配符、txt、以及 http/https 网络地址。",
@@ -886,7 +944,7 @@ _OPERATION_OVERRIDES = {
                                             "publishedAt": "2026-04-01T10:21:35",
                                             "createdAt": "2026-04-01T10:21:35",
                                             "updatedAt": "2026-04-01T10:21:35",
-                                            "accessUrl": "http://172.20.0.3:8000/published/demo/output/{z}/{x}/{y}.png",
+                                            "accessUrl": "http://172.20.0.3:8000/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
                                         }
                                     ],
                                 }
@@ -983,7 +1041,7 @@ _OPERATION_OVERRIDES = {
                                         "publishedAt": "2026-04-01T10:21:35",
                                         "createdAt": "2026-04-01T10:21:35",
                                         "updatedAt": "2026-04-01T10:21:35",
-                                        "accessUrl": "http://172.20.0.3:8000/published/demo/output/{z}/{x}/{y}.png",
+                                        "accessUrl": "http://172.20.0.3:8000/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
                                     },
                                 }
                             }
@@ -1029,7 +1087,7 @@ _OPERATION_OVERRIDES = {
                                         "createdAt": "2026-04-01T10:21:35",
                                         "updatedAt": "2026-04-01T10:21:35",
                                         "browserUrl": "http://172.20.0.3:8000/published/demo/output",
-                                        "accessUrl": "http://172.20.0.3:8000/published/demo/output/{z}/{x}/{y}.png",
+                                        "accessUrl": "http://172.20.0.3:8000/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
                                     },
                                 }
                             }
@@ -1318,6 +1376,10 @@ _PATH_DOCS = {
     "/api/tile/indexedTiles": {
         "summary": "创建地图切片任务",
         "description": "创建基于空间索引的地图切片异步任务，支持网络源文件和多进程。",
+    },
+    "/api/tile/mvt": {
+        "summary": "创建 MVT 矢量切片任务",
+        "description": "创建静态 MVT 目录切片任务，支持 GeoJSON、SHP、GPKG 输入。",
     },
     "/api/tile/convert": {
         "summary": "瓦片结构转换",
@@ -1798,7 +1860,7 @@ def _openapi_spec():
         "openapi": "3.0.3",
         "info": {
             "title": "AtlasWorks API",
-            "version": "2.0.0",
+            "version": APP_VERSION,
             "description": (
                 "AtlasWorks 瓦片生产与发布接口文档。"
                 "已自动暴露当前服务中全部 API 路由。"
@@ -2104,6 +2166,20 @@ def _openapi_spec():
                     },
                     "required": ["filePatterns", "outputPath"],
                 },
+                "VectorTilesRequest": {
+                    "type": "object",
+                    "properties": {
+                        "folderPaths": {"type": "array", "items": {"type": "string"}},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}},
+                        "outputPath": {"type": "string", "description": "输出目录；不传时自动生成。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "maximum": 22},
+                        "maxZoom": {"type": "integer", "minimum": 0, "maximum": 22},
+                        "datasetName": {"type": "string", "description": "MVT 数据集名称。"},
+                        "layerName": {"type": "string", "description": "兼容 datasetName 的别名字段。"},
+                        "overwrite": {"type": "boolean", "description": "outputPath 已存在时是否覆盖。"},
+                    },
+                    "required": ["filePatterns"],
+                },
                 "TerrainTilesRequest": {
                     "type": "object",
                     "properties": {
@@ -2386,7 +2462,7 @@ def _openapi_spec():
                         },
                         "publishMethod": {
                             "type": "string",
-                            "enum": ["xyz", "tms", "wmts", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
+                            "enum": ["xyz", "tms", "wmts", "mvt", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
                             "description": "发布方式，对应前端“发布方式”。",
                             "example": "wmts",
                         },
@@ -2435,7 +2511,7 @@ def _openapi_spec():
                 },
                 "PublicationPublishMethod": {
                     "type": "string",
-                    "enum": ["xyz", "tms", "wmts", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
+                    "enum": ["xyz", "tms", "wmts", "mvt", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
                 },
                 "PublicationVisibility": {
                     "type": "string",

@@ -4,7 +4,7 @@
 from flask import request
 
 from apiDocs import getOpenApiSpec, getSwaggerUi
-from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, servePublishedPath, serveWmts, updatePublication
+from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, servePublicationAsset, servePublishedPath, serveWmts, updatePublication
 from dataSourceOps import getDataSourceInfo, getDataSourceWorkspaceInfo, listDataSources, recommendConfig, resolveDataSourceFiles, serveDataSourceFile
 from fileSplitOps import splitLargeFile
 from indexedTilesOps import createIndexedTiles, deleteNodataTiles, scanNodataTiles
@@ -15,6 +15,7 @@ from terrainOps import createTerrainTiles, decompressTerrain, updateLayerJson
 from tileAdminOps import convertTileFormat, getCacheInfo
 from tiles3dOps import create3DTiles
 from uploadOps import extractArchiveFile, uploadFolderFiles, uploadSingleFile, uploadZipArchive
+from vectorTilesOps import createVectorTiles
 from workspaceOps import browseDirectory, createDatasourceFolder, createWorkspaceFolder, deleteDatasourceFile, deleteDatasourceFolder, deleteWorkspaceFile, deleteWorkspaceFolder, getFileDetails, getWorkspaceInfo, moveWorkspaceItem, renameWorkspaceFile, renameWorkspaceFolder, serveWorkspaceFile
 
 
@@ -68,6 +69,7 @@ def registerRoutes(app):
 
     app.add_url_rule("/api/tile/terrain", endpoint="create_terrain_tiles", view_func=createTerrainTiles, methods=["POST"])
     app.add_url_rule("/api/tile/indexedTiles", endpoint="create_indexed_tiles", view_func=createIndexedTiles, methods=["POST"])
+    app.add_url_rule("/api/tile/mvt", endpoint="create_vector_tiles", view_func=createVectorTiles, methods=["POST"])
     app.add_url_rule("/api/tile/3dtiles", endpoint="create_3d_tiles", view_func=create3DTiles, methods=["POST"])
     app.add_url_rule("/api/tile/convert", endpoint="convert_tile_format", view_func=convertTileFormat, methods=["POST"])
 
@@ -84,6 +86,8 @@ def registerRoutes(app):
 
     app.add_url_rule("/api/publications", endpoint="publications", view_func=handlePublications, methods=["GET", "POST"])
     app.add_url_rule("/api/publications/<publicationId>", endpoint="publication_detail", view_func=handlePublicationDetail, methods=["GET", "PUT", "DELETE"])
+    app.add_url_rule("/publication-assets/<publication_id>", endpoint="published_publication_root", view_func=servePublicationAsset, defaults={"relative_path": ""}, methods=["GET"])
+    app.add_url_rule("/publication-assets/<publication_id>/<path:relative_path>", endpoint="published_publication_asset", view_func=servePublicationAsset, methods=["GET"])
     app.add_url_rule("/published", endpoint="published_root", view_func=servePublishedPath, defaults={"relative_path": ""}, methods=["GET"])
     app.add_url_rule("/published/<path:relative_path>", endpoint="published_asset", view_func=servePublishedPath, methods=["GET"])
     app.add_url_rule("/wmts", endpoint="wmts_service", view_func=serveWmts, methods=["GET", "OPTIONS"])

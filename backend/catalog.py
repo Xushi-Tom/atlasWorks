@@ -45,6 +45,8 @@ def _mime_from_extension(extension):
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".webp": "image/webp",
+        ".pbf": "application/vnd.mapbox-vector-tile",
+        ".mvt": "application/vnd.mapbox-vector-tile",
         ".glb": "model/gltf-binary",
         ".b3dm": "application/octet-stream",
         ".pnts": "application/octet-stream",
@@ -122,6 +124,174 @@ def _first_non_blank(*values):
 def _load_manifest(manifest_path):
     with open(manifest_path, "r", encoding="utf-8") as manifest_file:
         return json.load(manifest_file)
+
+
+def _normalize_tile_scheme(tile_scheme, default="tms"):
+    raw = str(tile_scheme or "").strip().lower()
+    if raw in {"google", "googlexyz", "xyz", "wmts"}:
+        return "google"
+    if raw in {"tms"}:
+        return "tms"
+    return default
+
+
+def _target_tile_scheme_for_publish_method(publish_method):
+    normalized = str(publish_method or "").strip().lower()
+    if normalized in {"xyz", "wmts"}:
+        return "google"
+    if normalized == "tms":
+        return "tms"
+    return ""
+
+
+def _transform_tile_y(zoom, tile_y, from_scheme, to_scheme):
+    try:
+        zoom_int = int(zoom)
+        tile_y_int = int(tile_y)
+    except (TypeError, ValueError):
+        return None
+
+    if zoom_int < 0 or tile_y_int < 0:
+        return None
+
+    matrix_height = 1 << zoom_int
+    if tile_y_int >= matrix_height:
+        return None
+
+    normalized_from = _normalize_tile_scheme(from_scheme)
+    normalized_to = _normalize_tile_scheme(to_scheme)
+    if normalized_from == normalized_to:
+        return tile_y_int
+    return matrix_height - tile_y_int - 1
+
+
+def _parse_tile_request_path(relative_path):
+    normalized = _normalize_relative_path(relative_path)
+    parts = [segment for segment in normalized.split("/") if segment]
+    if len(parts) != 3:
+        return None
+
+    zoom_value, x_value, y_filename = parts
+    stem, extension = os.path.splitext(y_filename)
+    if not zoom_value.isdigit() or not x_value.isdigit() or not stem.isdigit() or not extension:
+        return None
+
+    return {
+        "zoom": int(zoom_value),
+        "x": int(x_value),
+        "y": int(stem),
+        "extension": extension,
+    }
+
+
+def _build_publication_asset_url(publication_id, relative_path=""):
+    publication_token = quote(str(publication_id or "").strip(), safe="")
+    suffix = _normalize_relative_path(relative_path)
+    if suffix:
+        return f"{_public_base_url()}/publication-assets/{publication_token}/{suffix}"
+    return f"{_public_base_url()}/publication-assets/{publication_token}"
+
+
+def _extract_tile_profile_from_manifest(manifest):
+    if not isinstance(manifest, dict):
+        return {}
+
+    build_parameters = _safe_dict(manifest.get("buildParameters"))
+    result_summary = _safe_dict(manifest.get("resultSummary"))
+    render_options = _safe_dict(result_summary.get("renderOptions"))
+    image_format = str(
+        _first_non_blank(
+            render_options.get("imageFormat"),
+            result_summary.get("imageFormat"),
+            build_parameters.get("imageFormat"),
+        )
+    ).strip().lower()
+
+    profile = {}
+    tile_scheme = _first_non_blank(
+        render_options.get("tileScheme"),
+        result_summary.get("tileScheme"),
+        build_parameters.get("tileScheme"),
+    )
+    if tile_scheme:
+        profile["sourceTileScheme"] = _normalize_tile_scheme(tile_scheme)
+    if image_format:
+        profile["tileExtension"] = ".jpg" if image_format in {"jpg", "jpeg"} else f".{image_format}"
+    return profile
+
+
+def _resolve_tile_publish_profile(full_path, metadata=None, artifact=None):
+    metadata = _safe_dict(metadata)
+    artifact = artifact if isinstance(artifact, dict) else {}
+    custom_metadata = _safe_dict(metadata.get("customMetadata"))
+    artifact_metadata = _safe_dict(artifact.get("metadata"))
+    artifact_result = _safe_dict(artifact_metadata.get("resultSummary"))
+    artifact_render_options = _safe_dict(artifact_result.get("renderOptions"))
+    artifact_build_parameters = _safe_dict(artifact_metadata.get("buildParameters"))
+
+    profile = {}
+    stored_scheme = _first_non_blank(
+        metadata.get("sourceTileScheme"),
+        custom_metadata.get("sourceTileScheme"),
+        artifact_render_options.get("tileScheme"),
+        artifact_result.get("tileScheme"),
+        artifact_build_parameters.get("tileScheme"),
+    )
+    if stored_scheme:
+        profile["sourceTileScheme"] = _normalize_tile_scheme(stored_scheme)
+
+    stored_extension = _first_non_blank(
+        metadata.get("tileExtension"),
+        custom_metadata.get("tileExtension"),
+    )
+    if stored_extension:
+        normalized_extension = str(stored_extension).strip().lower()
+        if normalized_extension and not normalized_extension.startswith("."):
+            normalized_extension = f".{normalized_extension}"
+        profile["tileExtension"] = normalized_extension
+
+    metadata_path = os.path.join(full_path, "tile_metadata.json")
+    if os.path.isfile(metadata_path):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as file_obj:
+                tile_metadata = json.load(file_obj)
+            render_options = _safe_dict(tile_metadata.get("renderOptions"))
+            if not profile.get("sourceTileScheme") and render_options.get("tileScheme"):
+                profile["sourceTileScheme"] = _normalize_tile_scheme(render_options.get("tileScheme"))
+            if not profile.get("tileExtension"):
+                image_format = str(render_options.get("imageFormat") or "").strip().lower()
+                if image_format:
+                    profile["tileExtension"] = ".jpg" if image_format in {"jpg", "jpeg"} else f".{image_format}"
+        except Exception as exc:
+            logMessage(f"读取 tile_metadata 失败: {metadata_path} - {exc}", "WARNING")
+
+    manifest_path = _first_non_blank(metadata.get("manifestPath"), artifact.get("manifestPath"))
+    if manifest_path and os.path.isfile(manifest_path):
+        try:
+            manifest_profile = _extract_tile_profile_from_manifest(_load_manifest(manifest_path))
+            for key, value in manifest_profile.items():
+                profile.setdefault(key, value)
+        except Exception as exc:
+            logMessage(f"读取 manifest 失败: {manifest_path} - {exc}", "WARNING")
+
+    local_manifest_path = os.path.join(full_path, "manifest.json")
+    if os.path.isfile(local_manifest_path):
+        try:
+            manifest_profile = _extract_tile_profile_from_manifest(_load_manifest(local_manifest_path))
+            for key, value in manifest_profile.items():
+                profile.setdefault(key, value)
+        except Exception as exc:
+            logMessage(f"读取 manifest 失败: {local_manifest_path} - {exc}", "WARNING")
+
+    tile_info = _find_tile_template_info(full_path)
+    if tile_info:
+        profile.setdefault("tileExtension", str(tile_info.get("extension") or "").strip().lower())
+
+    profile["sourceTileScheme"] = _normalize_tile_scheme(profile.get("sourceTileScheme"))
+    profile["tileExtension"] = str(profile.get("tileExtension") or "").strip().lower()
+    if profile["tileExtension"] and not profile["tileExtension"].startswith("."):
+        profile["tileExtension"] = f".{profile['tileExtension']}"
+    return profile
 
 
 def _normalize_relative_path(path_value):
@@ -306,12 +476,13 @@ def _find_tileset_entry(full_path):
     return None
 
 
-def _build_publication_access_payload(publish_path, publish_method=None, publish_type=None, publication_id=None):
+def _build_publication_access_payload(publish_path, publish_method=None, publish_type=None, publication_id=None, metadata=None):
     public_base = _public_base_url()
     browser_url = _build_access_url(publish_path)
     access_url = browser_url
     launch_url = browser_url
     sample_url = None
+    metadata = _safe_dict(metadata)
 
     normalized_path = _normalize_relative_path(publish_path)
     if not normalized_path:
@@ -326,8 +497,15 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
     publish_method = str(publish_method or "").strip().lower()
     publish_type = str(publish_type or "").strip().lower()
     _, full_path = _resolve_tiles_path(normalized_path)
+    tile_profile = _resolve_tile_publish_profile(full_path, metadata=metadata)
+    source_tile_scheme = tile_profile.get("sourceTileScheme") or "tms"
+    target_tile_scheme = _target_tile_scheme_for_publish_method(publish_method)
+    is_vector_tile_publish = publish_method in {"mvt", "vector-tile", "vector-tiles"}
     tileset_entry = _find_tileset_entry(full_path) if publish_method == "3d-tiles" or publish_type == "3dtiles" else None
-    enable_tile_template = publish_method in {"wmts", "tms", "xyz", "quantized-mesh", "cesium-terrain", "terrain"} or publish_type == "terrain"
+    enable_tile_template = (
+        publish_method in {"wmts", "tms", "xyz", "quantized-mesh", "cesium-terrain", "terrain", "mvt", "vector-tile", "vector-tiles"}
+        or publish_type == "terrain"
+    )
     tile_info = _find_tile_template_info(full_path) if enable_tile_template else None
 
     if tileset_entry:
@@ -338,7 +516,7 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
 
     if publish_method == "wmts":
         layer_identifier = str(publication_id or normalized_path).strip()
-        tile_extension = (tile_info or {}).get("extension") or ".png"
+        tile_extension = tile_profile.get("tileExtension") or (tile_info or {}).get("extension") or ".png"
         tile_mime = _mime_from_extension(tile_extension) or "image/png"
 
         capabilities_url = (
@@ -354,7 +532,11 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
             )
             sample_zoom = (tile_info or {}).get("zoom", "0")
             sample_x = (tile_info or {}).get("x", "0")
-            sample_y = (tile_info or {}).get("y", "0")
+            sample_y = str(
+                _transform_tile_y(sample_zoom, (tile_info or {}).get("y", "0"), source_tile_scheme, "google")
+                if tile_info
+                else 0
+            )
             sample_url = (
                 f"{public_base}/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
                 f"&LAYER={encoded_layer}&STYLE=default&TILEMATRIXSET={WMTS_DEFAULT_MATRIX_SET}"
@@ -363,11 +545,34 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
         launch_url = capabilities_url
 
     if tile_info:
-        tile_template_url = f"{public_base}/published/{normalized_path}/{{z}}/{{x}}/{{y}}{tile_info['extension']}"
-        sample_url = f"{public_base}/published/{normalized_path}/{tile_info['zoom']}/{tile_info['x']}/{tile_info['y']}{tile_info['extension']}"
+        tile_extension = tile_profile.get("tileExtension") or tile_info["extension"]
+        sample_y = tile_info["y"]
+        if target_tile_scheme:
+            transformed_sample_y = _transform_tile_y(tile_info["zoom"], sample_y, source_tile_scheme, target_tile_scheme)
+            if transformed_sample_y is not None:
+                sample_y = str(transformed_sample_y)
+
+        if publish_method in {"xyz", "tms"} and publication_id:
+            tile_template_url = _build_publication_asset_url(
+                publication_id,
+                f"{{z}}/{{x}}/{{y}}{tile_extension}",
+            )
+            sample_url = _build_publication_asset_url(
+                publication_id,
+                f"{tile_info['zoom']}/{tile_info['x']}/{sample_y}{tile_extension}",
+            )
+        else:
+            tile_template_url = f"{public_base}/published/{normalized_path}/{{z}}/{{x}}/{{y}}{tile_extension}"
+            sample_url = f"{public_base}/published/{normalized_path}/{tile_info['zoom']}/{tile_info['x']}/{sample_y}{tile_extension}"
+
         if publish_method != "wmts":
             access_url = tile_template_url
             launch_url = sample_url or browser_url
+
+    if is_vector_tile_publish:
+        vector_tileset_path = os.path.join(full_path, "tileset.json")
+        if os.path.isfile(vector_tileset_path):
+            launch_url = f"{public_base}/published/{normalized_path}/tileset.json"
 
     return {
         "browserUrl": browser_url,
@@ -389,6 +594,7 @@ def _augment_publication_response(payload):
         metadata.get("publishMethod"),
         response.get("publishType"),
         response.get("publicationId") or response.get("id"),
+        metadata,
     )
     for key, value in access_payload.items():
         existing_value = response.get(key)
@@ -593,6 +799,21 @@ def _prepare_publication_payload(data, existing_publication=None):
     custom_metadata.update(incoming_custom_metadata)
     custom_metadata.pop("enabled", None)
     custom_metadata["sourceMode"] = source_mode_input
+    tile_profile = _resolve_tile_publish_profile(full_publish_path, metadata=existing_metadata, artifact=artifact)
+    source_tile_scheme = tile_profile.get("sourceTileScheme") or _normalize_tile_scheme(
+        _first_non_blank(
+            incoming_custom_metadata.get("sourceTileScheme"),
+            existing_custom_metadata.get("sourceTileScheme"),
+        )
+    )
+    tile_extension = tile_profile.get("tileExtension") or _first_non_blank(
+        incoming_custom_metadata.get("tileExtension"),
+        existing_custom_metadata.get("tileExtension"),
+    )
+    if source_tile_scheme:
+        custom_metadata["sourceTileScheme"] = source_tile_scheme
+    if tile_extension:
+        custom_metadata["tileExtension"] = tile_extension
 
     # Persist an explicit timezone-aware timestamp to avoid frontend double-shifting.
     published_at = datetime.now(timezone.utc).isoformat()
@@ -615,6 +836,8 @@ def _prepare_publication_payload(data, existing_publication=None):
             "visibility": visibility,
             "note": note,
             "enabled": enabled,
+            "sourceTileScheme": source_tile_scheme,
+            "tileExtension": tile_extension,
             "customMetadata": custom_metadata,
         },
     }
@@ -728,6 +951,7 @@ def _publication_record_to_response(record):
         metadata.get("publishMethod"),
         record.get("publishType"),
         record.get("id"),
+        metadata,
     )
     response = _augment_publication_response({
         "publicationId": record.get("id"),
@@ -914,6 +1138,7 @@ def createPublication():
             descriptor["metadata"].get("publishMethod"),
             publish_type,
             publication_id,
+            descriptor["metadata"],
         )
 
         persisted = upsertPublicationRecord(
@@ -934,6 +1159,8 @@ def createPublication():
                 "visibility": descriptor["metadata"].get("visibility", "private"),
                 "note": descriptor["metadata"].get("note"),
                 "enabled": descriptor["metadata"].get("enabled", True),
+                "sourceTileScheme": descriptor["metadata"].get("sourceTileScheme"),
+                "tileExtension": descriptor["metadata"].get("tileExtension"),
                 "customMetadata": descriptor["metadata"].get("customMetadata", {}),
             },
             published_at=prepared["publishedAt"],
@@ -1008,6 +1235,7 @@ def updatePublication(publication_id=None, publicationId=None):
             descriptor["metadata"].get("publishMethod"),
             prepared["publishType"],
             prepared["publicationId"],
+            metadata,
         )
 
         persisted = upsertPublicationRecord(
@@ -1156,47 +1384,116 @@ def deletePublication(publication_id=None, publicationId=None):
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+def _send_published_entry(full_path, normalized_path, url_builder=None):
+    if os.path.isdir(full_path):
+        for index_name in ("index.html", "index.htm"):
+            index_path = os.path.join(full_path, index_name)
+            if os.path.exists(index_path):
+                return send_from_directory(full_path, index_name)
+
+        entries = []
+        for entry_name in sorted(os.listdir(full_path))[:200]:
+            child_relative_path = _normalize_relative_path(os.path.join(normalized_path, entry_name))
+            child_full_path = os.path.join(full_path, entry_name)
+            entries.append({
+                "name": entry_name,
+                "path": child_relative_path,
+                "type": "directory" if os.path.isdir(child_full_path) else "file",
+                "url": url_builder(child_relative_path) if callable(url_builder) else _build_access_url(child_relative_path),
+            })
+
+        return jsonify({
+            "success": True,
+            "path": normalized_path,
+            "type": "directory",
+            "accessUrl": url_builder(normalized_path) if callable(url_builder) else _build_access_url(normalized_path),
+            "entries": entries,
+        })
+
+    parent_dir = os.path.dirname(full_path)
+    filename = os.path.basename(full_path)
+    mimetype = _mime_from_extension(os.path.splitext(filename)[1])
+    if mimetype:
+        return send_from_directory(parent_dir, filename, mimetype=mimetype)
+    return send_from_directory(parent_dir, filename)
+
+
+def _resolve_publication_relative_path(base_full_path, relative_path):
+    normalized_relative = _normalize_relative_path(relative_path)
+    if not normalized_relative:
+        return base_full_path
+
+    target_path = os.path.abspath(os.path.join(base_full_path, normalized_relative.replace("/", os.sep)))
+    if target_path != base_full_path and not target_path.startswith(f"{base_full_path}{os.sep}"):
+        raise ValueError("目标路径非法")
+    return target_path
+
+
+def _resolve_publication_asset_path(publication, relative_path=""):
+    metadata = _safe_dict(publication.get("metadata"))
+    publish_path = publication.get("publishPath") or metadata.get("workspacePath")
+    normalized_publish_path, full_publish_path = _resolve_tiles_path(publish_path)
+    normalized_relative = _normalize_relative_path(relative_path)
+    publish_method = str(metadata.get("publishMethod") or "").strip().lower()
+    tile_request = _parse_tile_request_path(normalized_relative)
+
+    if tile_request and publish_method in {"xyz", "tms"}:
+        tile_profile = _resolve_tile_publish_profile(full_publish_path, metadata=metadata)
+        source_tile_scheme = tile_profile.get("sourceTileScheme") or "tms"
+        requested_tile_scheme = _target_tile_scheme_for_publish_method(publish_method)
+        actual_y = _transform_tile_y(tile_request["zoom"], tile_request["y"], requested_tile_scheme, source_tile_scheme)
+        if actual_y is None:
+            raise FileNotFoundError("瓦片坐标超出范围")
+        actual_relative = _normalize_relative_path(
+            os.path.join(
+                normalized_publish_path,
+                str(tile_request["zoom"]),
+                str(tile_request["x"]),
+                f"{actual_y}{tile_request['extension']}",
+            )
+        )
+        _, actual_full_path = _resolve_tiles_path(actual_relative)
+        return normalized_relative, actual_full_path
+
+    resolved_full_path = _resolve_publication_relative_path(full_publish_path, normalized_relative)
+    return normalized_relative, resolved_full_path
+
+
 def servePublishedPath(relative_path=""):
     try:
         normalized_path, full_path = _resolve_tiles_path(relative_path)
         if not os.path.exists(full_path):
             return jsonify({"error": "目标发布资源不存在"}), 404
 
-        if os.path.isdir(full_path):
-            for index_name in ("index.html", "index.htm"):
-                index_path = os.path.join(full_path, index_name)
-                if os.path.exists(index_path):
-                    return send_from_directory(full_path, index_name)
-
-            entries = []
-            for entry_name in sorted(os.listdir(full_path))[:200]:
-                child_relative_path = _normalize_relative_path(os.path.join(normalized_path, entry_name))
-                child_full_path = os.path.join(full_path, entry_name)
-                entries.append({
-                    "name": entry_name,
-                    "path": child_relative_path,
-                    "type": "directory" if os.path.isdir(child_full_path) else "file",
-                    "url": _build_access_url(child_relative_path),
-                })
-
-            return jsonify({
-                "success": True,
-                "path": normalized_path,
-                "type": "directory",
-                "accessUrl": _build_access_url(normalized_path),
-                "entries": entries,
-            })
-
-        parent_dir = os.path.dirname(full_path)
-        filename = os.path.basename(full_path)
-        mimetype = _mime_from_extension(os.path.splitext(filename)[1])
-        if mimetype:
-            return send_from_directory(parent_dir, filename, mimetype=mimetype)
-        return send_from_directory(parent_dir, filename)
+        return _send_published_entry(full_path, normalized_path)
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
         logMessage(f"读取发布资源失败 {relative_path}: {exc}", "ERROR")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+def servePublicationAsset(publication_id=None, relative_path=""):
+    try:
+        publication = _get_publication_snapshot(publication_id)
+        if not publication:
+            return jsonify({"error": "发布记录不存在"}), 404
+
+        normalized_relative_path, full_path = _resolve_publication_asset_path(publication, relative_path)
+        if not os.path.exists(full_path):
+            return jsonify({"error": "目标发布资源不存在"}), 404
+
+        return _send_published_entry(
+            full_path,
+            normalized_relative_path,
+            url_builder=lambda child_path: _build_publication_asset_url(publication_id, child_path),
+        )
+    except FileNotFoundError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logMessage(f"读取发布资源失败 {publication_id}/{relative_path}: {exc}", "ERROR")
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
@@ -1259,10 +1556,16 @@ def _collect_wmts_layers():
         if not tile_info:
             continue
 
-        extension = str(tile_info.get("extension") or "").strip().lower()
+        tile_profile = _resolve_tile_publish_profile(full_path, metadata=metadata)
+        source_tile_scheme = tile_profile.get("sourceTileScheme") or "tms"
+        extension = str(tile_profile.get("tileExtension") or tile_info.get("extension") or "").strip().lower()
         mime_type = _mime_from_extension(extension)
         if not mime_type:
             continue
+
+        sample_y = _transform_tile_y(tile_info.get("zoom") or 0, tile_info.get("y") or 0, source_tile_scheme, "google")
+        if sample_y is None:
+            sample_y = 0
 
         layers.append({
             "id": publication_id,
@@ -1270,9 +1573,10 @@ def _collect_wmts_layers():
             "publishPath": normalized_path,
             "extension": extension,
             "mimeType": mime_type,
+            "sourceTileScheme": source_tile_scheme,
             "sampleZoom": str(tile_info.get("zoom") or "0"),
             "sampleX": str(tile_info.get("x") or "0"),
-            "sampleY": str(tile_info.get("y") or "0"),
+            "sampleY": str(sample_y),
         })
 
     layers.sort(key=lambda item: item.get("id", ""))
@@ -1418,7 +1722,11 @@ def _serve_wmts_tile(layers):
     if tile_row >= max_index or tile_col >= max_index:
         return _wmts_error("瓦片坐标超出范围", exception_code="TileOutOfRange", locator="TILEROW/TILECOL", status_code=404)
 
-    tile_relative_path = f"{layer['publishPath']}/{zoom}/{tile_col}/{tile_row}{layer['extension']}"
+    actual_tile_row = _transform_tile_y(zoom, tile_row, "google", layer.get("sourceTileScheme") or "tms")
+    if actual_tile_row is None:
+        return _wmts_error("瓦片坐标超出范围", exception_code="TileOutOfRange", locator="TILEROW", status_code=404)
+
+    tile_relative_path = f"{layer['publishPath']}/{zoom}/{tile_col}/{actual_tile_row}{layer['extension']}"
     _, tile_full_path = _resolve_tiles_path(tile_relative_path)
     if not os.path.exists(tile_full_path):
         return _wmts_error("瓦片不存在", exception_code="TileOutOfRange", locator="TILEMATRIX/TILEROW/TILECOL", status_code=404)

@@ -10,7 +10,7 @@ import DashboardView from './views/DashboardView.vue';
 import DatasourceView from './views/DatasourceView.vue';
 import MapTilesView from './views/MapTilesView.vue';
 import TerrainTilesView from './views/TerrainTilesView.vue';
-// import Tiles3DView from './views/Tiles3DView.vue';
+import Tiles3DView from './views/Tiles3DView.vue';
 import WorkspaceView from './views/WorkspaceView.vue';
 import TasksView from './views/TasksView.vue';
 import PublishView from './views/PublishView.vue';
@@ -88,14 +88,14 @@ const gameWindowMap = {
     'game-tictactoe': GameTicTacToeView
 };
 
-const hiddenSections = new Set(['tiles-3d']);
+const hiddenSections = new Set();
 
 const desktopApps = [
     { section: 'dashboard', label: '系统仪表盘', subtitle: '平台状态总览', token: 'DB', tone: 'violet' },
     { section: 'datasource', label: '数据源管理', subtitle: '目录与接入', token: 'DS', tone: 'teal' },
     { section: 'map-tiles', label: '地图切片', subtitle: '二维生产工位', token: 'MP', tone: 'amber' },
     { section: 'terrain-tiles', label: '地形切片', subtitle: '地形生产工位', token: 'TR', tone: 'emerald' },
-    // { section: 'tiles-3d', label: '3D Tiles', subtitle: '三维生产工位', token: '3D', tone: 'indigo' },
+    { section: 'tiles-3d', label: '3D Tiles', subtitle: '三维生产工位', token: '3D', tone: 'indigo' },
     { section: 'workspace', label: '工作空间', subtitle: '产物目录管理', token: 'WS', tone: 'cyan' },
     { section: 'tasks', label: '任务列表', subtitle: '任务调度追踪', token: 'TK', tone: 'rose' },
     { section: 'publish', label: '发布中心', subtitle: '服务地址发布', token: 'PB', tone: 'orange' },
@@ -119,7 +119,7 @@ const desktopApps = [
 const startMenuSections = [
     { key: 'overview', title: '总览', sections: ['dashboard'] },
     { key: 'data', title: '数据管理', sections: ['datasource', 'workspace'] },
-    { key: 'processing', title: '数据处理', sections: ['map-tiles', 'terrain-tiles'] },
+    { key: 'processing', title: '数据处理', sections: ['map-tiles', 'terrain-tiles', 'tiles-3d'] },
     { key: 'flow', title: '流程管理', sections: ['publish', 'tasks'] },
     { key: 'analysis', title: '分析工具', sections: ['tool-nodata', 'tool-layer-json', 'tool-terrain-decompress', 'tool-preflight', 'tool-tile-converter', 'tool-split', 'tool-artifacts'] },
     { key: 'platform', title: '平台能力', sections: ['system-updates', 'system-routes', 'system-config'] }
@@ -131,6 +131,7 @@ const desktopShortcuts = [
     'dashboard',
     'tasks',
     'publish',
+    'tiles-3d',
     'terrain-tiles',
     'map-tiles',
     'workspace'
@@ -141,7 +142,7 @@ const viewMap = {
     datasource: DatasourceView,
     'map-tiles': MapTilesView,
     'terrain-tiles': TerrainTilesView,
-    // 'tiles-3d': Tiles3DView,
+    'tiles-3d': Tiles3DView,
     workspace: WorkspaceView,
     tasks: TasksView,
     publish: PublishView,

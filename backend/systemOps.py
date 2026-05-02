@@ -11,6 +11,7 @@ from config import config, taskLock, taskStatus
 from db import checkDatabaseHealth, countTableRows
 from pagination import paginate_items, parse_pagination_args
 from utils import logMessage
+from version import APP_VERSION
 
 
 def healthCheck():
@@ -26,7 +27,7 @@ def healthCheck():
     response = {
         "status": service_status,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "version": "2.0.0",
+        "version": APP_VERSION,
         "database": database_health,
         "tasks": {
             "inMemoryTotal": len(taskStatus),
@@ -47,7 +48,7 @@ def systemInfo():
         logMessage("收到系统信息查询请求", "INFO")
         system_info = {
             "timestamp": datetime.now().isoformat(),
-            "version": "2.0.0",
+            "version": APP_VERSION,
             "config": {
                 "dataSourceDir": config["dataSourceDir"],
                 "dataSourceHostDir": config.get("dataSourceHostDir") or "",
@@ -122,6 +123,7 @@ def listApiRoutes():
             {"path": "/api/preflight", "methods": ["POST"], "description": "执行构建预检查", "category": "数据源管理", "logic": "在正式构建前检查输入文件、工具链、波段与输出覆盖风险，并返回资源估算"},
             {"path": "/api/tile/terrain", "methods": ["POST"], "description": "创建地形瓦片（支持合并）", "category": "瓦片生成", "logic": "使用CTB生成地形瓦片，支持批量处理、智能缩放和地形合并。filePatterns 支持 http/https 网络地址；参数mergeTerrains=true可自动合并多个地形文件夹"},
             {"path": "/api/tile/indexedTiles", "methods": ["POST"], "description": "创建索引瓦片", "category": "瓦片生成", "logic": "基于空间索引的高性能瓦片生成，支持多进程并行处理，filePatterns 支持 http/https 网络地址"},
+            {"path": "/api/tile/mvt", "methods": ["POST"], "description": "创建 MVT 矢量切片", "category": "瓦片生成", "logic": "将 GeoJSON、SHP、GPKG 等矢量源构建为静态 MVT（.pbf）目录，并复用现有任务与发布体系"},
             {"path": "/api/tile/3dtiles", "methods": ["POST"], "description": "创建 3D Tiles", "category": "瓦片生成", "logic": "按输入类型生成 3D Tiles 输出目录，支持 pointcloud/vector/model/osgb 并复用现有任务与发布体系"},
             {"path": "/api/tile/convert", "methods": ["POST"], "description": "瓦片格式转换", "category": "瓦片生成", "logic": "z/x_y.png ↔ z/x/y.png格式转换，支持批量处理"},
             {"path": "/api/fileDetails", "methods": ["GET"], "description": "获取文件详情", "category": "工作空间管理", "logic": "根据 type 和 path 查询数据源或结果目录中的单个文件详情"},
@@ -138,6 +140,7 @@ def listApiRoutes():
             {"path": "/api/publications/<publicationId>", "methods": ["GET"], "description": "获取发布详情", "category": "发布管理", "logic": "查看指定发布记录的目标产物、别名和发布路径"},
             {"path": "/api/publications/<publicationId>", "methods": ["PUT"], "description": "更新发布记录", "category": "发布管理", "logic": "更新指定发布记录的发布方式、启用状态、别名和元数据"},
             {"path": "/api/publications/<publicationId>", "methods": ["DELETE"], "description": "删除发布记录", "category": "发布管理", "logic": "删除指定发布记录及其落盘描述文件"},
+            {"path": "/publication-assets/<publicationId>/<path:relative_path>", "methods": ["GET"], "description": "访问指定发布记录资源", "category": "发布管理", "logic": "按 publicationId 访问发布资源，并在 XYZ/TMS 场景下自动换算瓦片行号"},
             {"path": "/published", "methods": ["GET"], "description": "浏览发布根目录", "category": "发布管理", "logic": "浏览已发布目录的根节点或入口资源"},
             {"path": "/published/<path:relative_path>", "methods": ["GET"], "description": "访问发布资源", "category": "发布管理", "logic": "读取已发布目录下的目录索引、静态文件或瓦片资源"},
             {"path": "/wmts", "methods": ["GET"], "description": "WMTS 服务", "category": "发布管理", "logic": "提供 WMTS GetCapabilities 与 GetTile 接口，用于访问已发布 WMTS 图层"},
@@ -206,7 +209,7 @@ def updateContainerInfo():
         update_results = {
             "timestamp": datetime.now().isoformat(),
             "updateType": update_type,
-            "version": "v2.72",
+            "version": APP_VERSION,
             "results": {},
         }
 
