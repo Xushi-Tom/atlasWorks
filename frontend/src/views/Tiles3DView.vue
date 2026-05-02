@@ -209,12 +209,7 @@ async function submit() {
 
 <template>
     <section class="app-view app-view-workbench">
-        <div class="section-header section-header-workbench">
-            <div>
-                <span class="section-kicker">3D Tiles Pipeline</span>
-                <h2>3D Tiles 工位</h2>
-                <p class="section-subtitle">在现有任务与发布体系上新增三维数据生产链，当前支持点云、矢量建筑、OBJ 与 OSGB（含目录批量）。</p>
-            </div>
+        <div class="section-header section-header-workbench section-header-compact">
             <div class="section-header-actions">
                 <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始生成</button>
             </div>
@@ -226,9 +221,7 @@ async function submit() {
                     <section class="form-section workbench-section-wide workbench-section-lead">
                         <div class="workbench-section-head">
                             <div>
-                                <span class="section-kicker">Source</span>
                                 <h3>输入与输出</h3>
-                                <p class="workbench-note">沿用数据源与工作空间目录结构，新建 3D Tiles 任务不会影响现有地图切片和地形切片链路。</p>
                             </div>
                         </div>
                         <div class="form-stack">
@@ -318,7 +311,6 @@ async function submit() {
                         <section class="form-section">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Build</span>
                                     <h3>执行参数</h3>
                                 </div>
                             </div>
@@ -403,9 +395,7 @@ async function submit() {
                         <section class="form-section">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Anchor</span>
                                     <h3>模型锚点</h3>
-                                    <p class="workbench-note">OBJ 需要手动锚点；OSGB 可选手动或自动锚点。贴地高度可手动设置。</p>
                                 </div>
                             </div>
                             <div v-if="form.dataType === 'osgb'" class="form-group">

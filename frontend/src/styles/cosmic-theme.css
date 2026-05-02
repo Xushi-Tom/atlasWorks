@@ -2388,6 +2388,11 @@ body.tf-app.tf-theme-light .directory-path-text {
     gap: 14px;
 }
 
+.tf-app .section-header-workbench.section-header-compact {
+    justify-content: flex-end;
+    padding: 14px 22px;
+}
+
 .tf-app .section-header-actions {
     display: flex;
     align-items: center;

@@ -148,12 +148,7 @@ async function submit() {
 
 <template>
     <section class="app-view app-view-workbench">
-        <div class="section-header section-header-workbench">
-            <div>
-                <span class="section-kicker">Vector Production</span>
-                <h2>二维矢量切片工位</h2>
-                <p class="section-subtitle">面向 GeoJSON、SHP 与 GPKG 数据生产二维矢量瓦片金字塔，并承接到现有任务与发布体系。</p>
-            </div>
+        <div class="section-header section-header-workbench section-header-compact">
             <div class="section-header-actions">
                 <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始矢量切片</button>
             </div>
@@ -165,9 +160,7 @@ async function submit() {
                     <section class="form-section workbench-section-wide workbench-section-lead">
                         <div class="workbench-section-head">
                             <div>
-                                <span class="section-kicker">Path Routing</span>
                                 <h3>输入与输出</h3>
-                                <p class="workbench-note">源数据从数据源目录读取，产物写入工作空间，可选择 MVT 或 GeoJSON 瓦片输出。</p>
                             </div>
                         </div>
                         <div class="form-stack">
@@ -216,7 +209,6 @@ async function submit() {
                         <section class="form-section workbench-section-wide">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Tile Pyramid</span>
                                     <h3>金字塔参数</h3>
                                 </div>
                             </div>

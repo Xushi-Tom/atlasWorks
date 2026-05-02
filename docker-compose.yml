@@ -148,6 +148,7 @@ services:
     environment:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
+      - ATLASWORKS_TILING_SERVICE=vector
       - ATLASWORKS_WORKER_ID=${ATLASWORKS_VECTOR_WORKER_ID:-atlasworks-vector-worker-1}
       - ATLASWORKS_WORKER_POLL_INTERVAL=${ATLASWORKS_WORKER_POLL_INTERVAL:-2}
       - ATLASWORKS_WORKER_JOB_TYPES=${ATLASWORKS_WORKER_JOB_TYPES:-mvt_tiles,geojson_tiles,vector_tiles}
@@ -184,6 +185,7 @@ services:
     environment:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
+      - ATLASWORKS_TILING_SERVICE=raster
       - ATLASWORKS_WORKER_ID=${ATLASWORKS_RASTER_WORKER_ID:-atlasworks-raster-worker-1}
       - ATLASWORKS_WORKER_JOB_TYPES=indexed_tiles,map_tiles,tile_convert
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
@@ -215,6 +217,7 @@ services:
     environment:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
+      - ATLASWORKS_TILING_SERVICE=terrain
       - ATLASWORKS_WORKER_ID=${ATLASWORKS_TERRAIN_WORKER_ID:-atlasworks-terrain-worker-1}
       - ATLASWORKS_WORKER_JOB_TYPES=terrain_tiles,terrain
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
@@ -246,6 +249,7 @@ services:
     environment:
       - TZ=${ATLASWORKS_TZ:-Asia/Shanghai}
       - ATLASWORKS_ROLE=worker
+      - ATLASWORKS_TILING_SERVICE=tiles3d
       - ATLASWORKS_WORKER_ID=${ATLASWORKS_3DTILES_WORKER_ID:-atlasworks-3dtiles-worker-1}
       - ATLASWORKS_WORKER_JOB_TYPES=3dtiles,3dtiles-pointcloud,3dtiles-vector,3dtiles-model,3dtiles-osgb
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource

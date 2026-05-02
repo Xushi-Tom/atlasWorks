@@ -12,7 +12,8 @@ fi
 
 if [ $# -eq 0 ]; then
     if [ "${ATLASWORKS_ROLE:-api}" = "worker" ]; then
-        set -- python3 /app/services/tiling/worker.py
+        : "${ATLASWORKS_TILING_SERVICE:=vector}"
+        set -- python3 "/app/services/tiling/${ATLASWORKS_TILING_SERVICE}/worker.py"
     elif [ "${ATLASWORKS_ROLE:-api}" = "publisher" ]; then
         cd /app/services/publisher
         : "${HOST:=0.0.0.0}"

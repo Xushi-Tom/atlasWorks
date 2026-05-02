@@ -652,7 +652,6 @@ watch(themeMode, value => {
                             <span class="desktop-window-appicon">{{ appToken(windowItem.section) }}</span>
                             <span class="desktop-window-title-copy">
                                 <strong>{{ windowItem.title }}</strong>
-                                <small>{{ windowItem.subtitle }}</small>
                             </span>
                         </div>
                         <div class="desktop-window-controls">

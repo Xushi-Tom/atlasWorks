@@ -175,12 +175,7 @@ async function submit() {
 
 <template>
     <section class="app-view app-view-workbench">
-        <div class="section-header section-header-workbench">
-            <div>
-                <span class="section-kicker">Terrain Pipeline</span>
-                <h2>地形切片工位</h2>
-                <p class="section-subtitle">沿用旧版完整参数链路，但把输入、层级范围和执行策略重新整理成更稳的产品化工作台。</p>
-            </div>
+        <div class="section-header section-header-workbench section-header-compact">
             <div class="section-header-actions">
                 <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始地形切片</button>
             </div>
@@ -192,9 +187,7 @@ async function submit() {
                     <section class="form-section workbench-section-wide workbench-section-lead">
                         <div class="workbench-section-head">
                             <div>
-                                <span class="section-kicker">Path Routing</span>
                                 <h3>输入与输出</h3>
-                                <p class="workbench-note">先明确输入目录、地形源文件和输出位置，让推荐配置、任务下发和结果整理都围绕同一条产线运行。</p>
                             </div>
                         </div>
                         <div class="form-stack">
@@ -241,7 +234,6 @@ async function submit() {
                         <section class="form-section workbench-section-wide">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">LOD Range</span>
                                     <h3>层级与范围</h3>
                                 </div>
                             </div>
@@ -268,7 +260,6 @@ async function submit() {
                         <section class="form-section">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Execution</span>
                                     <h3>执行策略</h3>
                                 </div>
                             </div>
@@ -297,9 +288,7 @@ async function submit() {
                         <section class="form-section">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Build Policy</span>
                                     <h3>构建选项</h3>
-                                    <p class="workbench-note">保留压缩、自动解压、智能分级和合并输入这些旧版高频能力。</p>
                                 </div>
                             </div>
                             <div class="checkbox-grid">

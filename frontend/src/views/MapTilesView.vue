@@ -299,12 +299,7 @@ onBeforeUnmount(() => {
 
 <template>
     <section class="app-view app-view-workbench">
-        <div class="section-header section-header-workbench">
-            <div>
-                <span class="section-kicker">Raster Production</span>
-                <h2>地图切片工位</h2>
-                <p class="section-subtitle">面向栅格地图生产组织输入、波段识别、核心参数和构建策略，保障切片任务稳定进入生产链路。</p>
-            </div>
+        <div class="section-header section-header-workbench section-header-compact">
             <div class="section-header-actions">
                 <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始地图切片</button>
             </div>
@@ -316,9 +311,7 @@ onBeforeUnmount(() => {
                     <section class="form-section workbench-section-wide workbench-section-lead">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Path Routing</span>
                                     <h3>输入与输出</h3>
-                                    <p class="workbench-note">明确输入目录、匹配规则和输出位置，后续波段读取、策略推荐与任务产出都会围绕这里执行。</p>
                                 </div>
                             </div>
                         <div class="form-stack">
@@ -365,7 +358,6 @@ onBeforeUnmount(() => {
                         <section class="form-section workbench-section-wide">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Core Setup</span>
                                     <h3>核心参数</h3>
                                 </div>
                             </div>
@@ -455,7 +447,6 @@ onBeforeUnmount(() => {
                         <section class="form-section">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Band Mapping</span>
                                     <h3>波段选择</h3>
                                 </div>
                                 <button class="btn btn-secondary" type="button" @click="refreshBandOptions(true)">获取波段信息</button>
@@ -486,7 +477,6 @@ onBeforeUnmount(() => {
                         <section class="form-section">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Pixel Policy</span>
                                     <h3>NoData 与拉伸</h3>
                                 </div>
                             </div>
@@ -542,9 +532,7 @@ onBeforeUnmount(() => {
                         <section class="form-section workbench-section-wide">
                             <div class="workbench-section-head">
                                 <div>
-                                    <span class="section-kicker">Build Strategy</span>
                                     <h3>构建策略</h3>
-                                    <p class="workbench-note">对网格生成、增量更新和透明瓦片处理进行统一编排，保障产线构建策略清晰可控。</p>
                                 </div>
                             </div>
                             <div class="checkbox-grid">

@@ -15,7 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
     PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn \
-    PYTHONPATH=/app/services/common:/app/services/control:/app/services/publisher:/app/services/tiling \
+    PYTHONPATH=/app/services/common:/app/services/control:/app/services/publisher:/app/services/tiling/vector:/app/services/tiling/raster:/app/services/tiling/terrain:/app/services/tiling/tiles3d \
     LD_LIBRARY_PATH=/usr/local/lib \
     TZ=Asia/Shanghai
 
