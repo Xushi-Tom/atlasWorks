@@ -1,4 +1,18 @@
 # 外部 PostgreSQL 版：不启动数据库容器，连接宿主机或外部 PostgreSQL
+#
+# 常用可配置项：
+# - ATLASWORKS_DB_HOST：外部 PostgreSQL 地址。Docker Desktop 访问宿主机数据库可用 host.docker.internal。
+# - ATLASWORKS_DB_PORT：外部 PostgreSQL 端口，默认 5432。
+# - ATLASWORKS_DB_NAME / ATLASWORKS_DB_USER / ATLASWORKS_DB_PASSWORD：数据库名称、用户、密码。
+# - ATLASWORKS_HOST_PORT：API 对外端口，默认 18000。
+# - ATLASWORKS_PUBLISHER_HOST_PORT：发布服务对外端口，默认 18001。
+# - ATLASWORKS_PUBLIC_BASE_HOST：生成发布访问地址时使用的主机 IP 或域名。
+# - ATLASWORKS_*_CPUS / ATLASWORKS_*_MEM_LIMIT：对应容器的 CPU 与内存限制。
+# - volumes 下的 D:/TIF、D:/tiles、./runtime/log：宿主机数据源、瓦片输出、日志目录。
+#
+# 内部固定项：
+# - ATLASWORKS_ROLE / ATLASWORKS_TILING_SERVICE / ATLASWORKS_WORKER_JOB_TYPES 不建议改。
+# - ATLASWORKS_WORKERS 是 API Web 进程数，不是切片 Worker 容器数量。
 services:
 
   # 服务名：AtlasWorks API 控制面
@@ -13,18 +27,25 @@ services:
       # 构建使用的 Dockerfile 路径
       dockerfile: deploy/docker/Dockerfile
       args:
+        # 基础镜像，默认只使用 amd64/x86_64
         BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye-amd64}
+        # Debian 普通软件源，内网或离线环境可替换
         APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
+        # Debian security 软件源，内网或离线环境可替换
         APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
     # 固定容器名称
     container_name: atlasworks-api
     # 重启策略：除非手动停止，否则自动重启
     restart: unless-stopped
-    # 运行资源限制（等价于常见 docker run 的资源参数）
+    # API 容器 CPU 上限
     cpus: ${ATLASWORKS_API_CPUS:-4.0}
+    # API 容器最大内存
     mem_limit: ${ATLASWORKS_API_MEM_LIMIT:-8g}
+    # API 容器内存软预留
     mem_reservation: ${ATLASWORKS_API_MEM_RESERVATION:-2g}
+    # /dev/shm 大小，部分 geospatial 库处理大文件时会用到
     shm_size: ${ATLASWORKS_API_SHM_SIZE:-1g}
+    # API 容器最大进程数
     pids_limit: ${ATLASWORKS_API_PIDS_LIMIT:-1024}
     ulimits:
       # 最大打开文件数
@@ -133,10 +154,15 @@ services:
         APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
     container_name: atlasworks-vector-worker
     restart: unless-stopped
+    # 二维矢量切片 Worker CPU 上限
     cpus: ${ATLASWORKS_WORKER_CPUS:-4.0}
+    # 二维矢量切片 Worker 最大内存
     mem_limit: ${ATLASWORKS_WORKER_MEM_LIMIT:-8g}
+    # 二维矢量切片 Worker 内存软预留
     mem_reservation: ${ATLASWORKS_WORKER_MEM_RESERVATION:-2g}
+    # /dev/shm 大小，矢量大文件转换时可按需加大
     shm_size: ${ATLASWORKS_WORKER_SHM_SIZE:-1g}
+    # Worker 最大进程数
     pids_limit: ${ATLASWORKS_WORKER_PIDS_LIMIT:-2048}
     ulimits:
       nofile:
@@ -146,12 +172,18 @@ services:
       atlasworks-api:
         condition: service_healthy
     environment:
+      # 固定为 worker 角色
       - TZ=Asia/Shanghai
       - ATLASWORKS_ROLE=worker
+      # 固定为二维矢量切片服务
       - ATLASWORKS_TILING_SERVICE=vector
+      # Worker 容器跳过建表，由 API 负责数据库初始化
       - ATLASWORKS_WORKER_SKIP_DB_INIT=1
+      # Worker 实例 ID，仅用于任务占用与日志标识
       - ATLASWORKS_WORKER_ID=atlasworks-vector-worker-1
+      # Worker 轮询数据库任务队列间隔，单位秒
       - ATLASWORKS_WORKER_POLL_INTERVAL=2
+      # 该 Worker 接收的任务类型，不建议部署时修改
       - ATLASWORKS_WORKER_JOB_TYPES=mvt_tiles,geojson_tiles,vector_tiles
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
       - ATLASWORKS_DATA_SOURCE_HOST_DIR=D:/TIF
@@ -180,7 +212,9 @@ services:
     platform: linux/amd64
     container_name: atlasworks-raster-worker
     restart: unless-stopped
+    # 影像切片 Worker CPU 上限
     cpus: ${ATLASWORKS_RASTER_WORKER_CPUS:-4.0}
+    # 影像切片 Worker 最大内存
     mem_limit: ${ATLASWORKS_RASTER_WORKER_MEM_LIMIT:-8g}
     depends_on:
       atlasworks-api:
@@ -215,7 +249,9 @@ services:
     platform: linux/amd64
     container_name: atlasworks-terrain-worker
     restart: unless-stopped
+    # 地形切片 Worker CPU 上限
     cpus: ${ATLASWORKS_TERRAIN_WORKER_CPUS:-4.0}
+    # 地形切片 Worker 最大内存
     mem_limit: ${ATLASWORKS_TERRAIN_WORKER_MEM_LIMIT:-8g}
     depends_on:
       atlasworks-api:
@@ -250,7 +286,9 @@ services:
     platform: linux/amd64
     container_name: atlasworks-3dtiles-worker
     restart: unless-stopped
+    # 3D Tiles Worker CPU 上限
     cpus: ${ATLASWORKS_3DTILES_WORKER_CPUS:-4.0}
+    # 3D Tiles Worker 最大内存
     mem_limit: ${ATLASWORKS_3DTILES_WORKER_MEM_LIMIT:-8g}
     depends_on:
       atlasworks-api:
@@ -285,7 +323,9 @@ services:
     platform: linux/amd64
     container_name: atlasworks-publisher
     restart: unless-stopped
+    # 发布服务 CPU 上限
     cpus: ${ATLASWORKS_PUBLISHER_CPUS:-2.0}
+    # 发布服务最大内存
     mem_limit: ${ATLASWORKS_PUBLISHER_MEM_LIMIT:-4g}
     depends_on:
       atlasworks-api:
