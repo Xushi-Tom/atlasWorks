@@ -1,18 +1,6 @@
 # 内置 PostgreSQL 15 版：同时启动 AtlasWorks 与 atlasworks-postgres
-#
-# 常用可配置项：
-# - ATLASWORKS_DB_NAME / ATLASWORKS_DB_USER / ATLASWORKS_DB_PASSWORD：内置 PostgreSQL 初始化数据库名称、用户、密码。
-# - ATLASWORKS_POSTGRES_HOST_PORT：PostgreSQL 暴露到宿主机的端口，默认 15432。
-# - ATLASWORKS_HOST_PORT：API 对外端口，默认 18000。
-# - ATLASWORKS_PUBLISHER_HOST_PORT：发布服务对外端口，默认 18001。
-# - ATLASWORKS_PUBLIC_BASE_HOST：生成发布访问地址时使用的主机 IP 或域名。
-# - ATLASWORKS_*_CPUS / ATLASWORKS_*_MEM_LIMIT：对应容器的 CPU 与内存限制。
-# - volumes 下的 D:/TIF、D:/tiles、./runtime/log、./runtime/postgres15：宿主机数据源、瓦片输出、日志、数据库数据目录。
-#
-# 内部固定项：
-# - TF_DB_HOST=atlasworks-postgres / TF_DB_PORT=5432 是容器网络内连接地址，不需要改成宿主机端口。
-# - ATLASWORKS_ROLE / ATLASWORKS_TILING_SERVICE / ATLASWORKS_WORKER_JOB_TYPES 不建议改。
-# - ATLASWORKS_WORKERS 是 API Web 进程数，不是切片 Worker 容器数量。
+# 启动命令：docker compose -f docker-compose.pg15.yml up -d --no-build --force-recreate
+# 停止命令：docker compose -f docker-compose.pg15.yml down
 services:
 
   # 服务名：内置 PostgreSQL 15 数据库

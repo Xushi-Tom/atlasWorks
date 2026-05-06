@@ -1,18 +1,6 @@
 # 外部 PostgreSQL 版：不启动数据库容器，连接宿主机或外部 PostgreSQL
-#
-# 常用可配置项：
-# - ATLASWORKS_DB_HOST：外部 PostgreSQL 地址。Docker Desktop 访问宿主机数据库可用 host.docker.internal。
-# - ATLASWORKS_DB_PORT：外部 PostgreSQL 端口，默认 5432。
-# - ATLASWORKS_DB_NAME / ATLASWORKS_DB_USER / ATLASWORKS_DB_PASSWORD：数据库名称、用户、密码。
-# - ATLASWORKS_HOST_PORT：API 对外端口，默认 18000。
-# - ATLASWORKS_PUBLISHER_HOST_PORT：发布服务对外端口，默认 18001。
-# - ATLASWORKS_PUBLIC_BASE_HOST：生成发布访问地址时使用的主机 IP 或域名。
-# - ATLASWORKS_*_CPUS / ATLASWORKS_*_MEM_LIMIT：对应容器的 CPU 与内存限制。
-# - volumes 下的 D:/TIF、D:/tiles、./runtime/log：宿主机数据源、瓦片输出、日志目录。
-#
-# 内部固定项：
-# - ATLASWORKS_ROLE / ATLASWORKS_TILING_SERVICE / ATLASWORKS_WORKER_JOB_TYPES 不建议改。
-# - ATLASWORKS_WORKERS 是 API Web 进程数，不是切片 Worker 容器数量。
+# 启动命令：docker compose -f docker-compose.external-db.yml up -d --no-build --force-recreate
+# 停止命令：docker compose -f docker-compose.external-db.yml down
 services:
 
   # 服务名：AtlasWorks API 控制面
