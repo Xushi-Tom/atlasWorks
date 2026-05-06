@@ -210,21 +210,37 @@ services:
       - ATLASWORKS_WORKER_POLL_INTERVAL=2
       # 该 Worker 接收的任务类型，不建议部署时修改
       - ATLASWORKS_WORKER_JOB_TYPES=mvt_tiles,geojson_tiles,vector_tiles
+      # 容器内数据源目录，需与 volumes 的容器路径一致
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 宿主机数据源目录，仅用于页面展示和记录
       - ATLASWORKS_DATA_SOURCE_HOST_DIR=D:/TIF
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
       - ATLASWORKS_TILES_DIR=/app/tiles
+      # 宿主机瓦片输出目录，仅用于页面展示和记录
       - ATLASWORKS_TILES_HOST_DIR=D:/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
       - ATLASWORKS_LOG_DIR=/app/log
+      # 宿主机日志目录，仅用于页面展示和记录
       - ATLASWORKS_LOG_HOST_DIR=./runtime/log
+      # 启用数据库持久化和任务队列
       - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
       - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
       - TF_DB_PORT=5432
+      # 数据库名称
       - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
       - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
       - TF_TASK_SYNC_ENABLED=1
+      # Worker 直接执行已领取任务
       - ATLASWORKS_TASK_DISPATCH=inline
     volumes:
       - "D:/TIF:/app/dataSource"
@@ -245,23 +261,41 @@ services:
       atlasworks-api:
         condition: service_healthy
     environment:
+      # 容器时区
       - TZ=Asia/Shanghai
+      # 固定为 worker 角色
       - ATLASWORKS_ROLE=worker
+      # 固定为影像切片服务
       - ATLASWORKS_TILING_SERVICE=raster
+      # Worker 容器跳过建表，由 API 负责数据库初始化
       - ATLASWORKS_WORKER_SKIP_DB_INIT=1
+      # Worker 实例 ID，用于任务占用和日志标识
       - ATLASWORKS_WORKER_ID=atlasworks-raster-worker-1
+      # 该 Worker 接收的任务类型，不建议部署时修改
       - ATLASWORKS_WORKER_JOB_TYPES=indexed_tiles,map_tiles
+      # 容器内数据源目录，需与 volumes 的容器路径一致
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
       - ATLASWORKS_TILES_DIR=/app/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
       - ATLASWORKS_LOG_DIR=/app/log
+      # 启用数据库持久化和任务队列
       - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
       - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
       - TF_DB_PORT=5432
+      # 数据库名称
       - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
       - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
       - TF_TASK_SYNC_ENABLED=1
     volumes:
       - "D:/TIF:/app/dataSource"
@@ -282,23 +316,41 @@ services:
       atlasworks-api:
         condition: service_healthy
     environment:
+      # 容器时区
       - TZ=Asia/Shanghai
+      # 固定为 worker 角色
       - ATLASWORKS_ROLE=worker
+      # 固定为地形切片服务
       - ATLASWORKS_TILING_SERVICE=terrain
+      # Worker 容器跳过建表，由 API 负责数据库初始化
       - ATLASWORKS_WORKER_SKIP_DB_INIT=1
+      # Worker 实例 ID，用于任务占用和日志标识
       - ATLASWORKS_WORKER_ID=atlasworks-terrain-worker-1
+      # 该 Worker 接收的任务类型，不建议部署时修改
       - ATLASWORKS_WORKER_JOB_TYPES=terrain_tiles,terrain
+      # 容器内数据源目录，需与 volumes 的容器路径一致
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
       - ATLASWORKS_TILES_DIR=/app/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
       - ATLASWORKS_LOG_DIR=/app/log
+      # 启用数据库持久化和任务队列
       - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
       - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
       - TF_DB_PORT=5432
+      # 数据库名称
       - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
       - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
       - TF_TASK_SYNC_ENABLED=1
     volumes:
       - "D:/TIF:/app/dataSource"
@@ -319,23 +371,41 @@ services:
       atlasworks-api:
         condition: service_healthy
     environment:
+      # 容器时区
       - TZ=Asia/Shanghai
+      # 固定为 worker 角色
       - ATLASWORKS_ROLE=worker
+      # 固定为 3D Tiles 切片服务
       - ATLASWORKS_TILING_SERVICE=tiles3d
+      # Worker 容器跳过建表，由 API 负责数据库初始化
       - ATLASWORKS_WORKER_SKIP_DB_INIT=1
+      # Worker 实例 ID，用于任务占用和日志标识
       - ATLASWORKS_WORKER_ID=atlasworks-3dtiles-worker-1
+      # 该 Worker 接收的任务类型，不建议部署时修改
       - ATLASWORKS_WORKER_JOB_TYPES=3dtiles,3dtiles-pointcloud,3dtiles-vector,3dtiles-model,3dtiles-osgb
+      # 容器内数据源目录，需与 volumes 的容器路径一致
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
       - ATLASWORKS_TILES_DIR=/app/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
       - ATLASWORKS_LOG_DIR=/app/log
+      # 启用数据库持久化和任务队列
       - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
       - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
       - TF_DB_PORT=5432
+      # 数据库名称
       - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
       - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
       - TF_TASK_SYNC_ENABLED=1
     volumes:
       - "D:/TIF:/app/dataSource"
@@ -356,25 +426,45 @@ services:
       atlasworks-api:
         condition: service_healthy
     environment:
+      # 容器时区
       - TZ=Asia/Shanghai
+      # 固定为发布服务角色
       - ATLASWORKS_ROLE=publisher
+      # 发布服务监听地址，容器内固定监听所有网卡
       - HOST=0.0.0.0
+      # 发布服务容器内部监听端口
       - PORT=18001
+      # 发布访问地址完整覆盖；为空时按主机、端口和请求信息自动计算
       - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_URL:-}
+      # 生成发布访问地址时使用的主机 IP 或域名
       - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-10.168.1.113}
+      # 发布访问地址解析模式，request_host 表示优先使用请求 Host
       - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
+      # 生成发布访问地址时使用的端口
       - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_PORT:-18001}
+      # 容器内数据源目录，需与 volumes 的容器路径一致
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
       - ATLASWORKS_TILES_DIR=/app/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
       - ATLASWORKS_LOG_DIR=/app/log
+      # 启用数据库持久化
       - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
       - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
       - TF_DB_PORT=5432
+      # 数据库名称
       - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
       - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
       - TF_DB_SSLMODE=disable
+      # 发布服务不执行任务状态同步
       - TF_TASK_SYNC_ENABLED=0
     ports:
       - "${ATLASWORKS_PUBLISHER_HOST_PORT:-18001}:18001"
