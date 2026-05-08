@@ -4,8 +4,8 @@ FROM ${BASE_IMAGE}
 LABEL maintainer="AtlasWorks Team"
 LABEL description="AtlasWorks geographic tiling platform with GDAL, CTB and embedded console"
 
-ARG APT_MIRROR=https://deb.debian.org/debian
-ARG APT_SECURITY_MIRROR=https://deb.debian.org/debian-security
+ARG APT_MIRROR=http://deb.debian.org/debian
+ARG APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 ARG NODE_MAJOR=20
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -67,6 +67,7 @@ RUN mkdir -p /etc/apt/keyrings \
 
 RUN python3 -m pip install --upgrade pip setuptools wheel \
     && python3 -m pip install \
+    cogeo-mosaic==8.2.0 \
     flask==2.2.5 \
     flask-cors==4.0.0 \
     laspy \

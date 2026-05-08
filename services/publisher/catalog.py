@@ -3,13 +3,17 @@
 
 import json
 import os
+import shutil
 import socket
+import subprocess
 import uuid
+import hashlib
 from datetime import datetime, timezone
 from urllib.parse import quote, unquote, urlsplit
+from urllib.request import urlopen
 import xml.etree.ElementTree as ET
 
-from flask import Response, jsonify, request, send_from_directory
+from flask import Response, jsonify, redirect, request, send_from_directory
 
 from config import config, taskLock, taskStatus
 from db import (
@@ -25,7 +29,7 @@ from db import (
     upsertPublicationRecord,
 )
 from pagination import paginate_items, parse_pagination_args
-from utils import logMessage, validateWorkspacePath
+from utils import logMessage, validateDataSourcePath, validateWorkspacePath
 
 
 PUBLICATIONS_DIRNAME = "_publications"
@@ -35,6 +39,10 @@ WMTS_TOP_LEFT_CORNER = "-20037508.342789244 20037508.342789244"
 WMTS_INITIAL_SCALE_DENOMINATOR = 559082264.0287178
 WMTS_MIN_ZOOM = 0
 WMTS_MAX_ZOOM = 22
+TITILER_PUBLISH_METHODS = {"titiler-cog", "titiler", "cog"}
+DATASOURCE_PUBLISH_TYPE = "imagery"
+DATASOURCE_PUBLISH_METHOD = "titiler-cog"
+_TITILER_HEALTH_CACHE = {"checkedAt": None, "status": "unknown", "ok": None, "detail": ""}
 
 
 def _mime_from_extension(extension):
@@ -121,6 +129,40 @@ def _first_non_blank(*values):
         if text:
             return text
     return ""
+
+
+def _normalize_list_input(value):
+    if value is None:
+        return []
+
+    items = []
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        raw_text = str(value or "").strip()
+        if not raw_text:
+            return []
+        if raw_text.startswith("[") and raw_text.endswith("]"):
+            try:
+                parsed = json.loads(raw_text)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list):
+                items = parsed
+            else:
+                items = [segment for segment in raw_text.replace("\r", "\n").replace(",", "\n").split("\n")]
+        else:
+            items = [segment for segment in raw_text.replace("\r", "\n").replace(",", "\n").split("\n")]
+
+    normalized = []
+    seen = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        normalized.append(text)
+        seen.add(text)
+    return normalized
 
 
 def _load_manifest(manifest_path):
@@ -344,6 +386,14 @@ def _build_access_url(path_value):
     return f"{_public_base_url()}/published/{normalized_path}"
 
 
+def _build_nginx_published_url(path_value):
+    normalized_path = _normalize_relative_path(path_value)
+    base_url = _nginx_public_base_url()
+    if normalized_path:
+        return f"{base_url}/published/{normalized_path}"
+    return f"{base_url}/published/"
+
+
 def _is_loopback_host(host):
     host = str(host or "").strip().lower().strip("[]")
     if host in {"", "localhost"}:
@@ -392,6 +442,76 @@ def _build_host_url(scheme, host, port=None):
     hide_default_port = (normalized_scheme == "http" and port_value == 80) or (normalized_scheme == "https" and port_value == 443)
     port_part = "" if (port_value <= 0 or hide_default_port) else f":{port_value}"
     return f"{normalized_scheme}://{host}{port_part}"
+
+
+def _external_backend_base_url(configured_url_key, public_port_key):
+    configured_url = str(config.get(configured_url_key) or "").strip().rstrip("/")
+    if configured_url:
+        return configured_url
+
+    configured_host = str(config.get("publicBaseHost") or "").strip()
+    if configured_host:
+        scheme = str(config.get("publicBaseScheme") or "http").strip() or "http"
+        return _build_host_url(scheme, configured_host, config.get(public_port_key))
+
+    try:
+        shared_base = _public_base_url()
+    except RuntimeError:
+        shared_base = "http://127.0.0.1"
+
+    parsed = urlsplit(shared_base)
+    host = parsed.hostname or parsed.netloc.split(":")[0] or "127.0.0.1"
+    scheme = parsed.scheme or "http"
+    return _build_host_url(scheme, host, config.get(public_port_key))
+
+
+def _nginx_public_base_url():
+    return _external_backend_base_url("nginxPublicBaseUrl", "nginxPublicBasePort")
+
+def _titiler_public_base_url():
+    return _external_backend_base_url("titilerPublicBaseUrl", "titilerPublicBasePort")
+
+
+def _titiler_health_state(force_refresh=False):
+    cache = _TITILER_HEALTH_CACHE
+    now = datetime.now(timezone.utc)
+    checked_at = cache.get("checkedAt")
+    if (
+        not force_refresh
+        and isinstance(checked_at, datetime)
+        and (now - checked_at).total_seconds() < 15
+    ):
+        return {
+            "ok": cache.get("ok"),
+            "status": cache.get("status") or "unknown",
+            "detail": cache.get("detail") or "",
+            "checkedAt": checked_at.isoformat(),
+        }
+
+    health_url = f"{_titiler_public_base_url().rstrip('/')}/healthz"
+    ok = False
+    status = "unhealthy"
+    detail = ""
+    try:
+        with urlopen(health_url, timeout=5) as response:
+            ok = int(getattr(response, "status", 0) or 0) == 200
+            status = "healthy" if ok else "unhealthy"
+            detail = f"HTTP {getattr(response, 'status', 0)}"
+    except Exception as exc:
+        ok = False
+        status = "unhealthy"
+        detail = str(exc)
+
+    cache["checkedAt"] = now
+    cache["ok"] = ok
+    cache["status"] = status
+    cache["detail"] = detail
+    return {
+        "ok": ok,
+        "status": status,
+        "detail": detail,
+        "checkedAt": now.isoformat(),
+    }
 
 
 def _public_base_url():
@@ -478,6 +598,351 @@ def _find_tileset_entry(full_path):
     return None
 
 
+def _load_vector_tileset_metadata(full_path):
+    tileset_entry = _find_tileset_entry(full_path)
+    if not tileset_entry:
+        return {}
+
+    tileset_path = os.path.join(full_path, tileset_entry)
+    try:
+        with open(tileset_path, "r", encoding="utf-8") as file_obj:
+            payload = json.load(file_obj)
+    except Exception as exc:
+        logMessage(f"读取矢量 tileset 失败: {tileset_path} - {exc}", "WARNING")
+        return {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    vector_layers = payload.get("vector_layers")
+    if not isinstance(vector_layers, list):
+        vector_layers = []
+
+    bounds = payload.get("bounds")
+    if not (isinstance(bounds, list) and len(bounds) == 4):
+        bounds = None
+
+    return {
+        "tilesetPath": tileset_path,
+        "tilejson": payload.get("tilejson"),
+        "name": payload.get("name"),
+        "format": payload.get("format"),
+        "scheme": payload.get("scheme"),
+        "tiles": payload.get("tiles") if isinstance(payload.get("tiles"), list) else [],
+        "minzoom": payload.get("minzoom"),
+        "maxzoom": payload.get("maxzoom"),
+        "bounds": bounds,
+        "vectorLayers": vector_layers,
+    }
+
+
+def _normalize_data_source_path(path_value):
+    raw_path = unquote(str(path_value or "").strip())
+    if not raw_path:
+        return ""
+
+    unix_style_path = raw_path.replace("\\", "/")
+    data_dir_unix = str(config.get("dataSourceDir") or "").strip().replace("\\", "/").rstrip("/")
+    default_data_prefix = "/app/dataSource"
+
+    for prefix in (data_dir_unix, default_data_prefix):
+        normalized_prefix = str(prefix or "").strip().replace("\\", "/").rstrip("/")
+        if not normalized_prefix:
+            continue
+        lower_path = unix_style_path.lower()
+        lower_prefix = normalized_prefix.lower()
+        if lower_path == lower_prefix:
+            return ""
+        if lower_path.startswith(f"{lower_prefix}/"):
+            unix_style_path = unix_style_path[len(normalized_prefix) + 1:]
+            break
+
+    if os.path.isabs(raw_path):
+        data_root = os.path.abspath(config["dataSourceDir"])
+        abs_input = os.path.abspath(raw_path)
+        if abs_input == data_root:
+            return ""
+        if abs_input.startswith(f"{data_root}{os.sep}"):
+            unix_style_path = os.path.relpath(abs_input, data_root).replace("\\", "/")
+
+    return unix_style_path.strip("/")
+
+
+def _resolve_data_source_path(path_value=""):
+    normalized_path = _normalize_data_source_path(path_value)
+    data_root = os.path.abspath(config["dataSourceDir"])
+    full_path = os.path.abspath(os.path.join(data_root, normalized_path))
+    if full_path != data_root and not full_path.startswith(f"{data_root}{os.sep}"):
+        raise ValueError("目标数据源路径非法")
+    return normalized_path, full_path
+
+
+def _normalize_data_source_paths(source_paths):
+    normalized = []
+    seen = set()
+    for item in _normalize_list_input(source_paths):
+        path_value = _normalize_data_source_path(item)
+        if not path_value or path_value in seen:
+            continue
+        normalized.append(path_value)
+        seen.add(path_value)
+    return normalized
+
+
+def _is_titiler_tiff_path(path_value):
+    return os.path.splitext(str(path_value or ""))[1].lower() in {".tif", ".tiff"}
+
+
+def _iter_titiler_directory_sources(path_value, full_path):
+    data_root = os.path.abspath(config["dataSourceDir"])
+    resolved = []
+    for root, _, filenames in os.walk(full_path):
+        for filename in sorted(filenames):
+            if not _is_titiler_tiff_path(filename):
+                continue
+            file_full_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_full_path, data_root).replace("\\", "/")
+            resolved.append({
+                "path": rel_path,
+                "fullPath": file_full_path,
+                "sourceEntry": path_value,
+            })
+    return resolved
+
+
+def _validate_titiler_source_paths(source_paths):
+    source_entries = _normalize_data_source_paths(source_paths)
+    if not source_entries:
+        raise ValueError("TiTiler 发布至少需要选择一个 GeoTIFF/COG 文件或目录")
+
+    resolved = []
+    seen = set()
+    for path_value in source_entries:
+        is_valid, full_path = validateDataSourcePath(path_value)
+        if not is_valid:
+            raise ValueError(str(full_path))
+        if os.path.isdir(full_path):
+            directory_sources = _iter_titiler_directory_sources(path_value, full_path)
+            if not directory_sources:
+                raise ValueError(f"目录中未找到 .tif/.tiff 文件: {path_value}")
+            for source in directory_sources:
+                normalized_file_path = source["path"]
+                if normalized_file_path in seen:
+                    continue
+                resolved.append(source)
+                seen.add(normalized_file_path)
+            continue
+        if not os.path.isfile(full_path):
+            raise ValueError(f"发布文件不存在: {path_value}")
+        if not _is_titiler_tiff_path(full_path):
+            raise ValueError("TiTiler 发布仅支持 .tif/.tiff 文件")
+        normalized_file_path = _normalize_data_source_path(path_value)
+        if normalized_file_path in seen:
+            continue
+        resolved.append({
+            "path": normalized_file_path,
+            "fullPath": full_path,
+            "sourceEntry": path_value,
+        })
+        seen.add(normalized_file_path)
+    if not resolved:
+        raise ValueError("TiTiler 发布至少需要一个有效的 GeoTIFF/COG 文件")
+    return {"sourceEntries": source_entries, "resolvedSources": resolved}
+
+
+def _titiler_cog_relative_path(publication_id, source_path):
+    digest = hashlib.sha1(str(source_path or "").encode("utf-8")).hexdigest()[:12]
+    stem = os.path.splitext(os.path.basename(str(source_path or "").strip()))[0] or "source"
+    return _publication_runtime_relative_path(publication_id, os.path.join("cogs", f"{stem}-{digest}.tif"))
+
+
+def _titiler_source_is_cog(full_path):
+    command = ["gdalinfo", full_path]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as exc:
+        raise RuntimeError(f"GeoTIFF 检查失败: {exc}") from exc
+    if result.returncode != 0:
+        error_text = str(result.stderr or result.stdout or "").strip() or "未知错误"
+        raise RuntimeError(f"GeoTIFF 检查失败: {error_text}")
+    info_text = str(result.stdout or "")
+    return "LAYOUT=COG" in info_text
+
+
+def _ensure_titiler_cog_source(publication_id, source):
+    source_path = source.get("path")
+    full_path = source.get("fullPath")
+    if _titiler_source_is_cog(full_path):
+        return {
+            **source,
+            "publishPath": source_path,
+            "publishFullPath": full_path,
+            "optimized": False,
+        }
+
+    relative_target_path = _titiler_cog_relative_path(publication_id, source_path)
+    _, target_full_path = _resolve_tiles_path(relative_target_path)
+    os.makedirs(os.path.dirname(target_full_path), exist_ok=True)
+
+    if os.path.isfile(target_full_path):
+        source_stat = os.stat(full_path)
+        target_stat = os.stat(target_full_path)
+        if target_stat.st_size > 0 and target_stat.st_mtime >= source_stat.st_mtime:
+            return {
+                **source,
+                "publishPath": relative_target_path,
+                "publishFullPath": target_full_path,
+                "optimized": True,
+            }
+
+    command = [
+        "gdal_translate",
+        "-of",
+        "COG",
+        "-co",
+        "COMPRESS=LZW",
+        "-co",
+        "BIGTIFF=IF_SAFER",
+        "-co",
+        "BLOCKSIZE=512",
+        "-co",
+        "RESAMPLING=AVERAGE",
+        "-co",
+        "NUM_THREADS=ALL_CPUS",
+        full_path,
+        target_full_path,
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as exc:
+        raise RuntimeError(f"COG 转换失败: {exc}") from exc
+    if result.returncode != 0:
+        error_text = str(result.stderr or result.stdout or "").strip() or "未知错误"
+        raise RuntimeError(f"COG 转换失败: {source_path}: {error_text}")
+
+    return {
+        **source,
+        "publishPath": relative_target_path,
+        "publishFullPath": target_full_path,
+        "optimized": True,
+    }
+
+
+def _prepare_titiler_sources(publication_id, resolved_sources):
+    prepared_sources = []
+    for source in resolved_sources:
+        prepared_sources.append(_ensure_titiler_cog_source(publication_id, source))
+    return prepared_sources
+
+
+def _build_mosaic_json(publication_id, resolved_sources):
+    publication_id = str(publication_id or "").strip() or "publication"
+    runtime_dir = _publication_runtime_dir(publication_id)
+    os.makedirs(runtime_dir, exist_ok=True)
+
+    sources_list_path = os.path.join(runtime_dir, "sources.txt")
+    mosaic_json_path = os.path.join(runtime_dir, "mosaic.json")
+    with open(sources_list_path, "w", encoding="utf-8") as file_obj:
+        for source in resolved_sources:
+            file_obj.write(f"{source.get('publishFullPath') or source['fullPath']}\n")
+
+    command = [
+        "cogeo-mosaic",
+        "create",
+        sources_list_path,
+        "-o",
+        mosaic_json_path,
+        "-q",
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as exc:
+        raise RuntimeError(f"MosaicJSON 生成失败: {exc}") from exc
+    if result.returncode != 0:
+        error_text = str(result.stderr or result.stdout or "").strip() or "未知错误"
+        raise RuntimeError(f"MosaicJSON 生成失败: {error_text}")
+    if not os.path.isfile(mosaic_json_path):
+        raise RuntimeError("MosaicJSON 生成失败: 未找到输出文件")
+
+    return {
+        "relativePath": _publication_runtime_relative_path(publication_id, "mosaic.json"),
+        "fullPath": mosaic_json_path,
+        "sourcesListPath": _publication_runtime_relative_path(publication_id, "sources.txt"),
+        "sourceCount": len(resolved_sources),
+    }
+
+
+def _is_titiler_publish_method(publish_method):
+    return str(publish_method or "").strip().lower() in TITILER_PUBLISH_METHODS
+
+
+def _is_supported_publication_record(publication):
+    if not isinstance(publication, dict):
+        return False
+    metadata = _safe_dict(publication.get("metadata"))
+    source_mode = str(metadata.get("sourceMode") or "").strip().lower()
+    publish_method = str(
+        publication.get("publishMethod")
+        or metadata.get("publishMethod")
+        or ""
+    ).strip().lower()
+    if source_mode == "datasource":
+        return _is_titiler_publish_method(publish_method)
+    return True
+
+
+def _publication_runtime_cache_state(publication_id, metadata=None):
+    publication_token = str(publication_id or "").strip()
+    runtime_dir = _publication_runtime_dir(publication_token) if publication_token else ""
+    metadata = _safe_dict(metadata)
+    mosaic_relative_path = metadata.get("mosaicJsonPath")
+    mosaic_exists = False
+    if mosaic_relative_path:
+        try:
+            _, mosaic_full_path = _resolve_tiles_path(mosaic_relative_path)
+            mosaic_exists = os.path.isfile(mosaic_full_path)
+        except Exception:
+            mosaic_exists = False
+    return {
+        "runtimeDir": runtime_dir,
+        "runtimeDirExists": bool(runtime_dir and os.path.isdir(runtime_dir)),
+        "mosaicJsonPath": mosaic_relative_path,
+        "mosaicReady": mosaic_exists,
+        "titiler": _titiler_health_state() if _is_titiler_publish_method(metadata.get("publishMethod")) else None,
+    }
+
+
+def _build_titiler_urls(source_path="", mosaic_json_path=""):
+    encoded_url = ""
+    source_mode = "cog"
+    normalized_path = ""
+    full_path = ""
+    if mosaic_json_path:
+        normalized_path, full_path = _resolve_tiles_path(mosaic_json_path)
+        encoded_url = quote(full_path.replace("\\", "/"), safe="")
+        source_mode = "mosaicjson"
+    else:
+        normalized_path, full_path = _resolve_data_source_path(source_path)
+        encoded_url = quote(full_path.replace("\\", "/"), safe="")
+
+    base_url = _titiler_public_base_url()
+    tile_matrix_set = str(config.get("titilerTileMatrixSet") or "WebMercatorQuad").strip() or "WebMercatorQuad"
+    route_prefix = "mosaicjson" if source_mode == "mosaicjson" else "cog"
+    map_url = f"{base_url}/{route_prefix}/{quote(tile_matrix_set, safe='')}/map.html?url={encoded_url}"
+    tilejson_url = f"{base_url}/{route_prefix}/{quote(tile_matrix_set, safe='')}/tilejson.json?url={encoded_url}"
+    tile_template_url = f"{base_url}/{route_prefix}/tiles/{quote(tile_matrix_set, safe='')}/{{z}}/{{x}}/{{y}}.png?url={encoded_url}"
+    preview_url = map_url if source_mode == "mosaicjson" else f"{base_url}/{route_prefix}/preview.png?url={encoded_url}"
+    return {
+        "normalizedPath": normalized_path,
+        "fullPath": full_path,
+        "sourceMode": source_mode,
+        "mapUrl": map_url,
+        "tileJsonUrl": tilejson_url,
+        "tileTemplateUrl": tile_template_url,
+        "previewUrl": preview_url,
+    }
+
+
 def _build_publication_access_payload(publish_path, publish_method=None, publish_type=None, publication_id=None, metadata=None):
     public_base = _public_base_url()
     browser_url = _build_access_url(publish_path)
@@ -498,6 +963,26 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
 
     publish_method = str(publish_method or "").strip().lower()
     publish_type = str(publish_type or "").strip().lower()
+
+    if publish_method in TITILER_PUBLISH_METHODS:
+        titiler_urls = _build_titiler_urls(
+            source_path=_first_non_blank(
+                metadata.get("sourcePath"),
+                metadata.get("workspacePath"),
+                publish_path,
+            ),
+            mosaic_json_path=metadata.get("mosaicJsonPath"),
+        )
+        return {
+            "browserUrl": titiler_urls["mapUrl"],
+            "accessUrl": titiler_urls["tileTemplateUrl"],
+            "launchUrl": titiler_urls["tileJsonUrl"],
+            "sampleUrl": titiler_urls["previewUrl"],
+            "publicBaseUrl": public_base,
+            "backendBaseUrl": _titiler_public_base_url(),
+            "dynamicSourceMode": titiler_urls.get("sourceMode"),
+        }
+
     _, full_path = _resolve_tiles_path(normalized_path)
     tile_profile = _resolve_tile_publish_profile(full_path, metadata=metadata)
     source_tile_scheme = tile_profile.get("sourceTileScheme") or "tms"
@@ -511,7 +996,8 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
     tile_info = _find_tile_template_info(full_path) if enable_tile_template else None
 
     if tileset_entry:
-        tileset_url = f"{public_base}/published/{normalized_path}/{tileset_entry}"
+        static_base = _nginx_public_base_url() if publish_method == "nginx-static" else public_base
+        tileset_url = f"{static_base}/published/{normalized_path}/{tileset_entry}"
         access_url = tileset_url
         launch_url = tileset_url
         sample_url = tileset_url
@@ -564,12 +1050,19 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
                 f"{tile_info['zoom']}/{tile_info['x']}/{sample_y}{tile_extension}",
             )
         else:
-            tile_template_url = f"{public_base}/published/{normalized_path}/{{z}}/{{x}}/{{y}}{tile_extension}"
-            sample_url = f"{public_base}/published/{normalized_path}/{tile_info['zoom']}/{tile_info['x']}/{sample_y}{tile_extension}"
+            static_base = _nginx_public_base_url() if publish_method == "nginx-static" else public_base
+            tile_template_url = f"{static_base}/published/{normalized_path}/{{z}}/{{x}}/{{y}}{tile_extension}"
+            sample_url = f"{static_base}/published/{normalized_path}/{tile_info['zoom']}/{tile_info['x']}/{sample_y}{tile_extension}"
 
         if publish_method != "wmts":
             access_url = tile_template_url
             launch_url = sample_url or browser_url
+
+    if publish_method == "nginx-static" and not tile_info and not tileset_entry:
+        static_url = f"{_nginx_public_base_url()}/published/{normalized_path}"
+        browser_url = static_url
+        access_url = static_url
+        launch_url = static_url
 
     if is_vector_tile_publish:
         vector_tileset_path = os.path.join(full_path, "tileset.json")
@@ -589,7 +1082,7 @@ def _augment_publication_response(payload):
     if not isinstance(payload, dict):
         return payload
     response = dict(payload)
-    metadata = response.get("metadata") or {}
+    metadata = _safe_dict(response.get("metadata"))
     publish_path = response.get("publishPath") or metadata.get("workspacePath")
     access_payload = _build_publication_access_payload(
         publish_path,
@@ -613,11 +1106,59 @@ def _augment_publication_response(payload):
     response["enabled"] = bool(metadata.get("enabled", True))
     response["customMetadata"] = _safe_dict(response.get("customMetadata") or metadata.get("customMetadata"))
     response["publicationId"] = response.get("publicationId") or response.get("id")
+    cache_state = _publication_runtime_cache_state(response["publicationId"], metadata)
+    response["cache"] = cache_state
+    response["sourceEntryCount"] = int(metadata.get("sourceEntryCount") or 0)
+    response["sourceFileCount"] = int(metadata.get("sourceFileCount") or 0)
+    response["optimizedSourceCount"] = int(metadata.get("optimizedSourceCount") or 0)
+
+    publish_method = str(response.get("publishMethod") or metadata.get("publishMethod") or "").strip().lower()
+    publish_type = str(response.get("publishType") or "").strip().lower()
+    publish_path = response.get("publishPath") or metadata.get("workspacePath")
+    is_vector_tile_publish = publish_method in {"mvt", "vector-tile", "vector-tiles", "geojson-tile", "geojson-tiles"} or publish_type == "vector"
+    if is_vector_tile_publish and publish_path:
+        try:
+            normalized_path, full_path = _resolve_tiles_path(publish_path)
+            vector_tileset = _load_vector_tileset_metadata(full_path)
+            if vector_tileset:
+                vector_publication = {
+                    "kind": "mvt" if publish_method in {"mvt", "vector-tile", "vector-tiles"} else "geojson",
+                    "tileJsonUrl": response.get("launchUrl"),
+                    "xyzTemplate": response.get("accessUrl"),
+                    "sampleTileUrl": response.get("sampleUrl"),
+                    "tilesetUrl": f"{_public_base_url()}/published/{normalized_path}/tileset.json",
+                    "format": vector_tileset.get("format"),
+                    "scheme": vector_tileset.get("scheme"),
+                    "minzoom": vector_tileset.get("minzoom"),
+                    "maxzoom": vector_tileset.get("maxzoom"),
+                    "bounds": vector_tileset.get("bounds"),
+                    "vectorLayers": vector_tileset.get("vectorLayers") or [],
+                }
+                response["vectorPublication"] = vector_publication
+                metadata["vectorLayers"] = vector_publication["vectorLayers"]
+        except Exception as exc:
+            logMessage(f"补充矢量发布详情失败: {publish_path} - {exc}", "WARNING")
+
     return response
 
 
 def _publication_descriptor_dir(alias):
     return os.path.join(config["tilesDir"], PUBLICATIONS_DIRNAME, str(alias or "").strip() or "publication")
+
+
+def _publication_runtime_dir(publication_id):
+    publication_token = str(publication_id or "").strip() or "publication"
+    return os.path.join(config["tilesDir"], PUBLICATIONS_DIRNAME, publication_token)
+
+
+def _publication_runtime_relative_path(publication_id, filename):
+    return _normalize_relative_path(os.path.join(PUBLICATIONS_DIRNAME, str(publication_id or "").strip() or "publication", filename))
+
+
+def _cleanup_publication_runtime_dir(publication_id):
+    runtime_dir = _publication_runtime_dir(publication_id)
+    if os.path.isdir(runtime_dir):
+        shutil.rmtree(runtime_dir, ignore_errors=True)
 
 
 def _generate_publication_id():
@@ -627,6 +1168,10 @@ def _generate_publication_id():
 def _cleanup_publication_descriptor(publication):
     if not isinstance(publication, dict):
         return
+
+    publication_id = str(publication.get("publicationId") or publication.get("id") or "").strip()
+    if publication_id:
+        _cleanup_publication_runtime_dir(publication_id)
 
     metadata = publication.get("metadata") or {}
     descriptor_path = metadata.get("descriptorPath") or publication.get("descriptorPath")
@@ -653,12 +1198,14 @@ def _write_publication_descriptor(descriptor, alias, previous_publication=None):
 def _get_publication_snapshot(publication_id):
     record = fetchPublicationRecord(publication_id)
     if record:
-        return _publication_record_to_response(record)
+        response = _publication_record_to_response(record)
+        return response if _is_supported_publication_record(response) else None
 
     if not isDatabaseEnabled():
         for publication in _scan_publication_files(limit=500):
             if publication.get("id") == publication_id or publication.get("publicationId") == publication_id:
-                return _augment_publication_response(publication)
+                response = _augment_publication_response(publication)
+                return response if _is_supported_publication_record(response) else None
     return None
 
 
@@ -722,34 +1269,77 @@ def _prepare_publication_payload(data, existing_publication=None):
         if not artifact:
             return None, ("目标产物不存在", 404)
 
-    workspace_path = workspace_path or _normalize_relative_path(artifact.get("outputPath") if artifact else "")
+    publish_method = _first_defined(
+        data.get("publishMethod"),
+        existing_metadata.get("publishMethod"),
+    )
+    publish_method = str(publish_method).strip() if publish_method is not None else None
+    normalized_publish_method = str(publish_method or "").strip().lower()
+    incoming_source_paths = _first_defined(
+        data.get("sourcePaths"),
+        existing_metadata.get("sourcePaths"),
+        existing_custom_metadata.get("sourcePaths"),
+    )
+    source_entries = []
+    mosaic_json_info = None
+    resolved_sources = []
+    prepared_sources = []
+    if normalized_publish_method in TITILER_PUBLISH_METHODS:
+        source_entries = _normalize_data_source_paths(incoming_source_paths)
+        if not source_entries and workspace_path:
+            source_entries = _normalize_data_source_paths([workspace_path])
+        workspace_path = source_entries[0] if source_entries else _normalize_data_source_path(workspace_path)
+    else:
+        workspace_path = workspace_path or _normalize_relative_path(artifact.get("outputPath") if artifact else "")
+
     if not workspace_path:
         return None, ("缺少参数: taskId、artifactId、workspacePath 或 sourcePath", 400)
-
-    is_valid_workspace_path, full_workspace_path = validateWorkspacePath(workspace_path)
-    if not is_valid_workspace_path:
-        return None, (full_workspace_path, 400)
-    if not os.path.exists(full_workspace_path):
-        return None, ("目标工作空间路径不存在", 404)
 
     source_mode_input = _first_non_blank(
         data.get("sourceMode"),
         existing_metadata.get("sourceMode"),
         existing_custom_metadata.get("sourceMode"),
     ).lower()
-    if source_mode_input not in {"task", "manual", "artifact"}:
+    if normalized_publish_method in TITILER_PUBLISH_METHODS:
+        source_mode_input = "datasource"
+    if source_mode_input not in {"task", "manual", "artifact", "datasource"}:
         if task_id:
             source_mode_input = "task"
         elif artifact_id:
             source_mode_input = "artifact"
         else:
             source_mode_input = "manual"
+    if source_mode_input == "datasource" and normalized_publish_method not in TITILER_PUBLISH_METHODS:
+        return None, ("数据源文件发布目前仅支持 TiTiler 动态影像发布", 400)
+    if source_mode_input == "datasource":
+        publish_method = DATASOURCE_PUBLISH_METHOD
+        normalized_publish_method = DATASOURCE_PUBLISH_METHOD
+
+    if source_mode_input == "datasource":
+        if normalized_publish_method in TITILER_PUBLISH_METHODS:
+            try:
+                titiler_source_info = _validate_titiler_source_paths(source_entries or [workspace_path])
+                source_entries = titiler_source_info["sourceEntries"]
+                resolved_sources = titiler_source_info["resolvedSources"]
+            except ValueError as exc:
+                return None, (str(exc), 400)
+            workspace_path = resolved_sources[0]["path"]
+        else:
+            workspace_path = _normalize_data_source_path(workspace_path)
+    else:
+        is_valid_workspace_path, full_workspace_path = validateWorkspacePath(workspace_path)
+        if not is_valid_workspace_path:
+            return None, (full_workspace_path, 400)
+        if not os.path.exists(full_workspace_path):
+            return None, ("目标工作空间路径不存在", 404)
 
     publish_type = _first_non_blank(
         data.get("publishType"),
         existing_publication.get("publishType"),
         "imagery",
     )
+    if source_mode_input == "datasource":
+        publish_type = DATASOURCE_PUBLISH_TYPE
     default_alias = artifact_id or task_id or os.path.basename(workspace_path.rstrip("/")) or "publication"
     alias = _first_non_blank(
         data.get("alias"),
@@ -761,27 +1351,43 @@ def _prepare_publication_payload(data, existing_publication=None):
     )
     existing_publication_id = str(existing_publication.get("publicationId") or existing_publication.get("id") or "").strip()
     publication_id = incoming_publication_id or existing_publication_id or _generate_publication_id()
+    if source_mode_input == "datasource":
+        if normalized_publish_method in TITILER_PUBLISH_METHODS:
+            try:
+                prepared_sources = _prepare_titiler_sources(publication_id, resolved_sources)
+                mosaic_json_info = _build_mosaic_json(publication_id, prepared_sources)
+            except RuntimeError as exc:
+                return None, (str(exc), 500)
+
     default_publish_path = workspace_path or (artifact.get("outputPath") if artifact else "") or ""
-    publish_path_input = _normalize_relative_path(
-        _first_non_blank(
-            data.get("publishPath"),
-            existing_publication.get("publishPath"),
-            default_publish_path,
-        )
+    raw_publish_path = _first_non_blank(
+        data.get("publishPath"),
+        existing_publication.get("publishPath"),
+        default_publish_path,
     )
+    publish_path_input = _normalize_data_source_path(raw_publish_path) if source_mode_input == "datasource" else _normalize_relative_path(raw_publish_path)
     publish_path = publish_path_input or default_publish_path
 
-    is_valid_publish_path, full_publish_path = validateWorkspacePath(publish_path)
-    if not is_valid_publish_path:
-        return None, (full_publish_path, 400)
-    if not os.path.exists(full_publish_path):
-        return None, ("发布目录不存在", 404)
+    if source_mode_input == "datasource":
+        if normalized_publish_method in TITILER_PUBLISH_METHODS:
+            is_valid_publish_path, full_publish_path = validateDataSourcePath(publish_path)
+            if not is_valid_publish_path:
+                return None, (full_publish_path, 400)
+            if not os.path.isfile(full_publish_path):
+                return None, ("发布文件不存在", 404)
+        else:
+            is_valid_publish_path, full_publish_path = validateDataSourcePath(publish_path)
+            if not is_valid_publish_path:
+                return None, (full_publish_path, 400)
+            if not os.path.isfile(full_publish_path):
+                return None, ("发布文件不存在", 404)
+    else:
+        is_valid_publish_path, full_publish_path = validateWorkspacePath(publish_path)
+        if not is_valid_publish_path:
+            return None, (full_publish_path, 400)
+        if not os.path.exists(full_publish_path):
+            return None, ("发布目录不存在", 404)
 
-    publish_method = _first_defined(
-        data.get("publishMethod"),
-        existing_metadata.get("publishMethod"),
-    )
-    publish_method = str(publish_method).strip() if publish_method is not None else None
     visibility = _first_defined(
         data.get("visibility"),
         existing_metadata.get("visibility"),
@@ -801,15 +1407,39 @@ def _prepare_publication_payload(data, existing_publication=None):
     custom_metadata.update(incoming_custom_metadata)
     custom_metadata.pop("enabled", None)
     custom_metadata["sourceMode"] = source_mode_input
-    tile_profile = _resolve_tile_publish_profile(full_publish_path, metadata=existing_metadata, artifact=artifact)
-    source_tile_scheme = tile_profile.get("sourceTileScheme") or _normalize_tile_scheme(
+    if source_mode_input == "datasource":
+        custom_metadata["sourcePath"] = workspace_path
+        if normalized_publish_method in TITILER_PUBLISH_METHODS:
+            custom_metadata["sourcePaths"] = source_entries
+            custom_metadata["sourceEntryCount"] = len(source_entries)
+            custom_metadata["sourceFileCount"] = len(resolved_sources)
+            custom_metadata["optimizedSourceCount"] = sum(1 for item in prepared_sources if item.get("optimized"))
+            if mosaic_json_info:
+                custom_metadata["mosaicJsonPath"] = mosaic_json_info["relativePath"]
+        else:
+            custom_metadata["sourcePaths"] = [workspace_path]
+            custom_metadata["sourceEntryCount"] = 1
+            custom_metadata["sourceFileCount"] = 1
+            custom_metadata["optimizedSourceCount"] = 0
+    else:
+        custom_metadata.pop("sourcePath", None)
+        custom_metadata.pop("sourcePaths", None)
+        custom_metadata.pop("mosaicJsonPath", None)
+        custom_metadata.pop("sourceEntryCount", None)
+        custom_metadata.pop("sourceFileCount", None)
+        custom_metadata.pop("optimizedSourceCount", None)
+
+    tile_profile = {} if source_mode_input == "datasource" else _resolve_tile_publish_profile(full_publish_path, metadata=existing_metadata, artifact=artifact)
+    source_tile_scheme = _normalize_tile_scheme(
         _first_non_blank(
             incoming_custom_metadata.get("sourceTileScheme"),
+            tile_profile.get("sourceTileScheme"),
             existing_custom_metadata.get("sourceTileScheme"),
         )
     )
-    tile_extension = tile_profile.get("tileExtension") or _first_non_blank(
+    tile_extension = _first_non_blank(
         incoming_custom_metadata.get("tileExtension"),
+        tile_profile.get("tileExtension"),
         existing_custom_metadata.get("tileExtension"),
     )
     if source_tile_scheme:
@@ -832,6 +1462,14 @@ def _prepare_publication_payload(data, existing_publication=None):
             "artifactOutputPath": artifact.get("outputPath") if artifact else existing_metadata.get("artifactOutputPath"),
             "manifestPath": artifact.get("manifestPath") if artifact else existing_metadata.get("manifestPath"),
             "workspacePath": workspace_path or None,
+            "sourcePath": workspace_path if source_mode_input == "datasource" else None,
+            "sourcePaths": source_entries if source_mode_input == "datasource" else None,
+            "sourceEntryCount": len(source_entries) if source_mode_input == "datasource" else None,
+            "sourceFileCount": (
+                len(resolved_sources) if normalized_publish_method in TITILER_PUBLISH_METHODS else len(source_entries)
+            ) if source_mode_input == "datasource" else None,
+            "optimizedSourceCount": sum(1 for item in prepared_sources if item.get("optimized")) if source_mode_input == "datasource" else None,
+            "mosaicJsonPath": mosaic_json_info["relativePath"] if source_mode_input == "datasource" and mosaic_json_info else None,
             "taskId": task_id or None,
             "sourceMode": source_mode_input,
             "publishMethod": publish_method,
@@ -848,6 +1486,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         "taskId": task_id,
         "artifactId": artifact_id,
         "workspacePath": workspace_path,
+        "sourcePaths": source_entries,
         "publishType": publish_type,
         "alias": alias,
         "publicationId": publication_id,
@@ -855,6 +1494,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         "descriptor": descriptor,
         "publishedAt": published_at,
         "artifact": artifact,
+        "mosaicJsonInfo": mosaic_json_info,
     }, None
 
 
@@ -1155,6 +1795,12 @@ def createPublication():
                 "artifactOutputPath": artifact.get("outputPath") if artifact else None,
                 "manifestPath": artifact.get("manifestPath") if artifact else None,
                 "workspacePath": workspace_path or None,
+                "sourcePath": descriptor["metadata"].get("sourcePath"),
+                "sourcePaths": descriptor["metadata"].get("sourcePaths"),
+                "sourceEntryCount": descriptor["metadata"].get("sourceEntryCount"),
+                "sourceFileCount": descriptor["metadata"].get("sourceFileCount"),
+                "optimizedSourceCount": descriptor["metadata"].get("optimizedSourceCount"),
+                "mosaicJsonPath": descriptor["metadata"].get("mosaicJsonPath"),
                 "taskId": task_id or None,
                 "sourceMode": descriptor["metadata"].get("sourceMode"),
                 "publishMethod": descriptor["metadata"].get("publishMethod"),
@@ -1227,6 +1873,8 @@ def updatePublication(publication_id=None, publicationId=None):
             return jsonify({"error": message}), status_code
 
         descriptor = prepared["descriptor"]
+        if descriptor["metadata"].get("sourceMode") != "datasource":
+            _cleanup_publication_runtime_dir(prepared["publicationId"])
         descriptor_path = _write_publication_descriptor(descriptor, prepared["alias"], previous_publication=existing_publication)
         metadata = {
             **descriptor["metadata"],
@@ -1259,6 +1907,7 @@ def updatePublication(publication_id=None, publicationId=None):
             raise RuntimeError("发布记录写入数据库失败")
 
         if publication_id != prepared["publicationId"]:
+            _cleanup_publication_runtime_dir(publication_id)
             deletePublicationRecord(publication_id)
 
         publication_response = _get_publication_snapshot(prepared["publicationId"]) or _augment_publication_response({
@@ -1290,6 +1939,8 @@ def listPublications():
             response = _publication_record_to_response(record)
             if not response:
                 continue
+            if not _is_supported_publication_record(response):
+                continue
             publications[response["publicationId"]] = response
 
         if not isDatabaseEnabled():
@@ -1312,6 +1963,8 @@ def listPublications():
                         "descriptorPath": record.get("descriptorPath"),
                     }),
                 )
+                if not _is_supported_publication_record(publications.get(publication_id)):
+                    publications.pop(publication_id, None)
 
         items = list(publications.values())
         if publish_type:
@@ -1386,6 +2039,121 @@ def deletePublication(publication_id=None, publicationId=None):
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+def _build_publication_update_payload(publication):
+    metadata = _safe_dict((publication or {}).get("metadata"))
+    source_mode = metadata.get("sourceMode") or ("datasource" if _is_titiler_publish_method(metadata.get("publishMethod")) else "manual")
+    payload = {
+        "publicationId": publication.get("publicationId") or publication.get("id"),
+        "sourceMode": source_mode,
+        "taskId": metadata.get("taskId"),
+        "workspacePath": metadata.get("workspacePath"),
+        "sourcePath": metadata.get("sourcePath"),
+        "sourcePaths": metadata.get("sourcePaths"),
+        "publishPath": publication.get("publishPath"),
+        "alias": publication.get("alias"),
+        "publishType": publication.get("publishType"),
+        "publishMethod": metadata.get("publishMethod"),
+        "enabled": metadata.get("enabled", True),
+        "visibility": metadata.get("visibility"),
+        "note": metadata.get("note"),
+        "customMetadata": _safe_dict(metadata.get("customMetadata")),
+    }
+    if source_mode == "task":
+        payload["workspacePath"] = None
+        payload["sourcePath"] = None
+        payload["sourcePaths"] = None
+    elif source_mode == "manual":
+        payload["taskId"] = None
+        payload["sourcePath"] = None
+        payload["sourcePaths"] = None
+    elif source_mode == "datasource":
+        payload["taskId"] = None
+        payload["workspacePath"] = metadata.get("sourcePath") or metadata.get("workspacePath")
+        payload["sourcePath"] = metadata.get("sourcePath") or metadata.get("workspacePath")
+    return payload
+
+
+def clearPublicationCache(publication_id=None, publicationId=None):
+    try:
+        publication_id = publication_id or publicationId
+        publication = _get_publication_snapshot(publication_id)
+        if not publication:
+            return jsonify({"error": "发布记录不存在"}), 404
+        metadata = _safe_dict(publication.get("metadata"))
+        if metadata.get("sourceMode") != "datasource" or not _is_titiler_publish_method(metadata.get("publishMethod")):
+            return jsonify({"error": "仅 TiTiler 数据源发布支持缓存清理"}), 400
+        _cleanup_publication_runtime_dir(publication_id)
+        response = _augment_publication_response(publication)
+        logMessage(f"发布缓存已清理: {publication_id}", "INFO")
+        return jsonify({"success": True, "publication": response, "action": "cache-cleared"})
+    except Exception as exc:
+        logMessage(f"清理发布缓存失败 {publication_id}: {exc}", "ERROR")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+def rebuildPublicationCache(publication_id=None, publicationId=None):
+    try:
+        db_ready, db_error = _ensure_publication_db_ready()
+        if not db_ready:
+            message, status_code = db_error
+            return jsonify({"success": False, "error": message}), status_code
+
+        publication_id = publication_id or publicationId
+        publication = _get_publication_snapshot(publication_id)
+        if not publication:
+            return jsonify({"error": "发布记录不存在"}), 404
+        metadata = _safe_dict(publication.get("metadata"))
+        if metadata.get("sourceMode") != "datasource" or not _is_titiler_publish_method(metadata.get("publishMethod")):
+            return jsonify({"error": "仅 TiTiler 数据源发布支持缓存重建"}), 400
+
+        payload = _build_publication_update_payload(publication)
+        _cleanup_publication_runtime_dir(publication_id)
+        prepared, error = _prepare_publication_payload(payload, existing_publication=publication)
+        if error:
+            message, status_code = error
+            return jsonify({"error": message}), status_code
+
+        descriptor = prepared["descriptor"]
+        metadata = {
+            **descriptor["metadata"],
+            "descriptorPath": publication.get("descriptorPath") or _safe_dict(publication.get("metadata")).get("descriptorPath"),
+        }
+        access_payload = _build_publication_access_payload(
+            prepared["publishPath"],
+            descriptor["metadata"].get("publishMethod"),
+            prepared["publishType"],
+            prepared["publicationId"],
+            metadata,
+        )
+        persisted = upsertPublicationRecord(
+            publication_id=prepared["publicationId"],
+            artifact_id=prepared["artifactId"],
+            publish_type=prepared["publishType"],
+            publish_path=prepared["publishPath"],
+            alias=prepared["alias"],
+            status=descriptor["status"],
+            metadata=metadata,
+            published_at=prepared["publishedAt"],
+            browser_url=access_payload.get("browserUrl"),
+            access_url=access_payload.get("accessUrl"),
+            launch_url=access_payload.get("launchUrl"),
+            sample_url=access_payload.get("sampleUrl"),
+            public_base_url=access_payload.get("publicBaseUrl"),
+        )
+        if isDatabaseEnabled() and not persisted:
+            raise RuntimeError("发布记录写入数据库失败")
+
+        response = _get_publication_snapshot(prepared["publicationId"]) or _augment_publication_response({
+            **descriptor,
+            "publicationId": prepared["publicationId"],
+        })
+        logMessage(f"发布缓存已重建: {publication_id}", "INFO")
+        return jsonify({"success": True, "publication": response, "action": "cache-rebuilt"})
+    except Exception as exc:
+        logMessage(f"重建发布缓存失败 {publication_id}: {exc}", "ERROR")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 def _send_published_entry(full_path, normalized_path, url_builder=None):
     if os.path.isdir(full_path):
         for index_name in ("index.html", "index.htm"):
@@ -1455,19 +2223,18 @@ def _resolve_publication_asset_path(publication, relative_path=""):
             )
         )
         _, actual_full_path = _resolve_tiles_path(actual_relative)
-        return normalized_relative, actual_full_path
+        return actual_relative, actual_full_path
 
     resolved_full_path = _resolve_publication_relative_path(full_publish_path, normalized_relative)
-    return normalized_relative, resolved_full_path
+    if not normalized_relative:
+        return normalized_publish_path, resolved_full_path
+    return f"{normalized_publish_path}/{normalized_relative}".strip("/"), resolved_full_path
 
 
 def servePublishedPath(relative_path=""):
     try:
-        normalized_path, full_path = _resolve_tiles_path(relative_path)
-        if not os.path.exists(full_path):
-            return jsonify({"error": "目标发布资源不存在"}), 404
-
-        return _send_published_entry(full_path, normalized_path)
+        redirect_url = _build_nginx_published_url(relative_path)
+        return redirect(redirect_url, code=307)
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
@@ -1485,11 +2252,7 @@ def servePublicationAsset(publication_id=None, relative_path=""):
         if not os.path.exists(full_path):
             return jsonify({"error": "目标发布资源不存在"}), 404
 
-        return _send_published_entry(
-            full_path,
-            normalized_relative_path,
-            url_builder=lambda child_path: _build_publication_asset_url(publication_id, child_path),
-        )
+        return redirect(_build_nginx_published_url(normalized_relative_path), code=307)
     except FileNotFoundError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
     except ValueError as exc:
@@ -1505,6 +2268,8 @@ def _collect_publication_items(limit=500):
     for record in listPublicationRecords(limit=limit):
         response = _publication_record_to_response(record)
         if not response:
+            continue
+        if not _is_supported_publication_record(response):
             continue
         publication_id = response.get("publicationId")
         if publication_id:
@@ -1530,6 +2295,8 @@ def _collect_publication_items(limit=500):
                     "descriptorPath": record.get("descriptorPath"),
                 }),
             )
+            if not _is_supported_publication_record(publications.get(publication_id)):
+                publications.pop(publication_id, None)
 
     return list(publications.values())
 

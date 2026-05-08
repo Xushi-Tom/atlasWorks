@@ -40,6 +40,9 @@ docker compose -f docker-compose.external-db.yml ps
 docker compose -f docker-compose.pg15.yml ps
 curl.exe -s http://127.0.0.1:18000/api/health
 curl.exe -s http://127.0.0.1:18001/api/health
+curl.exe -s http://127.0.0.1:18080/health
+curl.exe -s http://127.0.0.1:18002/healthz
+curl.exe -s http://127.0.0.1:18002/api.html
 
 
 6. 停止

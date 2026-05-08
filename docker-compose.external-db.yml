@@ -6,7 +6,7 @@ services:
   # 服务名：AtlasWorks API 控制面
   atlasworks-api:
     # API 服务镜像名称与版本
-    image: atlasworks:release-2.1.0
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
     platform: linux/amd64
     # 构建配置
     build:
@@ -66,6 +66,16 @@ services:
       - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
       # 发布地址端口
       - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLIC_BASE_PORT:-18000}
+      # Nginx 静态发布对外地址；为空时按发布主机和 18080 生成
+      - ATLASWORKS_NGINX_PUBLIC_BASE_URL=${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
+      # Nginx 静态发布对外端口
+      - ATLASWORKS_NGINX_PUBLIC_BASE_PORT=${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
+      # TiTiler 动态影像发布对外地址；为空时按发布主机和 18002 生成
+      - ATLASWORKS_TITILER_PUBLIC_BASE_URL=${ATLASWORKS_TITILER_PUBLIC_BASE_URL:-}
+      # TiTiler 动态影像发布对外端口
+      - ATLASWORKS_TITILER_PUBLIC_BASE_PORT=${ATLASWORKS_TITILER_PUBLIC_BASE_PORT:-18002}
+      # TiTiler 使用的瓦片矩阵集
+      - ATLASWORKS_TITILER_TILE_MATRIX_SET=${ATLASWORKS_TITILER_TILE_MATRIX_SET:-WebMercatorQuad}
       # API 文档认证用户名（可为空）
       - ATLASWORKS_DOCS_USER=${ATLASWORKS_DOCS_USER:-}
       # API 文档认证密码
@@ -93,7 +103,7 @@ services:
       # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
       # 数据库密码
-      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       # 数据库连接超时（秒）
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       # 数据库 SSL 模式（本地默认 disable）
@@ -131,7 +141,7 @@ services:
 
   # 服务名：二维矢量切片 Worker，执行 MVT / GeoJSON 金字塔切片
   atlasworks-vector-worker:
-    image: atlasworks:release-2.1.0
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
     platform: linux/amd64
     build:
       context: .
@@ -196,7 +206,7 @@ services:
       # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
       # 数据库密码
-      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       # 数据库 SSL 模式，本地或内网通常使用 disable
@@ -208,11 +218,12 @@ services:
     volumes:
       - "D:/TIF:/app/dataSource"
       - "D:/tiles:/app/tiles"
+      - atlasworks-publications-cache:/app/tiles/_publications
       - ./runtime/log:/app/log
 
   # 服务名：影像切片 Worker，执行 indexed/map 栅格切片队列任务
   atlasworks-raster-worker:
-    image: atlasworks:release-2.1.0
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
     platform: linux/amd64
     container_name: atlasworks-raster-worker
     restart: unless-stopped
@@ -253,7 +264,7 @@ services:
       # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
       # 数据库密码
-      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       # 数据库 SSL 模式，本地或内网通常使用 disable
@@ -267,7 +278,7 @@ services:
 
   # 服务名：地形切片 Worker，执行 terrain 切片队列任务
   atlasworks-terrain-worker:
-    image: atlasworks:release-2.1.0
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
     platform: linux/amd64
     container_name: atlasworks-terrain-worker
     restart: unless-stopped
@@ -308,7 +319,7 @@ services:
       # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
       # 数据库密码
-      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       # 数据库 SSL 模式，本地或内网通常使用 disable
@@ -322,7 +333,7 @@ services:
 
   # 服务名：3D Tiles Worker，执行 3D Tiles 转换队列任务
   atlasworks-3dtiles-worker:
-    image: atlasworks:release-2.1.0
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
     platform: linux/amd64
     container_name: atlasworks-3dtiles-worker
     restart: unless-stopped
@@ -363,7 +374,7 @@ services:
       # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
       # 数据库密码
-      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       # 数据库 SSL 模式，本地或内网通常使用 disable
@@ -377,7 +388,7 @@ services:
 
   # 服务名：发布服务，负责发布记录、静态发布资源、WMTS 等访问
   atlasworks-publisher:
-    image: atlasworks:release-2.1.0
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
     platform: linux/amd64
     container_name: atlasworks-publisher
     restart: unless-stopped
@@ -405,6 +416,16 @@ services:
       - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
       # 生成发布访问地址时使用的端口
       - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_PORT:-18001}
+      # Nginx 静态发布对外地址；为空时按发布主机和 18080 生成
+      - ATLASWORKS_NGINX_PUBLIC_BASE_URL=${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
+      # Nginx 静态发布对外端口
+      - ATLASWORKS_NGINX_PUBLIC_BASE_PORT=${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
+      # TiTiler 动态影像发布对外地址；为空时按发布主机和 18002 生成
+      - ATLASWORKS_TITILER_PUBLIC_BASE_URL=${ATLASWORKS_TITILER_PUBLIC_BASE_URL:-}
+      # TiTiler 动态影像发布对外端口
+      - ATLASWORKS_TITILER_PUBLIC_BASE_PORT=${ATLASWORKS_TITILER_PUBLIC_BASE_PORT:-18002}
+      # TiTiler 使用的瓦片矩阵集
+      - ATLASWORKS_TITILER_TILE_MATRIX_SET=${ATLASWORKS_TITILER_TILE_MATRIX_SET:-WebMercatorQuad}
       # 容器内数据源目录，需与 volumes 的容器路径一致
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
       # 容器内瓦片输出目录，需与 volumes 的容器路径一致
@@ -422,7 +443,7 @@ services:
       # 数据库用户
       - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
       # 数据库密码
-      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
       # 数据库连接超时时间，单位秒
       - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
       # 数据库 SSL 模式，本地或内网通常使用 disable
@@ -441,3 +462,60 @@ services:
       - "D:/TIF:/app/dataSource"
       - "D:/tiles:/app/tiles"
       - ./runtime/log:/app/log
+
+  # 服务名：Nginx 静态发布后端，负责高性能发布已切好的瓦片目录
+  atlasworks-nginx:
+    image: nginx:1.27-alpine
+    platform: linux/amd64
+    container_name: atlasworks-nginx
+    restart: unless-stopped
+    # Nginx 静态发布 CPU 上限
+    cpus: ${ATLASWORKS_NGINX_CPUS:-1.0}
+    # Nginx 静态发布最大内存
+    mem_limit: ${ATLASWORKS_NGINX_MEM_LIMIT:-512m}
+    ports:
+      # Nginx 静态发布对外端口
+      - "${ATLASWORKS_NGINX_HOST_PORT:-18080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      # 挂载 Nginx 发布配置
+      - ./deploy/nginx/atlasworks.conf:/etc/nginx/conf.d/default.conf:ro
+      # 只读挂载瓦片目录，由 Nginx 直接发布 /published/*
+      - "D:/tiles:/srv/atlasworks/tiles:ro"
+
+  # 服务名：TiTiler 动态影像发布后端，负责 COG / GeoTIFF 按需出瓦片
+  atlasworks-titiler:
+    image: ghcr.io/developmentseed/titiler:latest
+    platform: linux/amd64
+    container_name: atlasworks-titiler
+    restart: unless-stopped
+    command: ["uvicorn", "titiler.application.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    # TiTiler CPU 上限
+    cpus: ${ATLASWORKS_TITILER_CPUS:-4.0}
+    # TiTiler 最大内存
+    mem_limit: ${ATLASWORKS_TITILER_MEM_LIMIT:-8g}
+    ports:
+      # TiTiler 对外端口
+      - "${ATLASWORKS_TITILER_HOST_PORT:-18002}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes:
+      # 只读挂载数据源目录，TiTiler 可直接读取 COG / GeoTIFF
+      - "D:/TIF:/app/dataSource:ro"
+      # 只读挂载瓦片目录，兼容后续从产物目录发布 COG
+      - "D:/tiles:/app/tiles:ro"
+      # 动态发布运行时缓存走 Docker volume，避免 Windows 挂载盘随机读拖慢 TiTiler
+      - atlasworks-publications-cache:/app/tiles/_publications:ro
+
+volumes:
+  atlasworks-publications-cache:
+

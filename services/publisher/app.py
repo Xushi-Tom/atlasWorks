@@ -8,6 +8,7 @@ from flask_cors import CORS
 
 from api_response import build_json_response, should_wrap_json_response
 from catalog import (
+    clearPublicationCache,
     createPublication,
     deletePublication,
     getArtifact,
@@ -15,6 +16,7 @@ from catalog import (
     getPublication,
     listArtifacts,
     listPublications,
+    rebuildPublicationCache,
     servePublicationAsset,
     servePublishedPath,
     serveWmts,
@@ -63,6 +65,12 @@ def _handle_publication_detail(publication_id):
     return getPublication(publication_id=publication_id)
 
 
+def _handle_publication_cache(publication_id):
+    if request.method == "DELETE":
+        return clearPublicationCache(publication_id=publication_id)
+    return rebuildPublicationCache(publication_id=publication_id)
+
+
 @app.before_request
 def handle_options():
     if request.method == "OPTIONS":
@@ -94,6 +102,7 @@ app.add_url_rule("/api/artifacts/<artifactId>", endpoint="publisher_artifact", v
 app.add_url_rule("/api/artifacts/<artifactId>/manifest", endpoint="publisher_artifact_manifest", view_func=getArtifactManifest, methods=["GET"])
 app.add_url_rule("/api/publications", endpoint="publisher_publications", view_func=_handle_publications, methods=["GET", "POST"])
 app.add_url_rule("/api/publications/<publication_id>", endpoint="publisher_publication_detail", view_func=_handle_publication_detail, methods=["GET", "PUT", "DELETE"])
+app.add_url_rule("/api/publications/<publication_id>/cache", endpoint="publisher_publication_cache", view_func=_handle_publication_cache, methods=["POST", "DELETE"])
 app.add_url_rule("/publication-assets/<publication_id>", endpoint="publisher_publication_root", view_func=servePublicationAsset, defaults={"relative_path": ""}, methods=["GET"])
 app.add_url_rule("/publication-assets/<publication_id>/<path:relative_path>", endpoint="publisher_publication_asset", view_func=servePublicationAsset, methods=["GET"])
 app.add_url_rule("/published", endpoint="publisher_published_root", view_func=servePublishedPath, defaults={"relative_path": ""}, methods=["GET"])

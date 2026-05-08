@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import PathPickerModal from '../components/PathPickerModal.vue';
 import { api } from '../services/api';
-import { formatDateTime } from '../utils/formatters';
+import { formatDateTime, normalizeListInput } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
 
 const picker = reactive({
@@ -29,6 +29,9 @@ const form = reactive({
 });
 
 const createVisible = ref(false);
+const detailVisible = ref(false);
+const detailPublication = ref(null);
+const detailLoading = ref(false);
 const keyword = ref('');
 const publications = ref([]);
 const tasks = ref([]);
@@ -38,27 +41,38 @@ const pageSize = ref(10);
 const totalPublications = ref(0);
 let loadTimer = null;
 
+const DATASOURCE_PUBLISH_TYPE = 'imagery';
+const DATASOURCE_PUBLISH_METHOD = 'titiler-cog';
+const DATASOURCE_PUBLISH_TYPE_LABEL = '地图 / 遥感';
+const DATASOURCE_PUBLISH_METHOD_LABEL = 'TiTiler COG 动态瓦片';
+
 const publishMethodCatalog = {
     imagery: [
         { value: 'wmts', label: 'WMTS 服务' },
         { value: 'tms', label: 'TMS 服务' },
-        { value: 'xyz', label: 'XYZ 服务' }
+        { value: 'xyz', label: 'XYZ 服务' },
+        { value: 'nginx-static', label: 'Nginx 静态发布' },
+        { value: 'titiler-cog', label: 'TiTiler COG 动态瓦片' }
     ],
     'electronic-map': [
         { value: 'wmts', label: 'WMTS 服务' },
         { value: 'tms', label: 'TMS 服务' },
-        { value: 'xyz', label: 'XYZ 服务' }
+        { value: 'xyz', label: 'XYZ 服务' },
+        { value: 'nginx-static', label: 'Nginx 静态发布' }
     ],
     terrain: [
         { value: 'cesium-terrain', label: 'Cesium Terrain' },
-        { value: 'quantized-mesh', label: 'Quantized Mesh' }
+        { value: 'quantized-mesh', label: 'Quantized Mesh' },
+        { value: 'nginx-static', label: 'Nginx 静态发布' }
     ],
     '3dtiles': [
-        { value: '3d-tiles', label: '3D Tiles 服务' }
+        { value: '3d-tiles', label: '3D Tiles 服务' },
+        { value: 'nginx-static', label: 'Nginx 静态发布' }
     ],
     vector: [
         { value: 'mvt', label: 'MVT 矢量瓦片' },
-        { value: 'geojson-tile', label: 'GeoJSON 瓦片' }
+        { value: 'geojson-tile', label: 'GeoJSON 瓦片' },
+        { value: 'nginx-static', label: 'Nginx 静态发布' }
     ]
 };
 
@@ -92,8 +106,30 @@ const publicationStatusTagMap = {
     failed: 'danger'
 };
 const TILES_BASE_PATH = '/app/tiles';
+const DATASOURCE_BASE_PATH = '/app/dataSource';
+const TITILER_METHODS = ['titiler-cog', 'titiler', 'cog'];
+const VECTOR_MVT_METHODS = ['mvt', 'vector-tile', 'vector-tiles'];
+const VECTOR_GEOJSON_METHODS = ['geojson-tile', 'geojson-tiles'];
 
-const publishMethodOptions = computed(() => publishMethodCatalog[form.publishType] || []);
+const isDatasourceMode = computed(() => form.sourceMode === 'datasource');
+const publishMethodOptions = computed(() => {
+    if (isDatasourceMode.value) {
+        return [{ value: DATASOURCE_PUBLISH_METHOD, label: DATASOURCE_PUBLISH_METHOD_LABEL }];
+    }
+    return publishMethodCatalog[form.publishType] || [];
+});
+const isTitilerPublish = computed(() => TITILER_METHODS.includes(String(form.publishMethod || '').toLowerCase()));
+const isDatasourcePublish = computed(() => isTitilerPublish.value);
+const dataSourceAllowedExtensions = computed(() => {
+    if (isTitilerPublish.value) return ['.tif', '.tiff'];
+    return [];
+});
+const dataSourcePlaceholder = computed(() => {
+    if (isTitilerPublish.value) {
+        return '选择一个或多个 GeoTIFF / COG 文件，或选择包含 tif 的目录，多个项用逗号分隔';
+    }
+    return '选择数据源文件';
+});
 
 const publishableTasks = computed(() => {
     return [...tasks.value]
@@ -108,6 +144,50 @@ function isPublicationEnabled(item) {
     return Boolean(item?.metadata?.enabled ?? (item?.status === 'enabled' || item?.status === 'published'));
 }
 
+function isTitilerPublication(item) {
+    return TITILER_METHODS.includes(String(item?.metadata?.publishMethod || item?.publishMethod || '').toLowerCase());
+}
+
+function getPublicationSourceSummary(item) {
+    if (isTitilerPublication(item)) {
+        const entryCount = Number(item?.sourceEntryCount ?? item?.metadata?.sourceEntryCount ?? 0);
+        const fileCount = Number(item?.sourceFileCount ?? item?.metadata?.sourceFileCount ?? 0);
+        const optimizedCount = Number(item?.optimizedSourceCount ?? item?.metadata?.optimizedSourceCount ?? 0);
+        return `${entryCount || 0} 项 / ${fileCount || 0} tif / ${optimizedCount || 0} COG`;
+    }
+    const entryCount = Number(item?.sourceEntryCount ?? item?.metadata?.sourceEntryCount ?? 0);
+    return entryCount ? `${entryCount} 项` : '-';
+}
+
+function getPublicationCacheStatus(item) {
+    if (!isTitilerPublication(item)) return '-';
+    return item?.cache?.mosaicReady ? '已就绪' : '未生成';
+}
+
+function getPrimaryPublicationUrl(item) {
+    if (!item) return '';
+    if (isTitilerPublication(item)) {
+        return String(item?.browserUrl || item?.launchUrl || '').trim();
+    }
+    return String(item?.accessUrl || item?.browserUrl || item?.launchUrl || '').trim();
+}
+
+function getPrimaryPublicationUrlLabel(item) {
+    if (!item) return '访问地址';
+    if (isTitilerPublication(item)) {
+        return '浏览器预览';
+    }
+    return '访问地址';
+}
+
+function getSecondaryPublicationUrl(item) {
+    if (!item) return '';
+    if (isTitilerPublication(item)) {
+        return String(item?.launchUrl || '').trim();
+    }
+    return '';
+}
+
 function normalizeWorkspacePath(pathValue) {
     let path = String(pathValue || '').trim().replace(/\\/g, '/');
     if (!path) return '';
@@ -119,6 +199,40 @@ function normalizeWorkspacePath(pathValue) {
         path = path.slice(TILES_BASE_PATH.length + 1);
     }
     return path.replace(/^\/+|\/+$/g, '');
+}
+
+function normalizeDataSourcePath(pathValue) {
+    let path = String(pathValue || '').trim().replace(/\\/g, '/');
+    if (!path) return '';
+
+    const lowerPath = path.toLowerCase();
+    const lowerBase = DATASOURCE_BASE_PATH.toLowerCase();
+    if (lowerPath === lowerBase) return '';
+    if (lowerPath.startsWith(`${lowerBase}/`)) {
+        path = path.slice(DATASOURCE_BASE_PATH.length + 1);
+    }
+    return path.replace(/^\/+|\/+$/g, '');
+}
+
+function getNormalizedSourcePath() {
+    return form.sourceMode === 'datasource'
+        ? getNormalizedDataSourcePaths()[0] || ''
+        : normalizeWorkspacePath(form.workspacePath);
+}
+
+function getNormalizedDataSourcePaths() {
+    return normalizeListInput(form.workspacePath)
+        .map(item => normalizeDataSourcePath(item))
+        .filter(Boolean);
+}
+
+function getPublicationDataSourcePaths(item) {
+    const rawSourcePaths = Array.isArray(item?.metadata?.sourcePaths) && item.metadata.sourcePaths.length
+        ? item.metadata.sourcePaths
+        : normalizeListInput(item?.metadata?.sourcePath || item?.metadata?.workspacePath || item?.publishPath || '');
+    return rawSourcePaths
+        .map(item => normalizeDataSourcePath(item))
+        .filter(Boolean);
 }
 
 function getTaskResultPath(task) {
@@ -181,6 +295,338 @@ async function copyPublicationUrl(url) {
     }
 }
 
+function openPublicationDetail(item) {
+    detailPublication.value = item || null;
+    detailVisible.value = true;
+    loadPublicationDetail(item?.publicationId);
+}
+
+function closePublicationDetail() {
+    detailVisible.value = false;
+    detailPublication.value = null;
+    detailLoading.value = false;
+}
+
+async function loadPublicationDetail(publicationId) {
+    const normalizedId = String(publicationId || '').trim();
+    if (!normalizedId) return;
+    detailLoading.value = true;
+    try {
+        const response = await api.getPublication(normalizedId);
+        detailPublication.value = response?.data?.publication || detailPublication.value;
+    } catch (error) {
+        pushToast(`发布详情加载失败: ${error.message}`, 'error', 4500);
+    } finally {
+        detailLoading.value = false;
+    }
+}
+
+function getVectorPublicationKind(publishMethod) {
+    const normalizedMethod = String(publishMethod || '').trim().toLowerCase();
+    if (VECTOR_MVT_METHODS.includes(normalizedMethod)) return 'mvt';
+    if (VECTOR_GEOJSON_METHODS.includes(normalizedMethod)) return 'geojson';
+    return '';
+}
+
+function getVectorSourceLayerHint(item) {
+    const vectorLayers = item?.vectorPublication?.vectorLayers || item?.metadata?.vectorLayers || item?.customMetadata?.vectorLayers || [];
+    if (Array.isArray(vectorLayers) && vectorLayers.length && vectorLayers[0]?.id) {
+        return String(vectorLayers[0].id).trim();
+    }
+    return 'source-layer-name';
+}
+
+function formatBounds(bounds) {
+    if (!Array.isArray(bounds) || bounds.length !== 4) return '-';
+    return bounds.map(value => Number(value).toFixed(6)).join(', ');
+}
+
+function buildVectorClientGuides(item, vectorKind) {
+    const tileJsonUrl = String(item?.launchUrl || '').trim();
+    const xyzTemplate = String(item?.accessUrl || '').trim();
+    const sourceLayer = getVectorSourceLayerHint(item);
+
+    if (vectorKind === 'mvt') {
+        return [
+            {
+                name: 'MapLibre',
+                recommended: true,
+                description: '二维矢量金字塔首选。直接使用 TileJSON，样式和交互都更完整。',
+                snippet: `map.addSource('atlasworks-vector', {
+  type: 'vector',
+  url: '${tileJsonUrl}'
+});
+
+map.addLayer({
+  id: 'atlasworks-fill',
+  type: 'fill',
+  source: 'atlasworks-vector',
+  'source-layer': '${sourceLayer}',
+  paint: {
+    'fill-color': '#3b82f6',
+    'fill-opacity': 0.35
+  }
+});`
+            },
+            {
+                name: 'OpenLayers',
+                recommended: true,
+                description: 'OpenLayers 对 MVT 支持成熟，适合桌面 GIS 风格的二维应用。',
+                snippet: `import VectorTileLayer from 'ol/layer/VectorTile';
+import VectorTileSource from 'ol/source/VectorTile';
+import MVT from 'ol/format/MVT';
+
+const layer = new VectorTileLayer({
+  source: new VectorTileSource({
+    format: new MVT(),
+    url: '${xyzTemplate}'
+  })
+});
+
+map.addLayer(layer);`
+            },
+            {
+                name: 'Cesium',
+                recommended: false,
+                description: 'Cesium 对二维 MVT 不是一等公民，没有标准内置加载方式。需要第三方 MVT 适配层，或改走影像/GeoJSON/3D Tiles 方案。',
+                snippet: `// CesiumJS 当前不建议直接承载二维 MVT 金字塔。
+// 推荐：
+// 1. 二维场景用 MapLibre / OpenLayers
+// 2. Cesium 只负责三维或影像底图
+// 3. 必要时再接第三方 MVT 适配插件`
+            }
+        ];
+    }
+
+    if (vectorKind === 'geojson') {
+        return [
+            {
+                name: 'OpenLayers',
+                recommended: true,
+                description: 'GeoJSON 瓦片更适合调试、小数据量或直接查看单瓦片内容。',
+                snippet: `fetch('${xyzTemplate.replace('{z}', '0').replace('{x}', '0').replace('{y}', '0')}')
+  .then((resp) => resp.json())
+  .then((data) => {
+    console.log('tile geojson', data);
+  });`
+            },
+            {
+                name: 'MapLibre',
+                recommended: false,
+                description: 'MapLibre 主线支持的是 MVT，不适合直接对接 GeoJSON 瓦片。正式发布建议改用 MVT。',
+                snippet: `// 不建议使用 GeoJSON 瓦片作为 MapLibre 正式数据源。
+// 若目标客户端是 MapLibre，请优先发布为 MVT。`
+            },
+            {
+                name: 'Cesium',
+                recommended: false,
+                description: 'Cesium 可以对接 GeoJSON Z/X/Y 瓦片，但通常需要你自己按当前缩放级别和视域管理瓦片请求、加载与卸载，不像影像图层那样原生一键接入。',
+                snippet: `// Cesium 可以使用 GeoJSON 瓦片模板。
+// 常见做法是根据当前缩放级别和视域计算可见 z/x/y，
+// 再逐块请求 ${xyzTemplate} 并作为 GeoJsonDataSource / Entity / Primitive 加载。`
+            }
+        ];
+    }
+
+    return [];
+}
+
+function getPublicationGuide(item) {
+    if (!item) {
+        return {
+            endpoints: [],
+            notes: [],
+            concepts: [],
+            clients: []
+        };
+    }
+
+    const publishMethod = String(item?.publishMethod || item?.metadata?.publishMethod || '').toLowerCase();
+    const vectorKind = getVectorPublicationKind(publishMethod);
+    const endpoints = [];
+    const notes = [];
+    const concepts = [];
+    const clients = [];
+    const metadataRows = [];
+
+    if (item.browserUrl) {
+        endpoints.push({
+            key: 'browser',
+            label: '浏览器预览',
+            url: item.browserUrl,
+            description: publishMethod.includes('titiler')
+                ? '直接在浏览器打开，查看 TiTiler 自带调试预览页。'
+                : '直接在浏览器打开，用于查看已发布内容或入口文件。'
+        });
+    }
+
+    if (vectorKind) {
+        const vectorPublication = item?.vectorPublication || {};
+        metadataRows.push({
+            key: 'vector-kind',
+            label: '矢量格式',
+            value: vectorKind === 'mvt' ? 'MVT / PBF' : 'GeoJSON Tile'
+        });
+        metadataRows.push({
+            key: 'vector-zoom',
+            label: '层级范围',
+            value: vectorPublication.minzoom !== undefined && vectorPublication.maxzoom !== undefined
+                ? `${vectorPublication.minzoom} - ${vectorPublication.maxzoom}`
+                : '-'
+        });
+        metadataRows.push({
+            key: 'vector-bounds',
+            label: '数据范围',
+            value: formatBounds(vectorPublication.bounds)
+        });
+        metadataRows.push({
+            key: 'vector-layer',
+            label: 'source-layer',
+            value: getVectorSourceLayerHint(item)
+        });
+
+        if (item.launchUrl) {
+            endpoints.push({
+                key: 'tilejson',
+                label: 'TileJSON',
+                url: item.launchUrl,
+                description: vectorKind === 'mvt'
+                    ? '矢量发布入口。MapLibre 优先使用这个地址。'
+                    : '矢量瓦片描述文件，可用于查看层级、范围和模板地址。'
+            });
+        }
+        if (item.accessUrl) {
+            endpoints.push({
+                key: 'xyz',
+                label: 'XYZ 模板',
+                url: item.accessUrl,
+                description: vectorKind === 'mvt'
+                    ? '按 {z}/{x}/{y} 请求 PBF 瓦片。OpenLayers 常直接使用这个地址。'
+                    : '按 {z}/{x}/{y} 请求 GeoJSON 瓦片，适合调试或小数据量使用。'
+            });
+        }
+        if (item.sampleUrl && item.sampleUrl !== item.launchUrl && item.sampleUrl !== item.accessUrl && item.sampleUrl !== item.browserUrl) {
+            endpoints.push({
+                key: 'sample',
+                label: '示例瓦片',
+                url: item.sampleUrl,
+                description: '用于直接验证某一级某一块瓦片是否可访问。'
+            });
+        }
+
+        if (vectorKind === 'mvt') {
+            notes.push('二维矢量正式发布优先使用 MVT。');
+            notes.push('MapLibre 推荐直接读取 TileJSON；OpenLayers 常直接读取 XYZ 模板。');
+            notes.push('Cesium 不适合作为二维 MVT 的主客户端。');
+            notes.push('Cesium 若一定要接，通常需要先转影像、3D 数据，或接第三方 MVT 适配层。');
+            concepts.push({
+                title: 'MVT 是什么',
+                text: 'MVT 是二进制矢量瓦片格式，体积更小、客户端支持更广，适合正式发布。'
+            });
+        } else {
+            notes.push('GeoJSON 瓦片更适合调试、小数据量或兼容用途。');
+            notes.push('如果目标客户端是 MapLibre，建议改发 MVT。');
+            notes.push('Cesium 可以接 GeoJSON Z/X/Y 瓦片，但一般需要自定义按视域分块加载。');
+            concepts.push({
+                title: 'GeoJSON 瓦片适用场景',
+                text: 'GeoJSON 瓦片可读性高，但体积和客户端生态都不如 MVT，更适合调试和小规模数据。'
+            });
+        }
+
+        clients.push(...buildVectorClientGuides(item, vectorKind));
+    } else if (publishMethod.includes('titiler')) {
+        if (item.launchUrl) {
+            endpoints.push({
+                key: 'tilejson',
+                label: 'TileJSON',
+                url: item.launchUrl,
+                description: '这是给前端程序读取的 JSON，里面包含范围、层级和瓦片模板地址。'
+            });
+        }
+        if (item.accessUrl) {
+            endpoints.push({
+                key: 'tiles',
+                label: '瓦片模板',
+                url: item.accessUrl,
+                description: '这是动态瓦片模板地址，程序按 {z}/{x}/{y} 请求 PNG 瓦片。'
+            });
+        }
+        if (item.sampleUrl && item.sampleUrl !== item.browserUrl) {
+            endpoints.push({
+                key: 'sample',
+                label: '调试地址',
+                url: item.sampleUrl,
+                description: '用于直接验证服务是否返回影像。'
+            });
+        }
+
+        notes.push('浏览器想直接看效果，打开“浏览器预览”。');
+        notes.push('程序对接优先使用“TileJSON”，不要自己手写完整请求参数。');
+        notes.push('只有在前端明确支持 Z/X/Y 模板时，再直接使用“瓦片模板”。');
+        concepts.push({
+            title: 'TileJSON 是什么',
+            text: 'TileJSON 是一份描述瓦片图层的 JSON，里面通常会给出 minzoom、maxzoom、bounds 和 tiles 模板地址。'
+        });
+    } else if (publishMethod === 'wmts') {
+        if (item.launchUrl) {
+            endpoints.push({
+                key: 'capabilities',
+                label: 'Capabilities',
+                url: item.launchUrl,
+                description: 'WMTS 元数据入口，GIS 客户端一般先读取这个地址。'
+            });
+        }
+        if (item.accessUrl) {
+            endpoints.push({
+                key: 'tiles',
+                label: 'GetTile 模板',
+                url: item.accessUrl,
+                description: 'WMTS GetTile 请求模板。'
+            });
+        }
+        if (item.sampleUrl) {
+            endpoints.push({
+                key: 'sample',
+                label: '示例请求',
+                url: item.sampleUrl,
+                description: '可直接打开验证某一级某一块瓦片。'
+            });
+        }
+
+        notes.push('GIS 客户端优先加载 Capabilities。');
+        notes.push('浏览器直接验证时，可先打开“示例请求”。');
+    } else {
+        if (item.launchUrl && item.launchUrl !== item.browserUrl && item.launchUrl !== item.accessUrl) {
+            endpoints.push({
+                key: 'launch',
+                label: '程序入口',
+                url: item.launchUrl,
+                description: '给客户端或前端程序使用的入口地址。'
+            });
+        }
+        if (item.accessUrl) {
+            endpoints.push({
+                key: 'access',
+                label: '访问地址',
+                url: item.accessUrl,
+                description: '这是当前发布记录的主要访问地址。'
+            });
+        }
+        if (item.sampleUrl && item.sampleUrl !== item.accessUrl && item.sampleUrl !== item.browserUrl) {
+            endpoints.push({
+                key: 'sample',
+                label: '示例地址',
+                url: item.sampleUrl,
+                description: '用于快速验证发布内容。'
+            });
+        }
+    }
+
+    return { endpoints, notes, concepts, clients, metadataRows };
+}
+
+const detailGuide = computed(() => getPublicationGuide(detailPublication.value));
+
 function resetForm() {
     form.sourceMode = 'task';
     form.taskId = '';
@@ -208,7 +654,7 @@ function getPickerCurrentValue() {
 }
 
 function applyPickerSelection(paths) {
-    const nextValue = paths[0] || '';
+    const nextValue = picker.multiple ? paths.join(', ') : (paths[0] || '');
     if (picker.field) {
         form[picker.field] = nextValue;
     }
@@ -216,27 +662,40 @@ function applyPickerSelection(paths) {
 
 function editPublication(item) {
     editingPublicationId.value = item.publicationId;
-    form.sourceMode = item.metadata?.taskId ? 'task' : 'manual';
+    form.sourceMode = item.metadata?.sourceMode || (item.metadata?.taskId ? 'task' : 'manual');
     form.taskId = item.metadata?.taskId || '';
-    form.workspacePath = normalizeWorkspacePath(item.metadata?.workspacePath || item.publishPath || '');
+    form.workspacePath = form.sourceMode === 'datasource'
+        ? getPublicationDataSourcePaths(item).join(', ')
+        : normalizeWorkspacePath(item.metadata?.workspacePath || item.publishPath || '');
     form.alias = item.alias || '';
     form.publishType = item.publishType || 'imagery';
     form.publishMethod = item.metadata?.publishMethod || 'wmts';
     form.enabled = isPublicationEnabled(item);
     form.visibility = item.metadata?.visibility || 'private';
     form.note = item.metadata?.note || '';
+    if (form.sourceMode === 'datasource') {
+        form.publishType = DATASOURCE_PUBLISH_TYPE;
+        form.publishMethod = DATASOURCE_PUBLISH_METHOD;
+    }
     createVisible.value = true;
 }
 
 async function togglePublicationStatus(item, explicitEnabled = null) {
     const nextEnabled = explicitEnabled === null ? !isPublicationEnabled(item) : Boolean(explicitEnabled);
-    const normalizedWorkspacePath = normalizeWorkspacePath(item.metadata?.workspacePath || item.publishPath);
+    const sourceMode = item.metadata?.sourceMode || (item.metadata?.taskId ? 'task' : 'manual');
+    const dataSourcePaths = sourceMode === 'datasource' ? getPublicationDataSourcePaths(item) : [];
+    const rawPath = item.metadata?.sourcePath || item.metadata?.workspacePath || item.publishPath;
+    const normalizedWorkspacePath = sourceMode === 'datasource'
+        ? (dataSourcePaths[0] || '')
+        : normalizeWorkspacePath(rawPath);
     try {
         await api.updatePublication(item.publicationId, {
             publicationId: item.publicationId,
-            sourceMode: item.metadata?.taskId ? 'task' : 'manual',
+            sourceMode,
             taskId: item.metadata?.taskId || undefined,
-            workspacePath: item.metadata?.taskId ? undefined : normalizedWorkspacePath,
+            workspacePath: sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
+            sourcePath: sourceMode === 'datasource' ? normalizedWorkspacePath : undefined,
+            sourcePaths: sourceMode === 'datasource' ? dataSourcePaths : undefined,
             publishPath: normalizedWorkspacePath,
             alias: item.alias,
             publishType: item.publishType,
@@ -265,18 +724,68 @@ async function removePublication(item) {
     }
 }
 
+async function rebuildPublicationCache(item) {
+    try {
+        await api.rebuildPublicationCache(item.publicationId);
+        pushToast('发布缓存已重建', 'success');
+        await loadPublications();
+    } catch (error) {
+        pushToast(`重建发布缓存失败: ${error.message}`, 'error', 5000);
+    }
+}
+
+async function clearPublicationCache(item) {
+    const confirmed = window.confirm(`确认清理发布缓存「${item.alias || item.publicationId}」吗？清理后需要重建才能继续动态访问。`);
+    if (!confirmed) return;
+    try {
+        await api.clearPublicationCache(item.publicationId);
+        pushToast('发布缓存已清理', 'success');
+        await loadPublications();
+    } catch (error) {
+        pushToast(`清理发布缓存失败: ${error.message}`, 'error', 5000);
+    }
+}
+
 watch(() => form.publishType, value => {
+    if (isDatasourceMode.value) {
+        form.publishType = DATASOURCE_PUBLISH_TYPE;
+        form.publishMethod = DATASOURCE_PUBLISH_METHOD;
+        return;
+    }
     const options = publishMethodCatalog[value] || [];
     if (!options.some(item => item.value === form.publishMethod)) {
         form.publishMethod = options[0]?.value || '';
     }
 }, { immediate: true });
 
+watch(() => form.publishMethod, value => {
+    const normalizedValue = String(value || '').toLowerCase();
+    if (isDatasourceMode.value) {
+        if (!TITILER_METHODS.includes(normalizedValue)) {
+            form.publishMethod = DATASOURCE_PUBLISH_METHOD;
+        }
+        form.publishType = DATASOURCE_PUBLISH_TYPE;
+        form.taskId = '';
+        return;
+    }
+    if (TITILER_METHODS.includes(normalizedValue)) {
+        form.sourceMode = 'datasource';
+        form.taskId = '';
+    } else if (form.sourceMode === 'datasource') {
+        form.sourceMode = 'manual';
+        form.workspacePath = '';
+    }
+});
+
 watch(() => form.sourceMode, value => {
     if (value === 'task') {
         form.workspacePath = '';
     } else {
         form.taskId = '';
+    }
+    if (value === 'datasource') {
+        form.publishType = DATASOURCE_PUBLISH_TYPE;
+        form.publishMethod = DATASOURCE_PUBLISH_METHOD;
     }
 });
 
@@ -337,16 +846,27 @@ async function submitPublication() {
         pushToast('请先选择工作空间目录', 'warning');
         return;
     }
+    if (form.sourceMode === 'datasource' && !form.workspacePath) {
+        pushToast('请先选择数据源文件或目录', 'warning');
+        return;
+    }
 
-    const normalizedWorkspacePath = normalizeWorkspacePath(form.workspacePath);
+    const normalizedWorkspacePath = getNormalizedSourcePath();
+    const normalizedDataSourcePaths = form.sourceMode === 'datasource' ? getNormalizedDataSourcePaths() : [];
+    if (form.sourceMode === 'datasource' && !normalizedDataSourcePaths.length) {
+        pushToast(isTitilerPublish.value ? '请至少选择一个有效的 GeoTIFF 文件或目录' : '请至少选择一个有效的数据源文件', 'warning');
+        return;
+    }
     const payload = {
         sourceMode: form.sourceMode,
         taskId: form.sourceMode === 'task' ? form.taskId : undefined,
         workspacePath: form.sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
+        sourcePath: form.sourceMode === 'datasource' ? normalizedWorkspacePath : undefined,
+        sourcePaths: form.sourceMode === 'datasource' ? normalizedDataSourcePaths : undefined,
         publishPath: form.sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
         alias: form.alias || undefined,
-        publishType: form.publishType,
-        publishMethod: form.publishMethod || undefined,
+        publishType: form.sourceMode === 'datasource' ? DATASOURCE_PUBLISH_TYPE : form.publishType,
+        publishMethod: form.sourceMode === 'datasource' ? DATASOURCE_PUBLISH_METHOD : (form.publishMethod || undefined),
         enabled: form.enabled,
         visibility: form.visibility,
         note: form.note || undefined
@@ -428,7 +948,8 @@ onBeforeUnmount(() => {
                     </div>
 
                     <div class="card-body publish-table data-table-shell">
-                        <el-table class="publish-data-table" :data="publications" stripe border height="100%">
+                        <div class="publish-table-scroller">
+                        <el-table class="publish-data-table" :data="publications" :fit="false" stripe border height="100%" scrollbar-always-on>
                             <el-table-column prop="alias" label="发布名称" min-width="160">
                                 <template #default="{ row }">
                                     {{ row.alias || '-' }}
@@ -441,25 +962,53 @@ onBeforeUnmount(() => {
                             </el-table-column>
                             <el-table-column label="发布地址" min-width="300">
                                 <template #default="{ row }">
-                                    <div v-if="row.accessUrl" class="publish-address-cell">
-                                        <a
-                                            class="publish-address-link"
-                                            :href="row.accessUrl"
-                                            :title="row.accessUrl"
-                                            target="_blank"
-                                            rel="noreferrer"
-                                        >{{ row.accessUrl }}</a>
-                                        <button
-                                            class="publish-copy-button"
-                                            type="button"
-                                            :title="`复制地址: ${row.accessUrl}`"
-                                            @click="copyPublicationUrl(row.accessUrl)"
-                                        >
-                                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                                                <path d="M9 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
-                                                <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
-                                            </svg>
-                                        </button>
+                                    <div v-if="getPrimaryPublicationUrl(row)" class="publish-address-stack">
+                                        <div class="publish-address-line">
+                                            <span class="publish-address-type">{{ getPrimaryPublicationUrlLabel(row) }}</span>
+                                            <div class="publish-address-cell">
+                                                <a
+                                                    class="publish-address-link"
+                                                    :href="getPrimaryPublicationUrl(row)"
+                                                    :title="getPrimaryPublicationUrl(row)"
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                >{{ getPrimaryPublicationUrl(row) }}</a>
+                                                <button
+                                                    class="publish-copy-button"
+                                                    type="button"
+                                                    :title="`复制地址: ${getPrimaryPublicationUrl(row)}`"
+                                                    @click="copyPublicationUrl(getPrimaryPublicationUrl(row))"
+                                                >
+                                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                        <path d="M9 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
+                                                        <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div v-if="getSecondaryPublicationUrl(row)" class="publish-address-line publish-address-line-secondary">
+                                            <span class="publish-address-type">TileJSON</span>
+                                            <div class="publish-address-cell">
+                                                <a
+                                                    class="publish-address-link"
+                                                    :href="getSecondaryPublicationUrl(row)"
+                                                    :title="getSecondaryPublicationUrl(row)"
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                >{{ getSecondaryPublicationUrl(row) }}</a>
+                                                <button
+                                                    class="publish-copy-button"
+                                                    type="button"
+                                                    :title="`复制地址: ${getSecondaryPublicationUrl(row)}`"
+                                                    @click="copyPublicationUrl(getSecondaryPublicationUrl(row))"
+                                                >
+                                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                        <path d="M9 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
+                                                        <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                     <span v-else>-</span>
                                 </template>
@@ -467,6 +1016,16 @@ onBeforeUnmount(() => {
                             <el-table-column label="可见性" width="100">
                                 <template #default="{ row }">
                                     {{ getVisibilityLabel(row.metadata?.visibility) }}
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="数据源" min-width="180">
+                                <template #default="{ row }">
+                                    {{ getPublicationSourceSummary(row) }}
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="缓存" width="100">
+                                <template #default="{ row }">
+                                    {{ getPublicationCacheStatus(row) }}
                                 </template>
                             </el-table-column>
                             <el-table-column label="状态" width="100">
@@ -479,7 +1038,7 @@ onBeforeUnmount(() => {
                                     {{ formatDateTime(row.publishedAt || row.createdAt) }}
                                 </template>
                             </el-table-column>
-                            <el-table-column label="操作" width="260" fixed="right">
+                            <el-table-column label="操作" width="410" fixed="right">
                                 <template #default="{ row }">
                                     <div class="publish-table-actions">
                                         <el-switch
@@ -489,12 +1048,16 @@ onBeforeUnmount(() => {
                                             inline-prompt
                                             @change="value => togglePublicationStatus(row, value)"
                                         />
+                                        <el-button size="small" @click="openPublicationDetail(row)">详情</el-button>
                                         <el-button size="small" @click="editPublication(row)">编辑</el-button>
+                                        <el-button v-if="isTitilerPublication(row)" size="small" @click="rebuildPublicationCache(row)">重建缓存</el-button>
+                                        <el-button v-if="isTitilerPublication(row)" size="small" @click="clearPublicationCache(row)">清理缓存</el-button>
                                         <el-button size="small" type="danger" @click="removePublication(row)">删除</el-button>
                                     </div>
                                 </template>
                             </el-table-column>
                         </el-table>
+                        </div>
                         <div class="publish-list-pagination">
                             <el-pagination
                                 :current-page="currentPage"
@@ -516,8 +1079,9 @@ onBeforeUnmount(() => {
             <el-form class="publish-editor-form" label-width="110px">
                 <el-form-item label="发布来源">
                     <el-radio-group v-model="form.sourceMode" class="publish-source-mode">
-                        <el-radio-button label="task">按任务发布</el-radio-button>
-                        <el-radio-button label="manual">手动目录</el-radio-button>
+                        <el-radio-button label="task" :disabled="isDatasourcePublish">按任务发布</el-radio-button>
+                        <el-radio-button label="manual" :disabled="isDatasourcePublish">手动目录</el-radio-button>
+                        <el-radio-button label="datasource">数据源文件</el-radio-button>
                     </el-radio-group>
                 </el-form-item>
 
@@ -529,6 +1093,23 @@ onBeforeUnmount(() => {
                         <span>结果目录：{{ getTaskResultPath(selectedTask) }}</span>
                         <span>产物 ID：{{ selectedTask.result?.artifactId || '-' }}</span>
                         <span>开始时间：{{ formatDateTime(selectedTask.startTime) }}</span>
+                    </div>
+                </el-form-item>
+
+                <el-form-item v-else-if="form.sourceMode === 'datasource'" label="数据源">
+                    <div class="path-field">
+                        <el-input v-model="form.workspacePath" :placeholder="dataSourcePlaceholder" />
+                        <div class="path-field-actions">
+                            <el-button @click="openPicker({ title: '选择数据源文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'workspacePath', allowedExtensions: dataSourceAllowedExtensions })">选择文件</el-button>
+                            <el-button v-if="isTitilerPublish" @click="openPicker({ title: '选择多个 GeoTIFF 文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'workspacePath', allowedExtensions: ['.tif', '.tiff'] })">选择多个文件</el-button>
+                            <el-button v-if="isTitilerPublish" @click="openPicker({ title: '选择包含 GeoTIFF 的目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'workspacePath', allowedExtensions: [] })">选择目录</el-button>
+                            <el-button @click="form.workspacePath = ''">清空</el-button>
+                        </div>
+                    </div>
+                    <div class="publish-source-preview">
+                        <span>已选项数：{{ getNormalizedDataSourcePaths().length }}</span>
+                        <span>发布模式：MosaicJSON + TiTiler</span>
+                        <span>目录会自动展开为 tif，普通 GeoTIFF 会先转换为 COG</span>
                     </div>
                 </el-form-item>
 
@@ -544,7 +1125,8 @@ onBeforeUnmount(() => {
                 </el-form-item>
 
                 <el-form-item label="发布类型">
-                    <el-select v-model="form.publishType">
+                    <div v-if="isDatasourceMode" class="publish-fixed-field">{{ DATASOURCE_PUBLISH_TYPE_LABEL }}</div>
+                    <el-select v-else v-model="form.publishType">
                         <el-option label="地图 / 遥感" value="imagery" />
                         <el-option label="地图 / 电子地图" value="electronic-map" />
                         <el-option label="地形" value="terrain" />
@@ -554,7 +1136,8 @@ onBeforeUnmount(() => {
                 </el-form-item>
 
                 <el-form-item label="发布方式">
-                    <el-select v-model="form.publishMethod">
+                    <div v-if="isDatasourceMode" class="publish-fixed-field">{{ DATASOURCE_PUBLISH_METHOD_LABEL }}</div>
+                    <el-select v-else v-model="form.publishMethod">
                         <el-option v-for="option in publishMethodOptions" :key="option.value" :label="option.label" :value="option.value" />
                     </el-select>
                 </el-form-item>
@@ -582,6 +1165,119 @@ onBeforeUnmount(() => {
             </template>
         </el-dialog>
 
+        <el-dialog
+            v-model="detailVisible"
+            class="publish-detail-dialog"
+            title="发布详情"
+            width="920px"
+            destroy-on-close
+            @closed="closePublicationDetail"
+        >
+            <div v-if="detailPublication" class="publish-detail-panel">
+                <div class="publish-detail-meta">
+                    <div class="publish-detail-meta-item">
+                        <span class="publish-detail-meta-label">发布名称</span>
+                        <strong>{{ detailPublication.alias || '-' }}</strong>
+                    </div>
+                    <div class="publish-detail-meta-item">
+                        <span class="publish-detail-meta-label">发布类型</span>
+                        <strong>{{ getPublishTypeLabel(detailPublication.publishType) }} / {{ getPublishMethodLabel(detailPublication.publishType, detailPublication.metadata?.publishMethod) }}</strong>
+                    </div>
+                    <div class="publish-detail-meta-item">
+                        <span class="publish-detail-meta-label">状态</span>
+                        <strong>{{ getPublicationStatusLabel(detailPublication.status) }}</strong>
+                    </div>
+                    <div class="publish-detail-meta-item">
+                        <span class="publish-detail-meta-label">数据源</span>
+                        <strong>{{ isTitilerPublication(detailPublication) ? getPublicationSourceSummary(detailPublication) : (detailPublication.publishPath || '-') }}</strong>
+                    </div>
+                </div>
+
+                <div v-if="detailGuide.metadataRows.length" class="publish-detail-section">
+                    <h3>接入参数</h3>
+                    <div class="publish-detail-meta publish-detail-meta-compact">
+                        <div
+                            v-for="row in detailGuide.metadataRows"
+                            :key="row.key"
+                            class="publish-detail-meta-item"
+                        >
+                            <span class="publish-detail-meta-label">{{ row.label }}</span>
+                            <strong>{{ row.value || '-' }}</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="publish-detail-section">
+                    <h3>地址</h3>
+                    <div class="publish-detail-endpoints">
+                        <div
+                            v-for="endpoint in detailGuide.endpoints"
+                            :key="endpoint.key"
+                            class="publish-detail-endpoint"
+                        >
+                            <div class="publish-detail-endpoint-head">
+                                <strong>{{ endpoint.label }}</strong>
+                                <button
+                                    class="publish-copy-button"
+                                    type="button"
+                                    :title="`复制地址: ${endpoint.url}`"
+                                    @click="copyPublicationUrl(endpoint.url)"
+                                >
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M9 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <a :href="endpoint.url" target="_blank" rel="noreferrer">{{ endpoint.url }}</a>
+                            <p>{{ endpoint.description }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-if="detailGuide.clients.length" class="publish-detail-section">
+                    <h3>推荐客户端</h3>
+                    <div class="publish-detail-clients">
+                        <div
+                            v-for="client in detailGuide.clients"
+                            :key="client.name"
+                            class="publish-detail-client"
+                        >
+                            <div class="publish-detail-client-head">
+                                <strong>{{ client.name }}</strong>
+                                <span v-if="client.recommended" class="publish-detail-badge">推荐</span>
+                            </div>
+                            <p>{{ client.description }}</p>
+                            <pre class="publish-detail-code"><code>{{ client.snippet }}</code></pre>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-if="detailGuide.notes.length" class="publish-detail-section">
+                    <h3>怎么用</h3>
+                    <ul class="publish-detail-list">
+                        <li v-for="note in detailGuide.notes" :key="note">{{ note }}</li>
+                    </ul>
+                </div>
+
+                <div v-if="detailGuide.concepts.length" class="publish-detail-section">
+                    <h3>说明</h3>
+                    <div class="publish-detail-concepts">
+                        <div
+                            v-for="concept in detailGuide.concepts"
+                            :key="concept.title"
+                            class="publish-detail-concept"
+                        >
+                            <strong>{{ concept.title }}</strong>
+                            <p>{{ concept.text }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-if="detailLoading" class="publish-detail-loading">详情刷新中...</div>
+            </div>
+        </el-dialog>
+
         <PathPickerModal
             v-model="picker.visible"
             :title="picker.title"
@@ -599,6 +1295,27 @@ onBeforeUnmount(() => {
 <style scoped>
 .publish-table {
     min-height: 520px;
+}
+
+.publish-table-scroller {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 8px;
+    margin-inline: -4px;
+}
+
+.publish-table-scroller::-webkit-scrollbar {
+    height: 10px;
+}
+
+.publish-table-scroller::-webkit-scrollbar-track {
+    background: rgba(15, 26, 41, 0.78);
+    border-radius: 999px;
+}
+
+.publish-table-scroller::-webkit-scrollbar-thumb {
+    background: linear-gradient(90deg, rgba(79, 129, 196, 0.9), rgba(92, 159, 224, 0.95));
+    border-radius: 999px;
 }
 
 .publish-list-pagination {
@@ -623,12 +1340,12 @@ onBeforeUnmount(() => {
 }
 
 .publish-list-shell.data-panel {
-    border-radius: 30px;
+    border-radius: 24px;
     border-color: rgba(129, 150, 181, 0.16);
     background:
-        radial-gradient(circle at top right, rgba(92, 132, 190, 0.1), transparent 26%),
+        radial-gradient(circle at top right, rgba(92, 132, 190, 0.12), transparent 24%),
         linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
-        linear-gradient(160deg, rgba(7, 14, 24, 0.98), rgba(8, 15, 26, 0.95));
+        linear-gradient(160deg, rgba(7, 14, 24, 0.98), rgba(9, 17, 29, 0.96));
     box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.04),
         0 26px 54px rgba(0, 0, 0, 0.22);
@@ -660,14 +1377,18 @@ onBeforeUnmount(() => {
 .publish-list-shell :deep(.el-table) {
     color: var(--tf-text) !important;
     border: 1px solid rgba(108, 134, 168, 0.14) !important;
-    border-radius: 26px !important;
+    border-radius: 20px !important;
     overflow: hidden !important;
     background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
-        linear-gradient(150deg, rgba(10, 17, 29, 0.96), rgba(9, 15, 25, 0.92)) !important;
+        linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent),
+        linear-gradient(150deg, rgba(10, 17, 29, 0.98), rgba(8, 14, 23, 0.95)) !important;
     box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.03),
         0 16px 30px rgba(0, 0, 0, 0.14) !important;
+}
+
+.publish-data-table {
+    min-width: 1760px;
 }
 
 .publish-list-shell :deep(.el-table::before),
@@ -682,31 +1403,33 @@ onBeforeUnmount(() => {
 .publish-list-shell :deep(.el-table__header-wrapper th.el-table__cell) {
     background: transparent !important;
     border-bottom-color: rgba(108, 134, 168, 0.16) !important;
-    color: #dbe7f4 !important;
+    color: #eef5ff !important;
     font-weight: 700 !important;
     letter-spacing: 0.02em !important;
-    padding-top: 18px !important;
-    padding-bottom: 18px !important;
+    padding-top: 16px !important;
+    padding-bottom: 16px !important;
+    font-size: 12px;
 }
 
 .publish-list-shell :deep(.el-table__body td.el-table__cell) {
     border-bottom-color: rgba(108, 134, 168, 0.1) !important;
-    padding-top: 18px !important;
-    padding-bottom: 18px !important;
+    padding-top: 14px !important;
+    padding-bottom: 14px !important;
+    vertical-align: top;
 }
 
 .publish-list-shell :deep(.el-table__body tr.el-table__row > td.el-table__cell),
 .publish-list-shell :deep(.el-table__fixed-body-wrapper tr.el-table__row > td.el-table__cell) {
-    background: rgba(11, 20, 33, 0.82) !important;
+    background: rgba(9, 18, 31, 0.86) !important;
 }
 
 .publish-list-shell :deep(.el-table--striped .el-table__body tr.el-table__row--striped > td.el-table__cell) {
-    background: rgba(15, 25, 40, 0.86) !important;
+    background: rgba(13, 23, 38, 0.92) !important;
 }
 
 .publish-list-shell :deep(.el-table__body tr.el-table__row:hover > td.el-table__cell),
 .publish-list-shell :deep(.el-table__fixed-body-wrapper tr.el-table__row:hover > td.el-table__cell) {
-    background: rgba(20, 33, 50, 0.94) !important;
+    background: rgba(20, 34, 52, 0.98) !important;
 }
 
 .publish-list-shell :deep(.el-table__fixed),
@@ -720,10 +1443,28 @@ onBeforeUnmount(() => {
     background: linear-gradient(180deg, rgba(108, 134, 168, 0.16), rgba(108, 134, 168, 0.04)) !important;
 }
 
+.publish-list-shell :deep(.el-table__cell .cell) {
+    line-height: 1.55;
+}
+
+.publish-list-shell :deep(.el-table__body-wrapper),
+.publish-list-shell :deep(.el-scrollbar__wrap) {
+    scrollbar-color: rgba(91, 140, 206, 0.95) rgba(14, 25, 39, 0.82);
+}
+
+.publish-list-shell :deep(.el-scrollbar__bar.is-horizontal) {
+    height: 10px;
+    bottom: 2px;
+}
+
+.publish-list-shell :deep(.el-scrollbar__bar.is-horizontal .el-scrollbar__thumb) {
+    background: linear-gradient(90deg, rgba(79, 129, 196, 0.92), rgba(92, 159, 224, 0.96));
+}
+
 .publish-table-actions :deep(.el-button),
 .publish-header-actions :deep(.el-button) {
-    min-width: 62px;
-    padding-inline: 14px;
+    min-width: 58px;
+    padding-inline: 12px;
     border-radius: 10px;
     font-weight: 700;
 }
@@ -741,11 +1482,28 @@ onBeforeUnmount(() => {
     background: linear-gradient(135deg, rgba(201, 103, 120, 0.94), rgba(138, 59, 76, 0.9));
 }
 
+.publish-fixed-field {
+    width: 100%;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    border: 1px solid rgba(108, 134, 168, 0.18);
+    border-radius: 12px;
+    background: rgba(8, 16, 28, 0.74);
+    color: var(--tf-text);
+}
+
 .publish-header-actions :deep(.el-button:not(.el-button--primary):not(.el-button--danger)),
 .publish-table-actions :deep(.el-button:not(.el-button--primary):not(.el-button--danger)) {
     border-color: rgba(156, 170, 188, 0.16);
     background: linear-gradient(135deg, rgba(34, 44, 58, 0.96), rgba(22, 29, 39, 0.94));
     color: #dce6f1;
+}
+
+.publish-table-actions {
+    flex-wrap: wrap;
+    row-gap: 6px;
 }
 
 .path-field {
@@ -767,6 +1525,171 @@ onBeforeUnmount(() => {
     color: var(--tf-text-soft);
 }
 
+.publish-detail-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.publish-detail-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.publish-detail-meta-compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.publish-detail-meta-item,
+.publish-detail-endpoint,
+.publish-detail-concept {
+    padding: 16px 18px;
+    border-radius: 16px;
+    border: 1px solid rgba(109, 141, 177, 0.16);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent),
+        linear-gradient(145deg, rgba(11, 20, 33, 0.92), rgba(8, 15, 26, 0.88));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.03),
+        0 14px 24px rgba(0, 0, 0, 0.14);
+}
+
+.publish-detail-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.publish-detail-meta-label {
+    color: #8ca2bc;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.publish-detail-meta-item strong {
+    color: #eef5ff;
+    font-size: 20px;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.publish-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 4px 0;
+}
+
+.publish-detail-section h3 {
+    margin: 0;
+    font-size: 13px;
+    color: #93acd3;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.publish-detail-endpoints,
+.publish-detail-concepts,
+.publish-detail-clients {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.publish-detail-client {
+    padding: 16px 18px;
+    border-radius: 16px;
+    border: 1px solid rgba(109, 141, 177, 0.16);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent),
+        linear-gradient(145deg, rgba(11, 20, 33, 0.92), rgba(8, 15, 26, 0.88));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.03),
+        0 14px 24px rgba(0, 0, 0, 0.14);
+}
+
+.publish-detail-client-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.publish-detail-client-head strong,
+.publish-detail-endpoint-head strong,
+.publish-detail-concept strong {
+    color: #eef5ff;
+    font-size: 16px;
+}
+
+.publish-detail-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(74, 222, 128, 0.16);
+    color: #a7f3d0;
+    font-size: 12px;
+}
+
+.publish-detail-endpoint-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.publish-detail-endpoint a {
+    display: block;
+    color: #66e3ff;
+    text-decoration: none;
+    line-break: anywhere;
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(6, 14, 24, 0.86);
+    border: 1px solid rgba(104, 128, 160, 0.14);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+}
+
+.publish-detail-endpoint p,
+.publish-detail-concept p,
+.publish-detail-client p {
+    margin: 0;
+    color: #b8c7d9;
+    line-height: 1.6;
+}
+
+.publish-detail-code {
+    margin: 12px 0 0;
+    padding: 12px;
+    overflow: auto;
+    border-radius: 10px;
+    border: 1px solid rgba(108, 134, 168, 0.14);
+    background: rgba(5, 12, 22, 0.92);
+    color: #dbe7f4;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.publish-detail-list {
+    margin: 0;
+    padding-left: 20px;
+    color: #c3d1e2;
+    line-height: 1.7;
+}
+
+.publish-detail-list li + li {
+    margin-top: 8px;
+}
+
 .publish-table a {
     color: var(--tf-accent);
     text-decoration: none;
@@ -782,6 +1705,28 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     gap: 10px;
+}
+
+.publish-address-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.publish-address-line {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.publish-address-line-secondary {
+    opacity: 0.92;
+}
+
+.publish-address-type {
+    font-size: 12px;
+    color: var(--tf-text-dim);
 }
 
 .publish-address-link {
@@ -826,6 +1771,12 @@ onBeforeUnmount(() => {
     stroke-width: 1.9;
     stroke-linecap: round;
     stroke-linejoin: round;
+}
+
+.publish-detail-loading {
+    color: #95aac3;
+    font-size: 12px;
+    padding: 0 4px 12px;
 }
 .publish-editor-form :deep(.el-input__wrapper),
 .publish-editor-form :deep(.el-textarea__inner),
@@ -899,6 +1850,16 @@ onBeforeUnmount(() => {
     color: var(--tf-text) !important;
 }
 
+@media (max-width: 900px) {
+    .publish-detail-meta {
+        grid-template-columns: 1fr;
+    }
+
+    .publish-detail-meta-compact {
+        grid-template-columns: 1fr;
+    }
+}
+
 :deep(.publish-editor-dialog.el-dialog) {
     background: linear-gradient(160deg, rgba(4, 14, 26, 0.96), rgba(9, 24, 42, 0.97));
     border: 1px solid rgba(74, 195, 255, 0.3);
@@ -964,6 +1925,48 @@ onBeforeUnmount(() => {
 :deep(.publish-editor-dialog .el-switch) {
     --el-switch-on-color: var(--tf-accent-strong);
     --el-switch-off-color: rgba(74, 195, 255, 0.34);
+}
+
+:deep(.publish-detail-dialog.el-dialog) {
+    background:
+        radial-gradient(circle at top right, rgba(78, 126, 188, 0.12), transparent 24%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 22%),
+        linear-gradient(160deg, rgba(6, 14, 25, 0.98), rgba(8, 16, 28, 0.97));
+    border: 1px solid rgba(88, 118, 154, 0.2);
+    border-radius: 24px;
+    box-shadow: 0 28px 60px rgba(0, 0, 0, 0.42);
+}
+
+:deep(.publish-detail-dialog .el-dialog__header) {
+    margin-right: 0;
+    padding: 18px 22px 16px;
+    border-bottom: 1px solid rgba(103, 125, 154, 0.14);
+}
+
+:deep(.publish-detail-dialog .el-dialog__title),
+:deep(.publish-detail-dialog .el-dialog__close) {
+    color: #eef5ff;
+}
+
+:deep(.publish-detail-dialog .el-dialog__title) {
+    font-size: 28px;
+    font-weight: 700;
+}
+
+:deep(.publish-detail-dialog .el-dialog__body) {
+    padding: 18px 22px 22px;
+    color: #d9e5f2;
+    max-height: 76vh;
+    overflow: auto;
+}
+
+:deep(.publish-detail-dialog .el-dialog__body::-webkit-scrollbar) {
+    width: 10px;
+}
+
+:deep(.publish-detail-dialog .el-dialog__body::-webkit-scrollbar-thumb) {
+    background: rgba(92, 137, 196, 0.9);
+    border-radius: 999px;
 }
 
 @media (max-width: 960px) {

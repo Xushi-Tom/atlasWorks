@@ -22,7 +22,9 @@ export function formatPercent(value, digits = 1) {
 
 export function normalizeListInput(value) {
     return String(value || '')
-        .split(',')
+        .replace(/\r/g, '\n')
+        .replace(/,/g, '\n')
+        .split('\n')
         .map(item => item.trim())
         .filter(Boolean);
 }

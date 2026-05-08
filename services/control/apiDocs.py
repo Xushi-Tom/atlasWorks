@@ -966,7 +966,7 @@ _OPERATION_OVERRIDES = {
                                             "publishedAt": "2026-04-01T10:21:35",
                                             "createdAt": "2026-04-01T10:21:35",
                                             "updatedAt": "2026-04-01T10:21:35",
-                                            "accessUrl": "http://172.20.0.3:8000/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
+                                            "accessUrl": "http://172.20.0.3:18001/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
                                         }
                                     ],
                                 }
@@ -1063,7 +1063,7 @@ _OPERATION_OVERRIDES = {
                                         "publishedAt": "2026-04-01T10:21:35",
                                         "createdAt": "2026-04-01T10:21:35",
                                         "updatedAt": "2026-04-01T10:21:35",
-                                        "accessUrl": "http://172.20.0.3:8000/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
+                                        "accessUrl": "http://172.20.0.3:18001/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
                                     },
                                 }
                             }
@@ -1108,8 +1108,8 @@ _OPERATION_OVERRIDES = {
                                         "publishedAt": "2026-04-01T10:21:35",
                                         "createdAt": "2026-04-01T10:21:35",
                                         "updatedAt": "2026-04-01T10:21:35",
-                                        "browserUrl": "http://172.20.0.3:8000/published/demo/output",
-                                        "accessUrl": "http://172.20.0.3:8000/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
+                                        "browserUrl": "http://172.20.0.3:18080/published/demo/output",
+                                        "accessUrl": "http://172.20.0.3:18001/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
                                     },
                                 }
                             }
@@ -1447,13 +1447,17 @@ _PATH_DOCS = {
         "summary": "发布详情",
         "description": "读取、更新或删除指定的发布记录。",
     },
+    "/publication-assets/{publicationId}/{relative_path}": {
+        "summary": "发布资源适配入口",
+        "description": "按 publicationId 做轻量路径换算后重定向到静态发布后端，兼容 XYZ/TMS。",
+    },
     "/published": {
         "summary": "发布目录入口",
-        "description": "浏览已发布目录根节点。",
+        "description": "将发布目录入口重定向到静态发布后端。",
     },
     "/published/{relative_path}": {
         "summary": "访问发布资源",
-        "description": "读取已发布的目录或具体文件内容。",
+        "description": "将已发布目录资源重定向到静态发布后端。",
     },
     "/wmts": {
         "summary": "WMTS 服务",
@@ -1769,7 +1773,7 @@ def _build_paths():
             continue
         if route_path in {"/", "/console"}:
             continue
-        if not (route_path.startswith("/api/") or route_path.startswith("/published") or route_path.startswith("/wmts")):
+        if not (route_path.startswith("/api/") or route_path.startswith("/published") or route_path.startswith("/publication-assets") or route_path.startswith("/wmts")):
             continue
 
         raw_openapi_path = _flask_path_to_openapi(route_path)
@@ -2454,8 +2458,8 @@ def _openapi_spec():
                     "properties": {
                         "sourceMode": {
                             "type": "string",
-                            "enum": ["task", "manual", "artifact"],
-                            "description": "发布来源模式。前端发布中心使用 task 或 manual。",
+                            "enum": ["task", "manual", "artifact", "datasource"],
+                            "description": "发布来源模式。task/manual/artifact 用于已有产物；datasource 用于 TiTiler 动态影像发布。",
                             "example": "task",
                         },
                         "publicationId": {
@@ -2482,6 +2486,11 @@ def _openapi_spec():
                             "type": "string",
                             "description": "workspacePath 的别名字段；两者任选其一。",
                         },
+                        "sourcePaths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "TiTiler 动态发布时可传多个 GeoTIFF/COG 相对路径；服务端会生成 MosaicJSON。",
+                        },
                         "publishPath": {
                             "type": "string",
                             "description": "实际对外发布的目录相对路径；通常与 workspacePath 一致。",
@@ -2500,7 +2509,7 @@ def _openapi_spec():
                         },
                         "publishMethod": {
                             "type": "string",
-                            "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
+                            "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "titiler-cog", "wms", "wfs", "static-download"],
                             "description": "发布方式，对应前端“发布方式”。",
                             "example": "wmts",
                         },
@@ -2541,7 +2550,7 @@ def _openapi_spec():
                 },
                 "PublicationSourceMode": {
                     "type": "string",
-                    "enum": ["task", "manual", "artifact"],
+                    "enum": ["task", "manual", "artifact", "datasource"],
                 },
                 "PublicationPublishType": {
                     "type": "string",
@@ -2549,7 +2558,7 @@ def _openapi_spec():
                 },
                 "PublicationPublishMethod": {
                     "type": "string",
-                    "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "wms", "wfs", "static-download"],
+                    "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "titiler-cog", "wms", "wfs", "static-download"],
                 },
                 "PublicationVisibility": {
                     "type": "string",
@@ -2559,6 +2568,9 @@ def _openapi_spec():
                     "type": "object",
                     "properties": {
                         "workspacePath": {"type": "string"},
+                        "sourcePath": {"type": "string"},
+                        "sourcePaths": {"type": "array", "items": {"type": "string"}},
+                        "mosaicJsonPath": {"type": "string"},
                         "taskId": {"type": "string"},
                         "sourceMode": {"$ref": "#/components/schemas/PublicationSourceMode"},
                         "publishMethod": {"$ref": "#/components/schemas/PublicationPublishMethod"},

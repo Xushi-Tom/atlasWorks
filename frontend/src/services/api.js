@@ -344,6 +344,14 @@ class AtlasWorksApi {
         return this.delete(`/api/publications/${encodeURIComponent(publicationId)}`);
     }
 
+    async rebuildPublicationCache(publicationId) {
+        return this.post(`/api/publications/${encodeURIComponent(publicationId)}/cache`, {});
+    }
+
+    async clearPublicationCache(publicationId) {
+        return this.delete(`/api/publications/${encodeURIComponent(publicationId)}/cache`);
+    }
+
     async getRoutes(params = {}) {
         return this.get('/api/routes', params);
     }
