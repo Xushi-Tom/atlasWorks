@@ -307,20 +307,20 @@ async function submit() {
     justify-content: space-between;
     gap: 16px;
     padding: 20px 22px;
-    border: 1px solid #e5eaf3;
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
-    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+    background: var(--tf-surface);
 }
 
 .tile-page-toolbar__title {
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 18px;
     font-weight: 700;
 }
 
 .tile-page-toolbar__desc {
     margin-top: 6px;
-    color: #6b7280;
+    color: var(--tf-text-secondary);
     font-size: 13px;
     line-height: 1.7;
 }
@@ -336,7 +336,7 @@ async function submit() {
 }
 
 .tile-module__title {
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 15px;
     font-weight: 600;
 }
@@ -362,7 +362,7 @@ async function submit() {
 
 .tile-help {
     margin-top: 8px;
-    color: #6b7280;
+    color: var(--tf-text-secondary);
     font-size: 13px;
     line-height: 1.7;
 }
@@ -370,13 +370,13 @@ async function submit() {
 .tile-help code {
     padding: 2px 6px;
     border-radius: 6px;
-    background: #f3f6fb;
-    color: #334155;
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-primary);
 }
 
 .tile-help a {
     margin-left: 8px;
-    color: #409eff;
+    color: var(--tf-accent);
     text-decoration: none;
 }
 

@@ -22,6 +22,7 @@ const WorkspaceView = defineAsyncComponent(() => import('./views/WorkspaceView.v
 const toasts = useToastState();
 
 const sidebarCollapsed = ref(localStorage.getItem('atlasworks-sidebar-collapsed') === '1');
+const themeMode = ref(localStorage.getItem('atlasworks-theme') === 'dark' ? 'dark' : 'light');
 const currentSection = ref(localStorage.getItem('atlasworks-current-section') || 'dashboard');
 const currentTool = ref(localStorage.getItem('atlasworks-current-tool') || 'toolNodataTiles');
 const currentSystem = ref(localStorage.getItem('atlasworks-current-system') || 'systemUpdates');
@@ -86,7 +87,13 @@ const currentViewProps = computed(() => {
 
 function applyThemeMode(mode) {
     document.body.classList.add('tf-app');
-    document.body.classList.add('tf-theme-light');
+    document.body.classList.remove('tf-theme-light', 'tf-theme-dark');
+    document.body.classList.add(mode === 'dark' ? 'tf-theme-dark' : 'tf-theme-light');
+    document.documentElement.style.colorScheme = mode === 'dark' ? 'dark' : 'light';
+}
+
+function toggleThemeMode() {
+    themeMode.value = themeMode.value === 'dark' ? 'light' : 'dark';
 }
 
 function toggleSidebar() {
@@ -187,6 +194,11 @@ watch(sidebarCollapsed, value => {
     localStorage.setItem('atlasworks-sidebar-collapsed', value ? '1' : '0');
 });
 
+watch(themeMode, value => {
+    localStorage.setItem('atlasworks-theme', value);
+    applyThemeMode(value);
+});
+
 watch(currentSection, value => {
     localStorage.setItem('atlasworks-current-section', value);
 });
@@ -212,7 +224,7 @@ watch(currentSystem, value => {
 });
 
 onMounted(() => {
-    applyThemeMode('light');
+    applyThemeMode(themeMode.value);
     cleanupFloatingLayers();
     cleanupInjectedOverlays();
     injectedOverlayObserver = new MutationObserver(mutations => {
@@ -249,10 +261,12 @@ onBeforeUnmount(() => {
                 :current-system="currentSystem"
                 :expanded-groups="expandedGroups"
                 :collapsed="sidebarCollapsed"
+                :theme-mode="themeMode"
                 @navigate="handleSidebarNavigate"
                 @toggle-group="handleSidebarToggleGroup"
                 @request-expand="handleSidebarRequestExpand"
                 @toggle-collapse="handleSidebarToggleCollapse"
+                @toggle-theme="toggleThemeMode"
             />
         </el-aside>
 
@@ -272,13 +286,13 @@ onBeforeUnmount(() => {
 .standard-shell {
     height: 100vh;
     min-height: 100vh;
-    background: #f5f7fa;
+    background: var(--tf-shell-bg);
     overflow: hidden;
 }
 
 .standard-shell-aside {
-    border-right: 1px solid #e4e7ed;
-    background: #ffffff;
+    border-right: 1px solid var(--tf-border);
+    background: var(--tf-sidebar-bg);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -287,7 +301,7 @@ onBeforeUnmount(() => {
 .standard-shell-main {
     min-width: 0;
     min-height: 0;
-    background: #f5f7fa;
+    background: var(--tf-shell-bg);
     overflow: hidden;
 }
 

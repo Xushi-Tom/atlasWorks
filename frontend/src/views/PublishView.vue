@@ -228,11 +228,6 @@ function isPublicationBuilding(item) {
     return state === 'pending' || state === 'running';
 }
 
-function getPublicationBuildMessage(item) {
-    const buildState = item?.buildState || item?.cache?.buildState || item?.metadata?.buildState || {};
-    return String(buildState?.message || '').trim();
-}
-
 function getPrimaryPublicationUrl(item) {
     if (!item) return '';
     if (isTitilerPublication(item)) {
@@ -1142,10 +1137,6 @@ onBeforeUnmount(() => {
                             </span>
                         </div>
 
-                        <div v-if="isTitilerPublication(row) && getPublicationBuildMessage(row)" class="publication-build-banner">
-                            {{ getPublicationBuildMessage(row) }}
-                        </div>
-
                         <div class="publication-card-toolbar">
                             <el-button size="default" class="publication-action-button" :icon="View" @click="openPublicationPreview(row)">
                                 预览
@@ -1355,20 +1346,20 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 16px;
     padding: 20px 22px;
-    border: 1px solid #e5eaf3;
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
-    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+    background: var(--tf-surface);
 }
 
 .page-banner__title {
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 18px;
     font-weight: 700;
 }
 
 .page-banner__desc {
     margin-top: 6px;
-    color: #6b7280;
+    color: var(--tf-text-secondary);
     font-size: 13px;
     line-height: 1.7;
 }
@@ -1393,7 +1384,7 @@ onBeforeUnmount(() => {
 
 .publish-panel {
     border-radius: 20px;
-    border-color: #e8eef7;
+    border-color: var(--tf-border);
 }
 
 .publish-panel :deep(.el-card__body) {
@@ -1441,8 +1432,8 @@ onBeforeUnmount(() => {
 .publication-card {
     height: 100%;
     border-radius: 18px;
-    border: 1px solid #e6edf7;
-    background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%);
+    border: 1px solid var(--tf-border);
+    background: var(--tf-surface);
     transition:
         border-color 0.2s ease,
         box-shadow 0.2s ease,
@@ -1451,7 +1442,7 @@ onBeforeUnmount(() => {
 
 .publication-card:hover {
     transform: translateY(-2px);
-    border-color: #d8e6f6;
+    border-color: var(--tf-border-strong);
     box-shadow: 0 14px 30px rgba(46, 84, 134, 0.08);
 }
 
@@ -1524,7 +1515,7 @@ onBeforeUnmount(() => {
 }
 
 .publication-inline-text.is-method {
-    color: #475467;
+    color: var(--tf-text-secondary);
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
@@ -1572,7 +1563,7 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     gap: 8px;
-    color: #94a3b8;
+    color: var(--tf-text-muted);
     font-size: 14px;
     flex-wrap: wrap;
 }
@@ -1587,22 +1578,12 @@ onBeforeUnmount(() => {
     line-height: 1;
 }
 
-.publication-build-banner {
-    padding: 10px 12px;
-    border-radius: 12px;
-    border: 1px solid #f8dfb0;
-    background: #fff8ea;
-    color: #a16207;
-    font-size: 13px;
-    line-height: 1.5;
-}
-
 .publication-card-toolbar {
     display: flex;
     align-items: center;
     gap: 12px;
     padding-top: 12px;
-    border-top: 1px solid #eef2f7;
+    border-top: 1px solid var(--tf-border);
     flex-wrap: nowrap;
 }
 
@@ -1612,18 +1593,19 @@ onBeforeUnmount(() => {
     padding: 0 22px;
     margin: 0;
     border-radius: 16px;
-    border: 1px solid #dbe5f2;
-    color: #56657a;
-    background: #ffffff;
+    border: 1px solid var(--tf-border-strong);
+    color: var(--tf-text-secondary);
+    background: var(--tf-surface-soft);
     font-size: 15px;
     font-weight: 600;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    box-shadow: none;
 }
 
 .publication-action-button:hover {
-    border-color: #bfd4ee;
-    color: #2563eb;
-    background: #f8fbff;
+    border-color: var(--tf-accent);
+    color: var(--tf-accent);
+    background: var(--tf-accent-soft);
+    box-shadow: none;
 }
 
 .publication-action-button :deep(.el-icon) {
@@ -1670,7 +1652,7 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: space-between;
     gap: 14px;
-    border-left: 1px solid #edf1f6;
+    border-left: 1px solid var(--tf-border);
     margin-left: 8px;
     flex: 0 0 auto;
 }
@@ -1678,7 +1660,7 @@ onBeforeUnmount(() => {
 .publication-card-switch-label {
     font-size: 15px;
     font-weight: 600;
-    color: #526074;
+    color: var(--tf-text-secondary);
     white-space: nowrap;
 }
 
@@ -1691,13 +1673,14 @@ onBeforeUnmount(() => {
     width: 50px;
     height: 50px;
     padding: 0;
-    border: 1px solid #dbe5f2;
+    border: 1px solid var(--tf-border-strong);
     border-radius: 16px;
-    background: #ffffff;
-    color: #667085;
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-muted);
     cursor: pointer;
     transition: all 0.18s ease;
     flex: 0 0 auto;
+    box-shadow: none;
 }
 
 .publication-card-more-top {
@@ -1705,9 +1688,9 @@ onBeforeUnmount(() => {
 }
 
 .publication-card-more-inline:hover {
-    border-color: #bfd4ee;
-    color: #2563eb;
-    background: #f8fbff;
+    border-color: var(--tf-accent);
+    color: var(--tf-accent);
+    background: var(--tf-accent-soft);
 }
 
 .publication-card-more-inline .el-icon {
@@ -1725,10 +1708,10 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     padding: 0 12px;
-    border: 1px solid var(--el-border-color);
+    border: 1px solid var(--tf-border-strong);
     border-radius: 10px;
-    background: var(--el-fill-color-blank);
-    color: #303133;
+    background: var(--tf-surface);
+    color: var(--tf-text-primary);
 }
 
 .path-field {
@@ -1749,12 +1732,12 @@ onBeforeUnmount(() => {
     margin-top: 10px;
     padding: 10px 12px;
     border-radius: 8px;
-    border: 1px solid #e4e7ed;
-    background: #f5f7fa;
+    border: 1px solid var(--tf-border);
+    background: var(--tf-surface-soft);
     display: flex;
     flex-direction: column;
     gap: 4px;
-    color: #606266;
+    color: var(--tf-text-secondary);
 }
 
 .standard-detail-stack {
@@ -1848,7 +1831,7 @@ onBeforeUnmount(() => {
 .publish-editor-form :deep(.el-input__wrapper),
 .publish-editor-form :deep(.el-textarea__inner),
 .publish-editor-form :deep(.el-select__wrapper) {
-    background: #ffffff;
+    background: var(--tf-surface);
 }
 
 .publish-editor-form :deep(.el-select) {
@@ -1860,8 +1843,8 @@ onBeforeUnmount(() => {
 }
 
 :deep(.el-textarea__inner) {
-    background: #ffffff;
-    color: #303133;
+    background: var(--tf-surface);
+    color: var(--tf-text-primary);
 }
 
 @media (max-width: 768px) {

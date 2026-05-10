@@ -102,20 +102,20 @@ const docsUrl = computed(() => {
 <style scoped>
 .page-banner {
     padding: 20px 22px;
-    border: 1px solid #e5eaf3;
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
-    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+    background: var(--tf-surface);
 }
 
 .page-banner__title {
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 18px;
     font-weight: 700;
 }
 
 .page-banner__desc {
     margin-top: 6px;
-    color: #6b7280;
+    color: var(--tf-text-secondary);
     font-size: 13px;
     line-height: 1.7;
 }
@@ -130,16 +130,17 @@ const docsUrl = computed(() => {
     justify-content: space-between;
     gap: 12px;
     font-weight: 600;
+    color: var(--tf-text-primary);
 }
 
 .docs-embed-container {
     flex: 1;
     min-height: 0;
     display: flex;
-    border: 1px solid #ebeef5;
+    border: 1px solid var(--tf-border);
     border-radius: 10px;
     overflow: hidden;
-    background: #fff;
+    background: var(--tf-surface);
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
 }
 
@@ -156,17 +157,18 @@ const docsUrl = computed(() => {
 }
 
 .standard-panel :deep(.el-card__header) {
-    background: #ffffff;
-    border-bottom: 1px solid #ebeef5;
+    background: var(--tf-surface);
+    border-bottom: 1px solid var(--tf-border);
 }
 
 .standard-panel :deep(.el-descriptions__label) {
-    background: #f8fafc;
-    color: #606266;
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-secondary);
     width: 160px;
 }
 
 .standard-panel :deep(.el-descriptions__content) {
-    color: #303133;
+    color: var(--tf-text-primary);
+    background: var(--tf-surface);
 }
 </style>

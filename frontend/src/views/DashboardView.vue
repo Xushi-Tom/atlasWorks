@@ -223,14 +223,14 @@ onMounted(load);
     justify-content: space-between;
     gap: 24px;
     padding: 24px 28px;
-    border: 1px solid #dfe7f3;
+    border: 1px solid var(--tf-border);
     border-radius: 18px;
-    background: linear-gradient(135deg, #ffffff 0%, #f6faff 62%, #eef5ff 100%);
+    background: var(--tf-surface);
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
 }
 
 .dashboard-hero__title {
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 24px;
     font-weight: 700;
     line-height: 1.2;
@@ -239,7 +239,7 @@ onMounted(load);
 .dashboard-hero__subtitle {
     margin-top: 8px;
     max-width: 720px;
-    color: #60758f;
+    color: var(--tf-text-secondary);
     font-size: 14px;
     line-height: 1.7;
 }
@@ -252,20 +252,20 @@ onMounted(load);
 
 .metric-tile {
     padding: 18px 20px;
-    border: 1px solid #e5ebf4;
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
-    background: #ffffff;
+    background: var(--tf-surface);
     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
 }
 
 .metric-tile__label {
-    color: #6b7280;
+    color: var(--tf-text-muted);
     font-size: 13px;
 }
 
 .metric-tile__value {
     margin-top: 10px;
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 32px;
     font-weight: 700;
     line-height: 1;
@@ -307,11 +307,11 @@ onMounted(load);
     justify-content: space-between;
     gap: 12px;
     font-weight: 600;
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
 }
 
 .dashboard-card__minor {
-    color: #7b8794;
+    color: var(--tf-text-muted);
     font-size: 12px;
     font-weight: 500;
 }
@@ -333,13 +333,13 @@ onMounted(load);
     gap: 16px;
     padding: 12px 14px;
     border-radius: 12px;
-    background: #f8fafc;
-    color: #475569;
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-secondary);
     font-size: 13px;
 }
 
 .kv-row strong {
-    color: #1f2937;
+    color: var(--tf-text-primary);
     font-size: 13px;
     text-align: right;
     word-break: break-all;
@@ -363,17 +363,17 @@ onMounted(load);
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    color: #475569;
+    color: var(--tf-text-secondary);
     font-size: 13px;
 }
 
 .resource-row__head strong,
 .resource-foot strong {
-    color: #1f2937;
+    color: var(--tf-text-primary);
 }
 
 .resource-row__desc {
-    color: #7b8794;
+    color: var(--tf-text-muted);
     font-size: 12px;
 }
 
@@ -387,23 +387,35 @@ onMounted(load);
     min-width: 0;
     padding: 14px 16px;
     border-radius: 14px;
-    background: #f8fafc;
-    border: 1px solid #edf2f7;
+    background: var(--tf-surface-soft);
+    border: 1px solid var(--tf-border);
 }
 
 .info-strip__item span {
     display: block;
-    color: #64748b;
+    color: var(--tf-text-muted);
     font-size: 12px;
 }
 
 .info-strip__item strong {
     display: block;
     margin-top: 8px;
-    color: #1f2937;
+    color: var(--tf-text-primary);
     font-size: 13px;
     line-height: 1.6;
     word-break: break-all;
+}
+
+.dashboard-card :deep(.el-skeleton__item) {
+    background: var(--tf-surface-soft);
+}
+
+.dashboard-card :deep(.el-progress-bar__outer) {
+    background: var(--tf-surface-muted);
+}
+
+.dashboard-card :deep(.el-progress__text) {
+    color: var(--tf-text-primary);
 }
 
 @media (max-width: 1100px) {

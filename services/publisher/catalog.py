@@ -1197,6 +1197,40 @@ def _is_async_titiler_publication(prepared):
     )
 
 
+def _titiler_publication_requires_rebuild(existing_publication, prepared):
+    if not _is_async_titiler_publication(prepared):
+        return False
+
+    existing_publication = existing_publication or {}
+    existing_metadata = _safe_dict(existing_publication.get("metadata"))
+    prepared_descriptor = _safe_dict(prepared.get("descriptor"))
+    prepared_metadata = _safe_dict(prepared_descriptor.get("metadata"))
+
+    existing_source_mode = str(existing_metadata.get("sourceMode") or "").strip().lower()
+    existing_publish_method = str(existing_metadata.get("publishMethod") or "").strip().lower()
+    prepared_source_mode = str(prepared_metadata.get("sourceMode") or "").strip().lower()
+    prepared_publish_method = str(prepared_metadata.get("publishMethod") or "").strip().lower()
+    if existing_source_mode != prepared_source_mode or existing_publish_method != prepared_publish_method:
+        return True
+
+    existing_paths = _normalize_data_source_paths(existing_metadata.get("sourcePaths"))
+    prepared_paths = _normalize_data_source_paths(prepared_metadata.get("sourcePaths"))
+    if existing_paths != prepared_paths:
+        return True
+
+    existing_source_path = _normalize_data_source_path(existing_metadata.get("sourcePath"))
+    prepared_source_path = _normalize_data_source_path(prepared_metadata.get("sourcePath"))
+    if existing_source_path != prepared_source_path:
+        return True
+
+    existing_publication_id = str(existing_publication.get("publicationId") or existing_publication.get("id") or "").strip()
+    prepared_publication_id = str(prepared.get("publicationId") or "").strip()
+    if existing_publication_id and prepared_publication_id and existing_publication_id != prepared_publication_id:
+        return True
+
+    return False
+
+
 def _mark_publication_build_state(metadata, state=None, progress=None, message=None, error=None):
     metadata = _safe_dict(metadata)
     build_state = _safe_dict(metadata.get("buildState"))
@@ -1372,6 +1406,28 @@ def _get_publication_snapshot(publication_id):
     return None
 
 
+def _get_publication_response(publication_id, include_runtime_state=True, include_vector_details=True):
+    record = fetchPublicationRecord(publication_id)
+    if record:
+        response = _publication_record_to_response(
+            record,
+            include_runtime_state=include_runtime_state,
+            include_vector_details=include_vector_details,
+        )
+        return response if _is_supported_publication_record(response) else None
+
+    if not isDatabaseEnabled():
+        for publication in _scan_publication_files(limit=500):
+            if publication.get("id") == publication_id or publication.get("publicationId") == publication_id:
+                response = _augment_publication_response(
+                    publication,
+                    include_runtime_state=include_runtime_state,
+                    include_vector_details=include_vector_details,
+                )
+                return response if _is_supported_publication_record(response) else None
+    return None
+
+
 def _get_task_record(task_id):
     with taskLock:
         in_memory_task = taskStatus.get(task_id)
@@ -1401,6 +1457,7 @@ def _prepare_publication_payload(data, existing_publication=None):
     existing_publication = existing_publication or {}
     existing_metadata = _safe_dict(existing_publication.get("metadata"))
     existing_custom_metadata = _safe_dict(existing_metadata.get("customMetadata"))
+    mosaic_json_info = None
 
     task_id = _first_non_blank(
         data.get("taskId"),
@@ -1599,6 +1656,26 @@ def _prepare_publication_payload(data, existing_publication=None):
 
     # Persist an explicit timezone-aware timestamp to avoid frontend double-shifting.
     published_at = datetime.now(timezone.utc).isoformat()
+    existing_build_state = _safe_dict(existing_metadata.get("buildState"))
+    default_build_state = {
+        "state": "pending" if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else "ready",
+        "progress": 0 if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else 100,
+        "message": "等待后台构建缓存" if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else "已就绪",
+        "error": None,
+        "updatedAt": published_at,
+    }
+    build_state = default_build_state
+    if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS:
+        if existing_build_state:
+            build_state = existing_build_state
+        elif existing_metadata.get("mosaicJsonPath"):
+            build_state = {
+                "state": "ready",
+                "progress": 100,
+                "message": "已就绪",
+                "error": None,
+                "updatedAt": published_at,
+            }
     descriptor = {
         "id": publication_id,
         "artifactId": artifact_id,
@@ -1618,8 +1695,16 @@ def _prepare_publication_payload(data, existing_publication=None):
             "sourceFileCount": (
                 len(resolved_sources) if normalized_publish_method in TITILER_PUBLISH_METHODS else len(source_entries)
             ) if source_mode_input == "datasource" else None,
-            "optimizedSourceCount": 0 if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else None,
-            "mosaicJsonPath": None,
+            "optimizedSourceCount": (
+                existing_metadata.get("optimizedSourceCount", 0)
+                if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS
+                else None
+            ),
+            "mosaicJsonPath": (
+                existing_metadata.get("mosaicJsonPath")
+                if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS
+                else None
+            ),
             "taskId": task_id or None,
             "sourceMode": source_mode_input,
             "publishMethod": publish_method,
@@ -1628,13 +1713,7 @@ def _prepare_publication_payload(data, existing_publication=None):
             "enabled": enabled,
             "sourceTileScheme": source_tile_scheme,
             "tileExtension": tile_extension,
-            "buildState": {
-                "state": "pending" if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else "ready",
-                "progress": 0 if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else 100,
-                "message": "等待后台构建缓存" if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else "已就绪",
-                "error": None,
-                "updatedAt": published_at,
-            },
+            "buildState": build_state,
             "customMetadata": custom_metadata,
         },
     }
@@ -1974,11 +2053,11 @@ def createPublication():
                 },
             )
 
-        publication_response = _get_publication_snapshot(publication_id) or _augment_publication_response({
+        publication_response = _get_publication_response(publication_id, include_runtime_state=False) or _augment_publication_response({
             **descriptor,
             "descriptorPath": descriptor_path,
             "publicationId": publication_id,
-        })
+        }, include_runtime_state=False)
 
         if _is_async_titiler_publication(prepared):
             _start_titiler_publication_build(prepared)
@@ -2001,7 +2080,7 @@ def updatePublication(publication_id=None, publicationId=None):
             return jsonify({"success": False, "error": message}), status_code
 
         publication_id = publication_id or publicationId
-        existing_publication = _get_publication_snapshot(publication_id)
+        existing_publication = _get_publication_response(publication_id, include_runtime_state=False)
         if not existing_publication:
             return jsonify({"error": "发布记录不存在"}), 404
 
@@ -2022,7 +2101,8 @@ def updatePublication(publication_id=None, publicationId=None):
             "descriptorPath": descriptor_path,
         }
         prepared["descriptor"]["metadata"] = metadata
-        if _is_async_titiler_publication(prepared):
+        needs_titiler_rebuild = _titiler_publication_requires_rebuild(existing_publication, prepared)
+        if needs_titiler_rebuild:
             _cleanup_publication_runtime_dir(prepared["publicationId"])
             metadata = _mark_publication_build_state(metadata, state="pending", progress=0, message="等待后台构建缓存", error=None)
             metadata["mosaicJsonPath"] = None
@@ -2032,23 +2112,46 @@ def updatePublication(publication_id=None, publicationId=None):
             custom_metadata["optimizedSourceCount"] = 0
             metadata["customMetadata"] = custom_metadata
             prepared["descriptor"]["metadata"] = metadata
+        elif _is_async_titiler_publication(prepared):
+            existing_metadata = _safe_dict(existing_publication.get("metadata"))
+            metadata["mosaicJsonPath"] = metadata.get("mosaicJsonPath") or existing_metadata.get("mosaicJsonPath")
+            if metadata.get("optimizedSourceCount") in (None, ""):
+                metadata["optimizedSourceCount"] = existing_metadata.get("optimizedSourceCount", 0)
+            existing_build_state = _safe_dict(existing_metadata.get("buildState"))
+            if existing_build_state:
+                metadata["buildState"] = existing_build_state
+            if metadata.get("mosaicJsonPath"):
+                metadata["buildState"] = {
+                    "state": "ready",
+                    "progress": 100,
+                    "message": "已就绪",
+                    "error": None,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            custom_metadata = _safe_dict(metadata.get("customMetadata"))
+            if metadata.get("mosaicJsonPath"):
+                custom_metadata["mosaicJsonPath"] = metadata.get("mosaicJsonPath")
+            if metadata.get("optimizedSourceCount") is not None:
+                custom_metadata["optimizedSourceCount"] = metadata.get("optimizedSourceCount")
+            metadata["customMetadata"] = custom_metadata
+            prepared["descriptor"]["metadata"] = metadata
         _persist_publication_record(
             prepared,
             metadata_override=prepared["descriptor"]["metadata"],
-            status_override="draft" if _is_async_titiler_publication(prepared) else descriptor["status"],
+            status_override="draft" if needs_titiler_rebuild else descriptor["status"],
         )
 
         if publication_id != prepared["publicationId"]:
             _cleanup_publication_runtime_dir(publication_id)
             deletePublicationRecord(publication_id)
 
-        publication_response = _get_publication_snapshot(prepared["publicationId"]) or _augment_publication_response({
+        publication_response = _get_publication_response(prepared["publicationId"], include_runtime_state=False) or _augment_publication_response({
             **descriptor,
             "descriptorPath": descriptor_path,
             "publicationId": prepared["publicationId"],
-        })
+        }, include_runtime_state=False)
 
-        if _is_async_titiler_publication(prepared):
+        if needs_titiler_rebuild:
             _start_titiler_publication_build(prepared)
 
         logMessage(f"发布记录已更新: {publication_id} -> {prepared['publicationId']}", "INFO")
@@ -2217,7 +2320,7 @@ def clearPublicationCache(publication_id=None, publicationId=None):
         if metadata.get("sourceMode") != "datasource" or not _is_titiler_publish_method(metadata.get("publishMethod")):
             return jsonify({"error": "仅 TiTiler 数据源发布支持缓存清理"}), 400
         _cleanup_publication_runtime_dir(publication_id)
-        response = _augment_publication_response(publication)
+        response = _augment_publication_response(publication, include_runtime_state=False)
         logMessage(f"发布缓存已清理: {publication_id}", "INFO")
         return jsonify({"success": True, "publication": response, "action": "cache-cleared"})
     except Exception as exc:
@@ -2262,10 +2365,10 @@ def rebuildPublicationCache(publication_id=None, publicationId=None):
         _persist_publication_record(prepared, metadata_override=metadata, status_override="draft")
         _start_titiler_publication_build(prepared)
 
-        response = _get_publication_snapshot(prepared["publicationId"]) or _augment_publication_response({
+        response = _get_publication_response(prepared["publicationId"], include_runtime_state=False) or _augment_publication_response({
             **descriptor,
             "publicationId": prepared["publicationId"],
-        })
+        }, include_runtime_state=False)
         logMessage(f"发布缓存已进入后台重建: {publication_id}", "INFO")
         return jsonify({"success": True, "publication": response, "action": "cache-rebuild-started"})
     except Exception as exc:

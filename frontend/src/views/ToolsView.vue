@@ -338,20 +338,20 @@ onMounted(() => {
 
 .tool-toolbar {
     padding: 20px 22px;
-    border: 1px solid #e5eaf3;
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
-    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+    background: var(--tf-surface);
 }
 
 .tool-toolbar__title {
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 18px;
     font-weight: 700;
 }
 
 .tool-toolbar__desc {
     margin-top: 6px;
-    color: #6b7280;
+    color: var(--tf-text-secondary);
     font-size: 13px;
     line-height: 1.7;
 }
@@ -368,8 +368,8 @@ onMounted(() => {
 
 .tool-form-card,
 .tool-result-card {
-    background: #ffffff;
-    border: 1px solid #e4eaf2;
+    background: var(--tf-surface);
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
     box-shadow: 0 10px 28px rgba(15, 23, 42, 0.04);
 }
@@ -380,7 +380,7 @@ onMounted(() => {
 
 .tool-card-title {
     margin-bottom: 18px;
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 15px;
     font-weight: 600;
 }
@@ -400,7 +400,7 @@ onMounted(() => {
 .tool-field label {
     display: block;
     margin-bottom: 8px;
-    color: #334155;
+    color: var(--tf-text-primary);
     font-size: 14px;
     font-weight: 500;
 }
@@ -410,10 +410,10 @@ onMounted(() => {
     width: 100%;
     height: 40px;
     padding: 0 12px;
-    border: 1px solid #d7dee8;
+    border: 1px solid var(--tf-border-strong);
     border-radius: 10px;
-    background: #ffffff;
-    color: #1f2937;
+    background: var(--tf-surface);
+    color: var(--tf-text-primary);
     font-size: 14px;
     transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -421,8 +421,8 @@ onMounted(() => {
 .tool-field input:focus,
 .tool-field select:focus {
     outline: none;
-    border-color: #409eff;
-    box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12);
+    border-color: var(--tf-accent);
+    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.12);
 }
 
 .path-field-inline {
@@ -468,9 +468,9 @@ onMounted(() => {
     justify-content: space-between;
     gap: 12px;
     padding: 16px 18px;
-    border-bottom: 1px solid #edf2f7;
-    background: #fbfdff;
-    color: #1f2d3d;
+    border-bottom: 1px solid var(--tf-border);
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-primary);
     font-size: 15px;
     font-weight: 600;
 }
@@ -482,9 +482,9 @@ onMounted(() => {
     min-height: 24px;
     padding: 0 10px;
     border-radius: 999px;
-    background: #ecf5ff;
-    border: 1px solid #d9ecff;
-    color: #409eff;
+    background: var(--tf-accent-soft);
+    border: 1px solid rgba(96, 165, 250, 0.28);
+    color: var(--tf-accent);
     font-size: 12px;
     font-weight: 600;
 }
@@ -495,8 +495,8 @@ onMounted(() => {
     max-height: 420px;
     padding: 16px 18px;
     overflow: auto;
-    background: #ffffff;
-    color: #334155;
+    background: var(--tf-surface);
+    color: var(--tf-text-secondary);
     font-size: 13px;
     line-height: 1.7;
     white-space: pre-wrap;

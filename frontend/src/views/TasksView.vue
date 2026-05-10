@@ -355,20 +355,20 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 16px;
     padding: 20px 22px;
-    border: 1px solid #e5eaf3;
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
-    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+    background: var(--tf-surface);
 }
 
 .page-banner__title {
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 18px;
     font-weight: 700;
 }
 
 .page-banner__desc {
     margin-top: 6px;
-    color: #6b7280;
+    color: var(--tf-text-secondary);
     font-size: 13px;
     line-height: 1.7;
 }
@@ -389,8 +389,8 @@ onBeforeUnmount(() => {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    background: #fff;
-    border: 1px solid #e6edf7;
+    background: var(--tf-surface);
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
     box-shadow: 0 10px 28px rgba(15, 23, 42, 0.04);
     overflow: hidden;
@@ -402,8 +402,8 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 12px;
     padding: 18px 20px;
-    border-bottom: 1px solid #edf2f7;
-    background: #fbfcfe;
+    border-bottom: 1px solid var(--tf-border);
+    background: var(--tf-surface-soft);
     flex-wrap: wrap;
     flex-shrink: 0;
 }
@@ -440,7 +440,7 @@ onBeforeUnmount(() => {
 }
 
 .layui-table thead tr {
-    background: #f8fafc;
+    background: var(--tf-surface-soft);
 }
 
 .layui-table th {
@@ -449,12 +449,12 @@ onBeforeUnmount(() => {
     z-index: 1;
     padding: 14px 14px;
     font-weight: 600;
-    color: #475467;
+    color: var(--tf-text-primary);
     font-size: 13px;
     text-align: left;
-    border-bottom: 1px solid #e9eef5;
-    border-right: 1px solid #eef2f7;
-    background: #f8fafc;
+    border-bottom: 1px solid var(--tf-border);
+    border-right: 1px solid var(--tf-border);
+    background: var(--tf-surface-soft);
     white-space: nowrap;
     user-select: none;
 }
@@ -465,10 +465,10 @@ onBeforeUnmount(() => {
 
 .layui-table td {
     padding: 14px 14px;
-    color: #475467;
+    color: var(--tf-text-secondary);
     font-size: 13px;
-    border-bottom: 1px solid #eef2f7;
-    border-right: 1px solid #f2f4f7;
+    border-bottom: 1px solid var(--tf-border);
+    border-right: 1px solid var(--tf-border);
     line-height: 1.7;
     word-break: break-all;
     transition: background 0.2s ease;
@@ -480,11 +480,11 @@ onBeforeUnmount(() => {
 }
 
 .layui-table tbody tr:nth-child(odd) {
-    background: #fff;
+    background: var(--tf-surface);
 }
 
 .layui-table tbody tr:nth-child(even) {
-    background: #fcfdff;
+    background: var(--tf-surface);
 }
 
 .layui-table tbody tr {
@@ -492,7 +492,7 @@ onBeforeUnmount(() => {
 }
 
 .layui-table tbody tr:hover td {
-    background: #f5f9ff;
+    background: var(--tf-surface-muted);
 }
 
 .cell-center {
@@ -502,12 +502,12 @@ onBeforeUnmount(() => {
 .cell-id {
     font-family: "Consolas", "Monaco", "Courier New", monospace;
     font-size: 13px;
-    color: #344054;
+    color: var(--tf-text-primary);
 }
 
 .cell-empty {
     text-align: center;
-    color: #c0c4cc;
+    color: var(--tf-text-muted);
     padding: 60px 14px !important;
     font-size: 13px;
 }
@@ -545,7 +545,7 @@ onBeforeUnmount(() => {
 .layui-progress {
     position: relative;
     height: 18px;
-    background: #e9eef6;
+    background: var(--tf-surface-muted);
     border-radius: 999px;
     overflow: hidden;
 }
@@ -622,13 +622,13 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: space-between;
     padding: 14px 18px;
-    border-top: 1px solid #edf2f7;
-    background: #fbfcfe;
+    border-top: 1px solid var(--tf-border);
+    background: var(--tf-surface-soft);
     flex-shrink: 0;
 }
 
 .layui-table-count {
-    color: #667085;
+    color: var(--tf-text-muted);
     font-size: 13px;
     flex-shrink: 0;
 }
@@ -637,16 +637,16 @@ onBeforeUnmount(() => {
 .layui-toolbar :deep(.el-range-editor.el-input__wrapper) {
     min-height: 42px;
     border-radius: 12px;
-    box-shadow: 0 0 0 1px #e4eaf2 inset;
+    box-shadow: 0 0 0 1px var(--tf-border-strong) inset;
 }
 
 .layui-toolbar :deep(.el-input__wrapper.is-focus),
 .layui-toolbar :deep(.el-range-editor.el-input__wrapper.is-focus) {
-    box-shadow: 0 0 0 1px #409eff inset;
+    box-shadow: 0 0 0 1px var(--tf-accent) inset;
 }
 
 .dialog-loading-text {
-    color: #909399;
+    color: var(--tf-text-muted);
 }
 
 .standard-detail-stack {
@@ -665,7 +665,7 @@ onBeforeUnmount(() => {
 .standard-detail-id {
     font-size: 18px;
     font-weight: 700;
-    color: #303133;
+    color: var(--tf-text-primary);
     line-height: 1.4;
     word-break: break-word;
 }
@@ -676,7 +676,7 @@ onBeforeUnmount(() => {
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
-    color: #606266;
+    color: var(--tf-text-secondary);
     font-size: 13px;
 }
 
@@ -687,7 +687,7 @@ onBeforeUnmount(() => {
 .standard-detail-progress span {
     display: block;
     margin-bottom: 8px;
-    color: #606266;
+    color: var(--tf-text-secondary);
     font-size: 13px;
 }
 
@@ -695,7 +695,7 @@ onBeforeUnmount(() => {
     margin-bottom: 10px;
     font-size: 14px;
     font-weight: 600;
-    color: #303133;
+    color: var(--tf-text-primary);
 }
 
 @media (max-width: 960px) {
