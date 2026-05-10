@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 from flask import jsonify, request, send_file
 
 from config import config
+from pagination import paginate_items, parse_pagination_args
 from utils import formatFileSize, logMessage
 
 
@@ -648,6 +649,7 @@ def listDataSources(subpath=""):
             return jsonify({"error": "路径不是目录"}), 400
 
         search_bounds = None
+        page, page_size = parse_pagination_args(request.args, default_page_size=100, max_page_size=500)
         bounds_param = request.args.get("bounds")
         if bounds_param:
             try:
@@ -660,36 +662,43 @@ def listDataSources(subpath=""):
         datasources = []
         archive_extensions = {".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".tar.gz", ".tar.bz2", ".tar.xz", ".tbz2", ".txz"}
         try:
-            items = os.listdir(full_path)
-            items.sort()
-            for item in items:
-                item_path = os.path.join(full_path, item)
-                if os.path.isdir(item_path):
-                    directories.append({
-                        "name": item,
-                        "type": "directory",
-                        "path": os.path.join(subpath, item) if subpath else item,
-                    })
-                elif os.path.isfile(item_path):
+            with os.scandir(full_path) as entries:
+                for entry in entries:
+                    item = entry.name
+                    item_path = entry.path
+                    if entry.is_dir(follow_symlinks=False):
+                        directories.append({
+                            "name": item,
+                            "type": "directory",
+                            "path": os.path.join(subpath, item) if subpath else item,
+                        })
+                        continue
+
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+
                     item_lower = item.lower()
                     file_ext = os.path.splitext(item)[1].lower()
                     is_archive = any(item_lower.endswith(ext) for ext in archive_extensions)
-                    if file_ext in config["supportedFormats"] or is_archive:
-                        file_size = os.path.getsize(item_path)
-                        file_info = {
-                            "name": item,
-                            "type": "file",
-                            "size": file_size,
-                            "sizeFormatted": formatFileSize(file_size),
-                            "extension": file_ext,
-                            "isArchive": is_archive,
-                            "path": os.path.join(subpath, item) if subpath else item,
-                        }
-                        if file_ext in config["supportedFormats"]:
-                            detailed_info = getFileInfo(item_path)
-                            if "geoBounds" in detailed_info:
-                                file_info["geoBounds"] = detailed_info["geoBounds"]
-                        datasources.append(file_info)
+                    if file_ext not in config["supportedFormats"] and not is_archive:
+                        continue
+
+                    stat_info = entry.stat(follow_symlinks=False)
+                    file_info = {
+                        "name": item,
+                        "type": "file",
+                        "size": stat_info.st_size,
+                        "sizeFormatted": formatFileSize(stat_info.st_size),
+                        "extension": file_ext,
+                        "isArchive": is_archive,
+                        "path": os.path.join(subpath, item) if subpath else item,
+                        "modifiedTime": stat_info.st_mtime,
+                    }
+                    if search_bounds and file_ext in config["supportedFormats"]:
+                        detailed_info = getFileInfo(item_path)
+                        if "geoBounds" in detailed_info:
+                            file_info["geoBounds"] = detailed_info["geoBounds"]
+                    datasources.append(file_info)
         except PermissionError:
             return jsonify({"error": "权限不足"}), 403
 
@@ -709,19 +718,34 @@ def listDataSources(subpath=""):
                         break
             datasources = filtered
 
+        directories.sort(key=lambda item: str(item.get("name", "")).lower())
+        datasources.sort(key=lambda item: str(item.get("name", "")).lower())
+
         parent_path = None
         if subpath:
             parts = subpath.split("/")
             parent_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
 
+        combined_entries = [{"kind": "directory", "payload": item} for item in directories]
+        combined_entries.extend({"kind": "file", "payload": item} for item in datasources)
+        paged_entries, pagination = paginate_items(combined_entries, page, page_size)
+        paged_directories = [item["payload"] for item in paged_entries if item["kind"] == "directory"]
+        paged_datasources = [item["payload"] for item in paged_entries if item["kind"] == "file"]
+
         response = {
             "currentPath": subpath,
             "parentPath": parent_path,
-            "directories": directories,
-            "datasources": datasources,
+            "directories": paged_directories,
+            "datasources": paged_datasources,
             "totalDirectories": len(directories),
             "totalFiles": len(datasources),
-            "count": len(datasources),
+            "totalEntries": len(combined_entries),
+            "count": pagination["count"],
+            "page": pagination["page"],
+            "pageSize": pagination["pageSize"],
+            "totalPages": pagination["totalPages"],
+            "hasPrev": pagination["hasPrev"],
+            "hasNext": pagination["hasNext"],
         }
         if search_bounds:
             response["filterInfo"] = {

@@ -114,11 +114,14 @@ class AtlasWorksApi {
         return this.get('/api/system/info');
     }
 
-    async browseDatasources(path = '', bounds = '') {
+    async browseDatasources(path = '', options = {}) {
         const normalized = normalizeRelativePath(path);
         const endpoint = normalized ? `/api/datasources/${encodePathSegments(normalized)}` : '/api/datasources';
+        const normalizedOptions = typeof options === 'string' ? { bounds: options } : (options || {});
         const params = {};
-        if (bounds) params.bounds = bounds;
+        if (normalizedOptions.bounds) params.bounds = normalizedOptions.bounds;
+        if (normalizedOptions.page) params.page = normalizedOptions.page;
+        if (normalizedOptions.pageSize) params.pageSize = normalizedOptions.pageSize;
         return this.get(endpoint, params);
     }
 
@@ -171,10 +174,13 @@ class AtlasWorksApi {
         return this.upload('/api/upload/folder', formData);
     }
 
-    async browseResults(path = '') {
+    async browseResults(path = '', options = {}) {
+        const normalizedOptions = options || {};
         return this.get('/api/results', {
             type: 'results',
-            path: normalizeRelativePath(path)
+            path: normalizeRelativePath(path),
+            page: normalizedOptions.page,
+            pageSize: normalizedOptions.pageSize
         });
     }
 

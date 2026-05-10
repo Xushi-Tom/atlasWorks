@@ -135,8 +135,8 @@ function resolveOsgbSourcePath(value) {
                 if (!normalized.length) return undefined;
                 return normalized.length === 1 ? normalized[0] : normalized;
             }
-        } catch (error) {
-            // fallback to comma-separated parsing
+        } catch {
+            // fallback
         }
     }
 
@@ -208,233 +208,195 @@ async function submit() {
 </script>
 
 <template>
-    <section class="app-view app-view-workbench">
-        <div class="section-header section-header-workbench section-header-compact">
-            <div class="section-header-actions">
-                <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始生成</button>
-            </div>
-        </div>
-
+    <section class="app-view standard-page">
         <div class="app-scroll">
-            <div class="content-stack content-stack-workbench">
-                <div class="workbench-shell">
-                    <section class="form-section workbench-section-wide workbench-section-lead">
-                        <div class="workbench-section-head">
-                            <div>
-                                <h3>输入与输出</h3>
-                            </div>
-                        </div>
-                        <div class="form-stack">
-                            <div class="form-row form-row-2">
-                                <div class="form-group">
-                                    <label>数据类型</label>
-                                    <select v-model="form.dataType">
-                                        <option value="pointcloud">点云 LAS/LAZ</option>
-                                        <option value="vector">矢量建筑 GeoJSON/SHP</option>
-                                        <option value="model">OBJ 模型</option>
-                                        <option value="osgb">OSGB 倾斜摄影</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>输入坐标系</label>
-                                    <select v-model="form.crsPreset">
-                                        <option
-                                            v-for="option in CRS_PRESETS"
-                                            :key="option.value"
-                                            :value="option.value"
-                                        >
-                                            {{ option.label }}
-                                        </option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div v-if="form.crsPreset === '__custom__'" class="form-group">
-                                <label>自定义坐标系</label>
-                                <input
-                                    v-model="form.crsCustom"
-                                    type="text"
-                                    placeholder="例如 EPSG:4547 或 +proj=utm +zone=50 +datum=WGS84 +units=m +no_defs"
-                                >
-                            </div>
-
-                            <div class="form-group">
-                                <label>数据源目录</label>
-                                <div class="path-field">
-                                    <input v-model="form.folderPaths" type="text" placeholder="可留空，留空时从数据源根目录搜索">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择数据源目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('folderPaths')">清空</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div v-if="form.dataType !== 'osgb'" class="form-group">
-                                <label>输入文件</label>
-                                <div class="path-field">
-                                    <input v-model="form.filePatterns" type="text" :placeholder="sourcePlaceholder">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择 3D Tiles 输入文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'filePatterns', allowedExtensions: allowedExtensions })">选择文件</button>
-                                        <button v-if="form.dataType === 'pointcloud'" class="btn btn-secondary" type="button" @click="openPicker({ title: '选择多个点云文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: allowedExtensions })">选择多个文件</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('filePatterns')">清空</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div v-else class="form-group">
-                                <label>OSGB 输入（支持多文件/目录/*）</label>
-                                <div class="path-field">
-                                    <input v-model="form.sourcePath" type="text" placeholder="支持 .osgb、目录、*.osgb，多个文件可逗号分隔或点“选择多个文件”">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择 OSGB 文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'sourcePath', allowedExtensions: ['.osgb'] })">选择文件</button>
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择多个 OSGB 文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'sourcePath', allowedExtensions: ['.osgb'] })">选择多个文件</button>
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择 OSGB 目录', source: 'datasource', selectionMode: 'folder', multiple: false, field: 'sourcePath', allowedExtensions: [] })">选择目录</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('sourcePath')">清空</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="form-group">
-                                <label>输出目录</label>
-                                <div class="path-field">
-                                    <input v-model="form.outputPath" type="text" placeholder="例如 3dtiles/project-a/v1">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择 3D Tiles 输出目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'outputPath', allowedExtensions: [] })">选择目录</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('outputPath')">清空</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <div class="workbench-grid">
-                        <section class="form-section">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>执行参数</h3>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>并行作业数</label>
-                                <input v-model="form.jobs" type="number" min="1" max="64">
-                            </div>
-                            <div v-if="form.dataType !== 'pointcloud'" class="form-group">
-                                <label>内容格式</label>
-                                <select v-model="form.contentFormat">
-                                    <option value="b3dm">b3dm（推荐）</option>
-                                    <option value="glb">glb</option>
-                                </select>
-                            </div>
-                            <div v-if="form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb'" class="form-group">
-                                <label class="checkbox-inline">
-                                    <input v-model="form.enablePyramid" type="checkbox">
-                                    <span class="checkbox-text">启用金字塔层级</span>
-                                </label>
-                            </div>
-                            <div v-if="(form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb') && form.enablePyramid" class="form-row form-row-2">
-                                <div class="form-group">
-                                    <label>叶子容量</label>
-                                    <input v-model="form.pyramidLeafSize" type="number" min="1" max="2000">
-                                </div>
-                                <div class="form-group">
-                                    <label>最大层级</label>
-                                    <input v-model="form.pyramidMaxDepth" type="number" min="1" max="12">
-                                </div>
-                            </div>
-                            <div v-if="form.dataType === 'vector'" class="form-row form-row-2">
-                                <div class="form-group">
-                                    <label>高度字段</label>
-                                    <input
-                                        v-model="form.heightField"
-                                        list="height-field-options"
-                                        type="text"
-                                        placeholder="可下拉选择，也可手动输入（例如 height / floors）"
-                                    >
-                                    <datalist id="height-field-options">
-                                        <option
-                                            v-for="field in HEIGHT_FIELD_OPTIONS"
-                                            :key="field"
-                                            :value="field"
-                                        />
-                                    </datalist>
-                                </div>
-                                <div class="form-group">
-                                    <label>高度单位</label>
-                                    <select v-model="form.vectorHeightMode">
-                                        <option value="meters">米（字段值即米）</option>
-                                        <option value="floors">层数（字段值为楼层）</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div v-if="form.dataType === 'vector'" class="form-row form-row-2">
-                                <div v-if="form.vectorHeightMode === 'floors'" class="form-group">
-                                    <label>每层高度（米）</label>
-                                    <input
-                                        v-model="form.floorHeightMeters"
-                                        type="number"
-                                        min="0.1"
-                                        step="0.1"
-                                        placeholder="默认 3.0"
-                                    >
-                                    <p class="field-hint">默认 3.0 米/层，可按项目标准调整。</p>
-                                </div>
-                                <div class="form-group">
-                                    <label>缺失高度时使用（{{ defaultHeightUnitLabel }}）</label>
-                                    <input
-                                        v-model="form.defaultHeight"
-                                        type="number"
-                                        min="0"
-                                        step="0.1"
-                                        placeholder="例如 6"
-                                    >
-                                    <p class="field-hint">当要素没有该高度字段或字段为空时，使用这个默认值。</p>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="form-section">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>模型锚点</h3>
-                                </div>
-                            </div>
-                            <div v-if="form.dataType === 'osgb'" class="form-group">
-                                <label>OSGB 锚点模式</label>
-                                <select v-model="form.anchorMode">
-                                    <option value="manual">手动（填写经纬度）</option>
-                                    <option value="auto">自动（尝试从 xodr geoReference 识别）</option>
-                                </select>
-                            </div>
-                            <p v-if="form.dataType === 'osgb' && form.anchorMode === 'auto'" class="workbench-note">
-                                自动模式会在 OSGB 目录及上级目录搜索 `.xodr`，提取 `+lon_0/+lat_0` 作为锚点。
-                            </p>
-                            <div v-if="form.dataType === 'model' || (form.dataType === 'osgb' && form.anchorMode === 'manual')" class="form-row form-row-2">
-                                <div class="form-group">
-                                    <label>经度</label>
-                                    <input v-model="form.longitude" type="number" step="0.000001" placeholder="例如 121.4737">
-                                </div>
-                                <div class="form-group">
-                                    <label>纬度</label>
-                                    <input v-model="form.latitude" type="number" step="0.000001" placeholder="例如 31.2304">
-                                </div>
-                            </div>
-                            <div class="form-row form-row-3">
-                                <div class="form-group">
-                                    <label>贴地高度（米）</label>
-                                    <input v-model="form.height" type="number" step="0.1" placeholder="OBJ/OSGB 可自定义，默认 0">
-                                </div>
-                                <div class="form-group">
-                                    <label>缩放</label>
-                                    <input v-model="form.scale" type="number" step="0.1" min="0.1">
-                                </div>
-                                <div class="form-group">
-                                    <label>Z 旋转</label>
-                                    <input v-model="form.rotationZ" type="number" step="1">
-                                </div>
-                            </div>
-                        </section>
+            <div class="tile-page">
+                <div class="tile-page-toolbar">
+                    <div class="tile-page-toolbar__meta">
+                        <div class="tile-page-toolbar__title">3D Tiles</div>
+                        <div class="tile-page-toolbar__desc">点云、矢量建筑、OBJ、OSGB 统一放到纵向模块里配置输入、锚点和输出策略。</div>
+                    </div>
+                    <div class="tile-page-toolbar__actions">
+                        <el-button type="primary" @click="submit">开始生成</el-button>
                     </div>
                 </div>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">输入与输出</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="数据类型">
+                                    <el-select v-model="form.dataType">
+                                        <el-option label="点云 LAS/LAZ" value="pointcloud" />
+                                        <el-option label="矢量建筑 GeoJSON/SHP" value="vector" />
+                                        <el-option label="OBJ 模型" value="model" />
+                                        <el-option label="OSGB 倾斜摄影" value="osgb" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="输入坐标系">
+                                    <el-select v-model="form.crsPreset">
+                                        <el-option
+                                            v-for="option in CRS_PRESETS"
+                                            :key="option.value"
+                                            :label="option.label"
+                                            :value="option.value"
+                                        />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                        </el-row>
+
+                        <el-form-item v-if="form.crsPreset === '__custom__'" label="自定义坐标系">
+                            <el-input
+                                v-model="form.crsCustom"
+                                placeholder="例如 EPSG:4547 或 +proj=utm +zone=50 +datum=WGS84 +units=m +no_defs"
+                            />
+                        </el-form-item>
+
+                        <el-form-item label="数据源目录">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.folderPaths" placeholder="可留空，留空时从数据源根目录搜索" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择数据源目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('folderPaths')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+
+                        <el-form-item v-if="form.dataType !== 'osgb'" label="输入文件">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.filePatterns" :placeholder="sourcePlaceholder" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择 3D Tiles 输入文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'filePatterns', allowedExtensions: allowedExtensions })">选择文件</el-button>
+                                    <el-button
+                                        v-if="form.dataType === 'pointcloud'"
+                                        @click="openPicker({ title: '选择多个点云文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: allowedExtensions })"
+                                    >
+                                        选择多个文件
+                                    </el-button>
+                                    <el-button @click="clearField('filePatterns')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+
+                        <el-form-item v-else label="OSGB 输入（支持多文件/目录/*）">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.sourcePath" placeholder="支持 .osgb、目录、*.osgb，多个文件可逗号分隔" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择 OSGB 文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'sourcePath', allowedExtensions: ['.osgb'] })">选择文件</el-button>
+                                    <el-button @click="openPicker({ title: '选择多个 OSGB 文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'sourcePath', allowedExtensions: ['.osgb'] })">选择多个文件</el-button>
+                                    <el-button @click="openPicker({ title: '选择 OSGB 目录', source: 'datasource', selectionMode: 'folder', multiple: false, field: 'sourcePath', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('sourcePath')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+
+                        <el-form-item label="输出目录">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.outputPath" placeholder="例如 3dtiles/project-a/v1" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择 3D Tiles 输出目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'outputPath', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('outputPath')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">执行参数</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="12"><el-form-item label="并行作业数"><el-input-number v-model="form.jobs" :min="1" :max="64" controls-position="right" /></el-form-item></el-col>
+                            <el-col v-if="form.dataType !== 'pointcloud'" :xs="24" :md="12">
+                                <el-form-item label="内容格式">
+                                    <el-select v-model="form.contentFormat">
+                                        <el-option label="b3dm（推荐）" value="b3dm" />
+                                        <el-option label="glb" value="glb" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col v-if="form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb'" :xs="24" :md="12">
+                                <el-form-item label="金字塔层级">
+                                    <el-switch v-model="form.enablePyramid" />
+                                </el-form-item>
+                            </el-col>
+                            <template v-if="(form.dataType === 'vector' || form.dataType === 'model' || form.dataType === 'osgb') && form.enablePyramid">
+                                <el-col :xs="24" :md="12"><el-form-item label="叶子容量"><el-input-number v-model="form.pyramidLeafSize" :min="1" :max="2000" controls-position="right" /></el-form-item></el-col>
+                                <el-col :xs="24" :md="12"><el-form-item label="最大层级"><el-input-number v-model="form.pyramidMaxDepth" :min="1" :max="12" controls-position="right" /></el-form-item></el-col>
+                            </template>
+                        </el-row>
+                    </el-form>
+                </el-card>
+
+                <el-card v-if="form.dataType === 'vector'" shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">矢量高度参数</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="高度字段">
+                                    <el-select
+                                        v-model="form.heightField"
+                                        filterable
+                                        allow-create
+                                        default-first-option
+                                    >
+                                        <el-option v-for="field in HEIGHT_FIELD_OPTIONS" :key="field" :label="field" :value="field" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="高度单位">
+                                    <el-select v-model="form.vectorHeightMode">
+                                        <el-option label="米（字段值即米）" value="meters" />
+                                        <el-option label="层数（字段值为楼层）" value="floors" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col v-if="form.vectorHeightMode === 'floors'" :xs="24" :md="12">
+                                <el-form-item label="每层高度（米）">
+                                    <el-input-number v-model="form.floorHeightMeters" :min="0.1" :step="0.1" controls-position="right" />
+                                    <div class="tile-help">默认 3.0 米/层，可按项目标准调整。</div>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item :label="`缺失高度时使用（${defaultHeightUnitLabel}）`">
+                                    <el-input-number v-model="form.defaultHeight" :min="0" :step="0.1" controls-position="right" />
+                                    <div class="tile-help">要素没有高度字段或字段为空时，使用这个默认值。</div>
+                                </el-form-item>
+                            </el-col>
+                        </el-row>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">模型锚点</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col v-if="form.dataType === 'osgb'" :xs="24" :md="12">
+                                <el-form-item label="OSGB 锚点模式">
+                                    <el-select v-model="form.anchorMode">
+                                        <el-option label="手动（填写经纬度）" value="manual" />
+                                        <el-option label="自动（尝试从 xodr geoReference 识别）" value="auto" />
+                                    </el-select>
+                                    <div v-if="form.anchorMode === 'auto'" class="tile-help">
+                                        自动模式会在 OSGB 目录及上级目录搜索 `.xodr`，提取 `+lon_0/+lat_0` 作为锚点。
+                                    </div>
+                                </el-form-item>
+                            </el-col>
+                            <template v-if="form.dataType === 'model' || (form.dataType === 'osgb' && form.anchorMode === 'manual')">
+                                <el-col :xs="24" :md="12"><el-form-item label="经度"><el-input v-model="form.longitude" placeholder="例如 121.4737" /></el-form-item></el-col>
+                                <el-col :xs="24" :md="12"><el-form-item label="纬度"><el-input v-model="form.latitude" placeholder="例如 31.2304" /></el-form-item></el-col>
+                            </template>
+                            <el-col :xs="24" :md="8"><el-form-item label="贴地高度（米）"><el-input-number v-model="form.height" :step="0.1" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="8"><el-form-item label="缩放"><el-input-number v-model="form.scale" :min="0.1" :step="0.1" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="8"><el-form-item label="Z 旋转"><el-input-number v-model="form.rotationZ" :step="1" controls-position="right" /></el-form-item></el-col>
+                        </el-row>
+                    </el-form>
+                </el-card>
             </div>
         </div>
 
@@ -452,92 +414,87 @@ async function submit() {
 </template>
 
 <style scoped>
-.form-group select {
-    appearance: none;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    cursor: pointer;
-    padding-right: 44px;
-    background-image:
-        linear-gradient(180deg, rgba(103, 240, 255, 0.03), rgba(31, 164, 255, 0.05)),
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='%239ec1d7' d='M1.4.8L6 5.4 10.6.8 12 2.2 6 8 0 2.2z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat, no-repeat;
-    background-position: 0 0, right 14px center;
-    background-size: auto, 12px 8px;
+.tile-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
 }
 
-.form-group select:hover {
-    border-color: rgba(126, 186, 231, 0.58);
+.tile-page-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 22px;
+    border: 1px solid #e5eaf3;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
 }
 
-.checkbox-inline {
-    width: auto;
-    display: inline-flex;
-    align-items: center;
+.tile-page-toolbar__title {
+    color: #1f2d3d;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.tile-page-toolbar__desc {
+    margin-top: 6px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.tile-page-toolbar__actions {
+    display: flex;
     gap: 10px;
-    margin: 0;
-    padding: 2px 0;
-    border: 0;
-    background: transparent;
-    color: var(--tf-text);
-    cursor: pointer;
-    user-select: none;
-    transition: color 0.18s ease;
-    line-height: 1.35;
+    flex-wrap: wrap;
 }
 
-.checkbox-inline:hover {
-    color: #d9ecff;
+.tile-module {
+    border-radius: 16px;
 }
 
-.checkbox-text {
-    display: inline-block;
+.tile-module__title {
+    color: #1f2d3d;
+    font-size: 15px;
+    font-weight: 600;
 }
 
-.checkbox-inline input[type="checkbox"] {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 18px !important;
-    height: 18px !important;
-    min-height: 18px !important;
-    padding: 0 !important;
-    flex: 0 0 18px;
-    margin: 0 !important;
-    display: inline-block !important;
-    border-radius: 4px;
-    border: 1px solid rgba(120, 149, 189, 0.64);
-    background: rgba(9, 20, 34, 0.95);
-    position: relative;
-    cursor: pointer;
-    transition: all 0.18s ease;
+.tile-form :deep(.el-input),
+.tile-form :deep(.el-select),
+.tile-form :deep(.el-input-number) {
+    width: 100%;
 }
 
-.checkbox-inline input[type="checkbox"]:checked {
-    border-color: rgba(103, 240, 255, 0.8);
-    background: linear-gradient(140deg, rgba(66, 196, 230, 0.95), rgba(72, 130, 220, 0.94));
+.path-field-inline {
+    align-items: center;
 }
 
-.checkbox-inline input[type="checkbox"]:checked::after {
-    content: '';
-    position: absolute;
-    left: 5px;
-    top: 2px;
-    width: 5px;
-    height: 9px;
-    border-right: 2px solid #05121f;
-    border-bottom: 2px solid #05121f;
-    transform: rotate(45deg);
+.path-field-inline :deep(.el-input) {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
-.checkbox-inline input[type="checkbox"]:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(31, 164, 255, 0.18);
+.path-field-inline .path-field-actions {
+    flex: 0 0 auto;
 }
 
-.field-hint {
-    margin: 6px 0 0;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--tf-text-soft);
+.tile-help {
+    margin-top: 8px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+@media (max-width: 900px) {
+    .tile-page-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .path-field-inline {
+        flex-direction: column;
+        align-items: stretch;
+    }
 }
 </style>

@@ -81,11 +81,6 @@ const dataFormatOptions = [
 
 let bandRefreshTimer = null;
 
-function isHttpSourcePattern(value) {
-    const text = String(value || '').trim().toLowerCase();
-    return text.startsWith('http://') || text.startsWith('https://');
-}
-
 function openPicker(config) {
     Object.assign(picker, config, { visible: true });
 }
@@ -298,261 +293,197 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <section class="app-view app-view-workbench">
-        <div class="section-header section-header-workbench section-header-compact">
-            <div class="section-header-actions">
-                <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始地图切片</button>
-            </div>
-        </div>
-
+    <section class="app-view standard-page">
         <div class="app-scroll">
-            <div class="content-stack content-stack-workbench">
-                <div class="workbench-shell">
-                    <section class="form-section workbench-section-wide workbench-section-lead">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>输入与输出</h3>
-                                </div>
-                            </div>
-                        <div class="form-stack">
-                            <div class="form-group">
-                                <label>数据源目录</label>
-                                <div class="path-field">
-                                    <input v-model="form.folderPaths" type="text" placeholder="多个目录用逗号分隔，可留空">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择数据源目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('folderPaths')">清空</button>
-                                    </div>
-                                </div>
-                                <p class="workbench-note form-inline-help">可留空。留空时会默认从数据源根目录开始匹配。</p>
-                            </div>
-                            <div class="form-group">
-                                <label>文件匹配模式</label>
-                                <div class="path-field">
-                                    <input v-model="form.filePatterns" type="text" placeholder="支持具体 tif、通配符、txt 文件列表或 http/https 网络地址">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择数据源文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: ['.tif', '.tiff', '.txt'] })">选择文件</button>
-                                        <button class="btn btn-secondary" type="button" @click="requestRecommendation">智能推荐</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('filePatterns')">清空</button>
-                                    </div>
-                                </div>
-                                <p class="workbench-note form-inline-help">
-                                    可直接传网络地址，例如 <code>https://example.com/aoi.tif</code>；多个来源用逗号分隔。系统会自动下载到数据源目录下当天日期文件夹（YYYYMMDD）后继续切片。
-                                    <a :href="apiDocsUrl" target="_blank" rel="noreferrer">接口示例</a>
-                                </p>
-                            </div>
-                            <div class="form-group">
-                                <label>输出目录</label>
-                                <div class="path-field">
-                                    <input v-model="form.outputPath" type="text" placeholder="例如 map/project/v1">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择输出目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'outputPath', allowedExtensions: [] })">选择目录</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('outputPath')">清空</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <div class="workbench-grid">
-                        <section class="form-section workbench-section-wide">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>核心参数</h3>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>最小层级</label>
-                                    <input v-model="form.minZoom" type="number" min="0" max="30">
-                                </div>
-                                <div class="form-group">
-                                    <label>最大层级</label>
-                                    <input v-model="form.maxZoom" type="number" min="0" max="30">
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>瓦片尺寸</label>
-                                    <input v-model="form.tileSize" type="number" min="64" step="64">
-                                </div>
-                                <div class="form-group">
-                                    <label>进程数</label>
-                                    <input v-model="form.processes" type="number" min="1" max="128">
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>线程数</label>
-                                    <input v-model="form.threads" type="number" min="1" max="64">
-                                </div>
-                                <div class="form-group">
-                                    <label>最大内存</label>
-                                    <select v-model="form.maxMemory">
-                                        <option v-for="option in memoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>重采样</label>
-                                    <select v-model="form.resampling">
-                                        <option value="near">最近邻</option>
-                                        <option value="bilinear">双线性</option>
-                                        <option value="cubic">三次卷积</option>
-                                        <option value="lanczos">Lanczos</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>投影</label>
-                                    <select v-model="form.projection">
-                                        <option v-for="option in projectionOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>数据格式</label>
-                                    <select v-model="form.dataFormat">
-                                        <option v-for="option in dataFormatOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>图片格式</label>
-                                    <select v-model="form.imageFormat">
-                                        <option value="png">PNG</option>
-                                        <option value="jpeg">JPEG</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>瓦片坐标系</label>
-                                    <select v-model="form.tileScheme">
-                                        <option value="tms">TMS 原点</option>
-                                        <option value="google">XYZ 原点</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>波段不匹配策略</label>
-                                    <select v-model="form.bandMismatchPolicy">
-                                        <option value="auto">自动处理</option>
-                                        <option value="strict">严格校验</option>
-                                        <option value="skip">跳过异常文件</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="form-section">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>波段选择</h3>
-                                </div>
-                                <button class="btn btn-secondary" type="button" @click="refreshBandOptions(true)">获取波段信息</button>
-                            </div>
-                            <p class="band-source-hint">{{ bandHint }}</p>
-                            <div class="form-stack">
-                                <div class="form-group">
-                                    <label>红波段</label>
-                                    <select v-model="form.redBand">
-                                        <option v-for="band in bandOptions" :key="`red-${band}`" :value="band">波段 {{ band }}</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>绿波段</label>
-                                    <select v-model="form.greenBand">
-                                        <option v-for="band in bandOptions" :key="`green-${band}`" :value="band">波段 {{ band }}</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>蓝波段</label>
-                                    <select v-model="form.blueBand">
-                                        <option v-for="band in bandOptions" :key="`blue-${band}`" :value="band">波段 {{ band }}</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="form-section">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>NoData 与拉伸</h3>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>NoData 值</label>
-                                    <input v-model="form.nodataValue" type="text" inputmode="decimal" placeholder="例如 0、255 或 -9999">
-                                </div>
-                                <div class="form-group">
-                                    <label>源 NoData</label>
-                                    <input v-model="form.srcNodataValue" type="text" inputmode="decimal" placeholder="例如 0、255 或 -9999">
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>目标 NoData</label>
-                                    <input v-model="form.dstNodataValue" type="text" inputmode="decimal" placeholder="例如 0、255 或 -9999">
-                                </div>
-                                <div class="form-group">
-                                    <label>拉伸类型</label>
-                                    <select v-model="form.stretchType">
-                                        <option value="none">不拉伸</option>
-                                        <option value="percent">百分位拉伸</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>拉伸低百分位</label>
-                                    <input v-model="form.stretchLowPercent" type="number" step="0.1">
-                                </div>
-                                <div class="form-group">
-                                    <label>拉伸高百分位</label>
-                                    <input v-model="form.stretchHighPercent" type="number" step="0.1">
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>JPEG 质量</label>
-                                    <input v-model="form.jpegQuality" type="number" min="1" max="100">
-                                </div>
-                                <div class="form-group">
-                                    <label>PNG 压缩</label>
-                                    <input v-model="form.pngCompression" type="number" min="0" max="9">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>透明阈值</label>
-                                <input v-model="form.transparencyThreshold" type="number" min="0" max="1" step="0.01">
-                            </div>
-                        </section>
-
-                        <section class="form-section workbench-section-wide">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>构建策略</h3>
-                                </div>
-                            </div>
-                            <div class="checkbox-grid">
-                                <label class="checkbox-label">
-                                    <input v-model="form.generateShpIndex" type="checkbox">
-                                    生成网格文件
-                                </label>
-                                <label class="checkbox-label">
-                                    <input v-model="form.enableIncrementalUpdate" type="checkbox">
-                                    启用增量更新
-                                </label>
-                                <label class="checkbox-label">
-                                    <input v-model="form.skipNodataTiles" type="checkbox">
-                                    跳过透明瓦片
-                                </label>
-                            </div>
-                        </section>
+            <div class="tile-page">
+                <div class="tile-page-toolbar">
+                    <div class="tile-page-toolbar__meta">
+                        <div class="tile-page-toolbar__title">地图切片</div>
+                        <div class="tile-page-toolbar__desc">按输入、核心参数、波段和构建策略自上而下配置二维栅格切片。</div>
                     </div>
-
+                    <div class="tile-page-toolbar__actions">
+                        <el-button @click="requestRecommendation">智能推荐</el-button>
+                        <el-button type="primary" @click="submit">开始地图切片</el-button>
+                    </div>
                 </div>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">输入与输出</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-form-item label="数据源目录">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.folderPaths" placeholder="多个目录用逗号分隔，可留空" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择数据源目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('folderPaths')">清空</el-button>
+                                </div>
+                            </div>
+                            <div class="tile-help">可留空。留空时默认从数据源根目录开始匹配。</div>
+                        </el-form-item>
+
+                        <el-form-item label="文件匹配模式">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.filePatterns" placeholder="支持具体 tif、通配符、txt 文件列表或 http/https 网络地址" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择数据源文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: ['.tif', '.tiff', '.txt'] })">选择文件</el-button>
+                                    <el-button @click="requestRecommendation">智能推荐</el-button>
+                                    <el-button @click="clearField('filePatterns')">清空</el-button>
+                                </div>
+                            </div>
+                            <div class="tile-help">
+                                可直接传网络地址，例如 <code>https://example.com/aoi.tif</code>；多个来源用逗号分隔。
+                                <a :href="apiDocsUrl" target="_blank" rel="noreferrer">接口示例</a>
+                            </div>
+                        </el-form-item>
+
+                        <el-form-item label="输出目录">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.outputPath" placeholder="例如 map/project/v1" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择输出目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'outputPath', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('outputPath')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">核心参数</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="12"><el-form-item label="最小层级"><el-input-number v-model="form.minZoom" :min="0" :max="30" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="最大层级"><el-input-number v-model="form.maxZoom" :min="0" :max="30" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="瓦片尺寸"><el-input-number v-model="form.tileSize" :min="64" :step="64" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="进程数"><el-input-number v-model="form.processes" :min="1" :max="128" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="线程数"><el-input-number v-model="form.threads" :min="1" :max="64" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="最大内存">
+                                    <el-select v-model="form.maxMemory">
+                                        <el-option v-for="option in memoryOptions" :key="option.value" :label="option.label" :value="option.value" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="重采样">
+                                    <el-select v-model="form.resampling">
+                                        <el-option label="最近邻" value="near" />
+                                        <el-option label="双线性" value="bilinear" />
+                                        <el-option label="三次卷积" value="cubic" />
+                                        <el-option label="Lanczos" value="lanczos" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="投影">
+                                    <el-select v-model="form.projection">
+                                        <el-option v-for="option in projectionOptions" :key="option.value" :label="option.label" :value="option.value" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="数据格式">
+                                    <el-select v-model="form.dataFormat">
+                                        <el-option v-for="option in dataFormatOptions" :key="option.value" :label="option.label" :value="option.value" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="图片格式">
+                                    <el-select v-model="form.imageFormat">
+                                        <el-option label="PNG" value="png" />
+                                        <el-option label="JPEG" value="jpeg" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="瓦片坐标系">
+                                    <el-select v-model="form.tileScheme">
+                                        <el-option label="TMS 原点" value="tms" />
+                                        <el-option label="XYZ 原点" value="google" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="波段不匹配策略">
+                                    <el-select v-model="form.bandMismatchPolicy">
+                                        <el-option label="自动处理" value="auto" />
+                                        <el-option label="严格校验" value="strict" />
+                                        <el-option label="跳过异常文件" value="skip" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                        </el-row>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header>
+                        <div class="tile-module__head">
+                            <span class="tile-module__title">波段选择</span>
+                            <el-button @click="refreshBandOptions(true)">获取波段信息</el-button>
+                        </div>
+                    </template>
+                    <div class="band-hint">{{ bandHint }}</div>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="8">
+                                <el-form-item label="红波段">
+                                    <el-select v-model="form.redBand">
+                                        <el-option v-for="band in bandOptions" :key="`red-${band}`" :label="`波段 ${band}`" :value="band" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="8">
+                                <el-form-item label="绿波段">
+                                    <el-select v-model="form.greenBand">
+                                        <el-option v-for="band in bandOptions" :key="`green-${band}`" :label="`波段 ${band}`" :value="band" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="8">
+                                <el-form-item label="蓝波段">
+                                    <el-select v-model="form.blueBand">
+                                        <el-option v-for="band in bandOptions" :key="`blue-${band}`" :label="`波段 ${band}`" :value="band" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                        </el-row>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">NoData 与拉伸</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="12"><el-form-item label="NoData 值"><el-input v-model="form.nodataValue" placeholder="例如 0、255 或 -9999" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="源 NoData"><el-input v-model="form.srcNodataValue" placeholder="例如 0、255 或 -9999" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="目标 NoData"><el-input v-model="form.dstNodataValue" placeholder="例如 0、255 或 -9999" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="拉伸类型">
+                                    <el-select v-model="form.stretchType">
+                                        <el-option label="不拉伸" value="none" />
+                                        <el-option label="百分位拉伸" value="percent" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="拉伸低百分位"><el-input-number v-model="form.stretchLowPercent" :step="0.1" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="拉伸高百分位"><el-input-number v-model="form.stretchHighPercent" :step="0.1" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="JPEG 质量"><el-input-number v-model="form.jpegQuality" :min="1" :max="100" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="PNG 压缩"><el-input-number v-model="form.pngCompression" :min="0" :max="9" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="透明阈值"><el-input-number v-model="form.transparencyThreshold" :min="0" :max="1" :step="0.01" controls-position="right" /></el-form-item></el-col>
+                        </el-row>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">构建策略</div></template>
+                    <div class="tile-check-grid">
+                        <el-checkbox v-model="form.generateShpIndex">生成网格文件</el-checkbox>
+                        <el-checkbox v-model="form.enableIncrementalUpdate">启用增量更新</el-checkbox>
+                        <el-checkbox v-model="form.skipNodataTiles">跳过透明瓦片</el-checkbox>
+                    </div>
+                </el-card>
             </div>
         </div>
 
@@ -578,25 +509,123 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.form-inline-help {
+.tile-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.tile-page-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 22px;
+    border: 1px solid #e5eaf3;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+}
+
+.tile-page-toolbar__title {
+    color: #1f2d3d;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.tile-page-toolbar__desc {
+    margin-top: 6px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.tile-page-toolbar__actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.tile-module {
+    border-radius: 16px;
+}
+
+.tile-module__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.tile-module__title {
+    color: #1f2d3d;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.tile-form :deep(.el-input),
+.tile-form :deep(.el-select),
+.tile-form :deep(.el-input-number) {
+    width: 100%;
+}
+
+.path-field-inline {
+    align-items: center;
+}
+
+.path-field-inline :deep(.el-input) {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.path-field-inline .path-field-actions {
+    flex: 0 0 auto;
+}
+
+.tile-help {
     margin-top: 8px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
 }
 
-.form-inline-help code {
-    background: rgba(103, 240, 255, 0.12);
-    color: var(--tf-accent);
-    border-radius: 6px;
+.tile-help code {
     padding: 2px 6px;
+    border-radius: 6px;
+    background: #f3f6fb;
+    color: #334155;
 }
 
-.form-inline-help a {
+.tile-help a {
     margin-left: 8px;
-    color: var(--tf-accent);
+    color: #409eff;
     text-decoration: none;
 }
 
-.form-inline-help a:hover {
-    color: var(--tf-accent-warm);
-    text-decoration: underline;
+.band-hint {
+    margin-bottom: 16px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #f7faff;
+    color: #526071;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.tile-check-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px 18px;
+}
+
+@media (max-width: 900px) {
+    .tile-page-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .path-field-inline {
+        flex-direction: column;
+        align-items: stretch;
+    }
 }
 </style>

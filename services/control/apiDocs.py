@@ -2853,7 +2853,7 @@ def getSwaggerUi():
     </header>
     <div id="api-reference"></div>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  <script src="/static/scalar-api-reference.js"></script>
   <script>
     window.addEventListener("DOMContentLoaded", function () {
       const inlineSpec = """ + json.dumps(spec_json) + """;
@@ -2866,7 +2866,7 @@ def getSwaggerUi():
         showDeveloperTools: "never",
         hideClientButton: true,
         showSidebar: true,
-        withDefaultFonts: true,
+        withDefaultFonts: false,
         mcp: {
           name: "AtlasWorks",
           url: "https://mcp.example.com",

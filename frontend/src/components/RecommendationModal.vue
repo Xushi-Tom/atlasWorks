@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue';
+import ResizableDrawer from './ResizableDrawer.vue';
 
 const props = defineProps({
     modelValue: { type: Boolean, required: true },
@@ -53,55 +54,52 @@ function applyRecommendation() {
 </script>
 
 <template>
-    <Teleport to="body">
-        <div v-if="modelValue" class="modal modal-overlay modal-overlay-active" @click.self="close">
-            <div class="modal-content recommendation-modal-content">
-                <div class="modal-header">
-                    <h3>智能推荐配置 - {{ title }}</h3>
-                    <button class="message-close" type="button" @click="close">×</button>
-                </div>
-
-                <div class="modal-body">
-                    <div class="info-list">
-                        <div class="info-row">
-                            <span class="info-label">文件</span>
-                            <span class="info-value">{{ sourceFile || '-' }}</span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label">文件大小</span>
-                            <span class="info-value">
-                                {{ recommendationData?.fileSize ? `${recommendationData.fileSize.toFixed(2)} GB` : '-' }}
-                            </span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label">系统信息</span>
-                            <span class="info-value">
-                                {{
-                                    recommendationData?.systemInfo
-                                        ? `CPU ${recommendationData.systemInfo.cpuCount || '-'} 核 / 内存 ${
-                                            typeof recommendationData.systemInfo.memoryTotalGb === 'number'
-                                                ? recommendationData.systemInfo.memoryTotalGb.toFixed(1)
-                                                : '-'
-                                        } GB`
-                                        : '-'
-                                }}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div class="recommendation-list recommendation-list-vue">
-                        <div v-for="item in items" :key="item.key" class="recommendation-item">
-                            <strong>{{ item.label }}</strong>
-                            <span>{{ item.value }}</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="modal-footer">
-                    <button class="btn btn-secondary" type="button" @click="close">关闭</button>
-                    <button class="btn btn-primary" type="button" @click="applyRecommendation">应用推荐</button>
-                </div>
+    <ResizableDrawer
+        :model-value="modelValue"
+        :title="`智能推荐配置 - ${title}`"
+        :width="560"
+        :min-width="420"
+        :max-width="820"
+        destroy-on-close
+        @update:model-value="value => emit('update:modelValue', value)"
+    >
+        <div class="info-list">
+            <div class="info-row">
+                <span class="info-label">文件</span>
+                <span class="info-value">{{ sourceFile || '-' }}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">文件大小</span>
+                <span class="info-value">
+                    {{ recommendationData?.fileSize ? `${recommendationData.fileSize.toFixed(2)} GB` : '-' }}
+                </span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">系统信息</span>
+                <span class="info-value">
+                    {{
+                        recommendationData?.systemInfo
+                            ? `CPU ${recommendationData.systemInfo.cpuCount || '-'} 核 / 内存 ${
+                                typeof recommendationData.systemInfo.memoryTotalGb === 'number'
+                                    ? recommendationData.systemInfo.memoryTotalGb.toFixed(1)
+                                    : '-'
+                            } GB`
+                            : '-'
+                    }}
+                </span>
             </div>
         </div>
-    </Teleport>
+
+        <div class="recommendation-list recommendation-list-vue">
+            <div v-for="item in items" :key="item.key" class="recommendation-item">
+                <strong>{{ item.label }}</strong>
+                <span>{{ item.value }}</span>
+            </div>
+        </div>
+
+        <template #footer>
+            <button class="btn btn-secondary" type="button" @click="close">关闭</button>
+            <button class="btn btn-primary" type="button" @click="applyRecommendation">应用推荐</button>
+        </template>
+    </ResizableDrawer>
 </template>

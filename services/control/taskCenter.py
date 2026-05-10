@@ -234,14 +234,12 @@ def listTasks():
     merged_tasks = dict(persisted_tasks)
     merged_tasks.update(in_memory_tasks)
 
-    def extract_timestamp(task_id):
-        try:
-            match = re.search(r"\d+$", task_id)
-            return int(match.group()) if match else 0
-        except Exception:
-            return 0
+    def extract_start_time(task_id):
+        task = merged_tasks.get(task_id, {})
+        parsed = _parse_datetime_value(task.get("startTime"))
+        return parsed if parsed is not None else datetime.min
 
-    sorted_task_ids = sorted(merged_tasks.keys(), key=extract_timestamp, reverse=True)
+    sorted_task_ids = sorted(merged_tasks.keys(), key=extract_start_time, reverse=True)
     filtered_tasks = [
         merged_tasks[task_id]
         for task_id in sorted_task_ids

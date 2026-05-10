@@ -10,6 +10,7 @@ from flask import jsonify, request, send_file
 
 from config import config
 from dataSourceOps import getFileInfo
+from pagination import paginate_items, parse_pagination_args
 from utils import formatFileSize, logMessage, validateDataSourcePath, validateWorkspacePath
 
 
@@ -344,6 +345,7 @@ def browseDirectory():
     try:
         browse_type = request.args.get("type", "results")
         path = request.args.get("path", "").strip("/")
+        page, page_size = parse_pagination_args(request.args, default_page_size=100, max_page_size=500)
         base_dir = config["dataSourceDir"] if browse_type == "datasource" else config["tilesDir"]
         full_path = os.path.join(base_dir, path) if path else base_dir
         full_path = os.path.abspath(full_path)
@@ -359,38 +361,30 @@ def browseDirectory():
         directories = []
         files = []
         try:
-            items = os.listdir(full_path)
-            items.sort()
-            for item in items:
-                item_path = os.path.join(full_path, item)
-                if os.path.isdir(item_path):
-                    try:
-                        sub_items = os.listdir(item_path)
-                        sub_file_count = len([name for name in sub_items if os.path.isfile(os.path.join(item_path, name))])
-                        sub_dir_count = len([name for name in sub_items if os.path.isdir(os.path.join(item_path, name))])
-                    except Exception:
-                        sub_file_count = 0
-                        sub_dir_count = 0
+            with os.scandir(full_path) as entries:
+                for entry in entries:
+                    item = entry.name
+                    if entry.is_dir(follow_symlinks=False):
+                        directories.append(
+                            {
+                                "name": item,
+                                "type": "directory",
+                                "path": os.path.join(path, item) if path else item,
+                            }
+                        )
+                        continue
 
-                    directories.append(
-                        {
-                            "name": item,
-                            "type": "directory",
-                            "path": os.path.join(path, item) if path else item,
-                            "fileCount": sub_file_count,
-                            "dirCount": sub_dir_count,
-                        }
-                    )
-                elif os.path.isfile(item_path):
-                    file_size = os.path.getsize(item_path)
-                    mod_time = os.path.getmtime(item_path)
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+
+                    stat_info = entry.stat(follow_symlinks=False)
                     files.append(
                         {
                             "name": item,
                             "type": "file",
-                            "size": file_size,
-                            "sizeFormatted": formatFileSize(file_size),
-                            "modifiedTime": mod_time,
+                            "size": stat_info.st_size,
+                            "sizeFormatted": formatFileSize(stat_info.st_size),
+                            "modifiedTime": stat_info.st_mtime,
                             "extension": os.path.splitext(item)[1].lower(),
                             "path": os.path.join(path, item) if path else item,
                         }
@@ -398,20 +392,36 @@ def browseDirectory():
         except PermissionError:
             return jsonify({"error": "权限不足"}), 403
 
+        directories.sort(key=lambda item: str(item.get("name", "")).lower())
+        files.sort(key=lambda item: str(item.get("name", "")).lower())
+
         parent_path = None
         if path:
             path_parts = path.split("/")
             parent_path = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
+
+        combined_entries = [{"kind": "directory", "payload": item} for item in directories]
+        combined_entries.extend({"kind": "file", "payload": item} for item in files)
+        paged_entries, pagination = paginate_items(combined_entries, page, page_size)
+        paged_directories = [item["payload"] for item in paged_entries if item["kind"] == "directory"]
+        paged_files = [item["payload"] for item in paged_entries if item["kind"] == "file"]
 
         return jsonify(
             {
                 "currentPath": path,
                 "parentPath": parent_path,
                 "baseType": browse_type,
-                "directories": directories,
-                "files": files,
+                "directories": paged_directories,
+                "files": paged_files,
                 "totalDirectories": len(directories),
                 "totalFiles": len(files),
+                "totalEntries": len(combined_entries),
+                "count": pagination["count"],
+                "page": pagination["page"],
+                "pageSize": pagination["pageSize"],
+                "totalPages": pagination["totalPages"],
+                "hasPrev": pagination["hasPrev"],
+                "hasNext": pagination["hasNext"],
             }
         )
     except Exception as exc:

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
+import ResizableDrawer from '../components/ResizableDrawer.vue';
 import { api } from '../services/api';
 import { formatDateTime } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
@@ -9,7 +10,7 @@ const tasks = ref([]);
 const keyword = ref('');
 const dateRange = ref([]);
 const currentPage = ref(1);
-const pageSize = ref(10);
+const pageSize = ref(20);
 const totalTasks = ref(0);
 const detailVisible = ref(false);
 const detailLoading = ref(false);
@@ -182,558 +183,538 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <section class="app-view">
-        <div class="section-header section-header-product">
-            <div>
-                <h2>任务列表</h2>
-                <p class="section-subtitle">统一查看任务排队、执行阶段、结果路径与异常信息，便于生产调度和问题回溯。</p>
+    <section class="app-view standard-page">
+        <div class="page-banner">
+            <div class="page-banner__meta">
+                <div class="page-banner__title">任务列表</div>
+                <div class="page-banner__desc">统一查看任务排队、执行阶段、结果路径与异常信息，便于生产调度和问题回溯。</div>
             </div>
-            <div class="tool-actions task-header-actions">
+            <div class="page-banner__actions">
                 <el-button type="primary" @click="load">刷新</el-button>
             </div>
         </div>
 
         <div class="app-scroll">
-            <div class="content-stack">
-                <div class="card task-list-shell data-panel">
-                    <div class="card-header task-filter-panel task-filter-panel-simple data-toolbar">
-                        <div class="task-filter-regular">
-                            <el-input v-model="keyword" clearable placeholder="任务 ID / 状态 / 阶段 / 结果路径" />
-                            <el-date-picker
-                                v-model="dateRange"
-                                type="daterange"
-                                range-separator="至"
-                                start-placeholder="开始日期"
-                                end-placeholder="结束日期"
-                                value-format="YYYY-MM-DD"
-                            />
-                        </div>
+            <div class="layui-panel">
+                <div class="layui-toolbar">
+                    <div class="layui-toolbar-left">
+                        <el-input
+                            v-model="keyword"
+                            clearable
+                            placeholder="任务 ID / 状态 / 阶段 / 结果路径"
+                            class="layui-search-input"
+                        />
+                        <el-date-picker
+                            v-model="dateRange"
+                            type="daterange"
+                            range-separator="—"
+                            start-placeholder="开始日期"
+                            end-placeholder="结束日期"
+                            value-format="YYYY-MM-DD"
+                            class="layui-date-input"
+                        />
                     </div>
+                </div>
 
-                    <div class="card-body task-list-body data-table-shell">
-                        <el-table class="task-data-table" :data="visibleTasks" stripe border height="100%">
-                            <el-table-column prop="orderNo" label="序号" width="80" />
-                            <el-table-column prop="taskId" label="任务 ID" min-width="220" />
-                            <el-table-column label="状态" width="110">
-                                <template #default="{ row }">
-                                    <el-tag :type="getStatusTagType(row.status)">{{ getStatusLabel(row.status) }}</el-tag>
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="进度" min-width="180">
-                                <template #default="{ row }">
-                                    <el-progress :percentage="formatProgress(row.progress)" :stroke-width="12" />
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="开始时间" min-width="170">
-                                <template #default="{ row }">
-                                    {{ formatDateTime(row.startTime) }}
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="结束时间" min-width="170">
-                                <template #default="{ row }">
-                                    {{ formatDateTime(row.endTime) }}
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="操作" width="220" fixed="right">
-                                <template #default="{ row }">
-                                    <div class="task-table-actions">
-                                        <el-button size="small" @click="openDetail(row)">详情</el-button>
-                                        <el-button v-if="row.status === 'running'" size="small" type="warning" @click="stopTask(row.taskId)">停止</el-button>
-                                        <el-button v-else size="small" type="danger" @click="removeTask(row.taskId)">删除</el-button>
-                                    </div>
-                                </template>
-                            </el-table-column>
-                        </el-table>
-                        <div class="task-list-pagination">
-                            <el-pagination
-                                :current-page="currentPage"
-                                :page-size="pageSize"
-                                :page-sizes="[10, 20, 50, 100]"
-                                :total="totalTasks"
-                                background
-                                layout="total, sizes, prev, pager, next, jumper"
-                                @current-change="handlePageChange"
-                                @size-change="handlePageSizeChange"
-                            />
-                        </div>
-                    </div>
+                <div class="layui-table-wrap">
+                <table class="layui-table">
+                    <colgroup>
+                        <col style="width: 60px" />
+                        <col style="min-width: 200px" />
+                        <col style="width: 90px" />
+                        <col style="min-width: 160px" />
+                        <col style="width: 165px" />
+                        <col style="width: 165px" />
+                        <col style="width: 140px" />
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>序号</th>
+                            <th>任务 ID</th>
+                            <th>状态</th>
+                            <th>进度</th>
+                            <th>开始时间</th>
+                            <th>结束时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="row in visibleTasks" :key="row.taskId">
+                            <td class="cell-center">{{ row.orderNo }}</td>
+                            <td class="cell-id">{{ row.taskId }}</td>
+                            <td class="cell-center">
+                                <span :class="['layui-badge', `layui-badge-${getStatusTagType(row.status)}`]">
+                                    {{ getStatusLabel(row.status) }}
+                                </span>
+                            </td>
+                            <td>
+                                <div class="layui-progress">
+                                    <div
+                                        class="layui-progress-bar"
+                                        :class="{ 'layui-progress-bar-active': row.status === 'running' }"
+                                        :style="{ width: formatProgress(row.progress) + '%' }"
+                                    />
+                                    <span class="layui-progress-text">{{ formatProgress(row.progress) }}%</span>
+                                </div>
+                            </td>
+                            <td>{{ formatDateTime(row.startTime) }}</td>
+                            <td>{{ formatDateTime(row.endTime) }}</td>
+                            <td class="cell-center">
+                                <div class="layui-table-actions">
+                                    <a class="layui-link" @click="openDetail(row)">详情</a>
+                                    <a v-if="row.status === 'running'" class="layui-link layui-link-warn" @click="stopTask(row.taskId)">停止</a>
+                                    <a v-else class="layui-link layui-link-danger" @click="removeTask(row.taskId)">删除</a>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr v-if="!visibleTasks.length">
+                            <td colspan="7" class="cell-empty">暂无任务数据</td>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+
+                <div class="layui-table-footer">
+                    <span class="layui-table-count">共 {{ totalTasks }} 条</span>
+                    <el-pagination
+                        :current-page="currentPage"
+                        :page-size="pageSize"
+                        :page-sizes="[10, 20, 50, 100]"
+                        :total="totalTasks"
+                        small
+                        background
+                        layout="sizes, prev, pager, next, jumper"
+                        @current-change="handlePageChange"
+                        @size-change="handlePageSizeChange"
+                    />
                 </div>
             </div>
         </div>
 
-        <el-dialog v-model="detailVisible" class="task-detail-dialog" title="任务详情" width="980px" destroy-on-close>
-            <div v-if="detailLoading" class="message info">正在加载任务详情...</div>
+        <ResizableDrawer v-model="detailVisible" title="任务详情" :width="980" :min-width="620" :max-width="1360" destroy-on-close>
+            <div v-if="detailLoading" class="dialog-loading-text">正在加载任务详情...</div>
             <template v-else-if="selectedTask">
-                <div class="task-detail-overview">
-                    <div class="task-detail-overview-main">
-                        <span class="task-detail-overview-label">任务 ID</span>
-                        <strong class="task-detail-overview-id">{{ selectedTask.taskId || '-' }}</strong>
+                <div class="standard-detail-stack">
+                    <div class="standard-detail-head">
+                        <div>
+                            <div class="standard-detail-id">{{ selectedTask.taskId || '-' }}</div>
+                            <div class="standard-detail-meta">
+                                <el-tag :type="getStatusTagType(selectedTask.status)">{{ getStatusLabel(selectedTask.status) }}</el-tag>
+                                <span>{{ inferTaskType(selectedTask) }}</span>
+                                <span>阶段：{{ selectedTask.currentStage || '等待回传' }}</span>
+                                <span>开始：{{ formatDateTime(selectedTask.startTime) }}</span>
+                            </div>
+                        </div>
+                        <div class="standard-detail-progress">
+                            <span>执行进度</span>
+                            <el-progress :percentage="formatProgress(selectedTask.progress)" :stroke-width="14" />
+                        </div>
                     </div>
-                    <div class="task-detail-overview-meta">
-                        <el-tag :type="getStatusTagType(selectedTask.status)">{{ getStatusLabel(selectedTask.status) }}</el-tag>
-                        <span>{{ inferTaskType(selectedTask) }}</span>
-                        <span>阶段：{{ selectedTask.currentStage || '等待回传' }}</span>
-                        <span>开始：{{ formatDateTime(selectedTask.startTime) }}</span>
-                    </div>
-                    <div class="task-detail-overview-progress">
-                        <span>执行进度</span>
-                        <el-progress :percentage="formatProgress(selectedTask.progress)" :stroke-width="14" />
-                    </div>
-                </div>
 
-                <div class="task-detail-grid">
-                    <div class="task-detail-field">
-                        <span>当前阶段</span>
-                        <strong>{{ selectedTask.currentStage || '等待回传' }}</strong>
-                    </div>
-                    <div class="task-detail-field">
-                        <span>结束时间</span>
-                        <strong>{{ formatDateTime(selectedTask.endTime) }}</strong>
-                    </div>
-                    <div class="task-detail-field">
-                        <span>产物 ID</span>
-                        <strong>{{ selectedTask.result?.artifactId || '-' }}</strong>
-                    </div>
-                    <div class="task-detail-field task-detail-field-wide">
-                        <span>输出目录</span>
-                        <strong>{{ selectedTask.result?.outputPath || '-' }}</strong>
-                    </div>
-                    <div class="task-detail-field task-detail-field-wide">
-                        <span>合并输出</span>
-                        <strong>{{ selectedTask.result?.mergedOutputPath || '-' }}</strong>
-                    </div>
-                    <div class="task-detail-field">
-                        <span>成功文件</span>
-                        <strong>{{ selectedTask.result?.completedFiles ?? 0 }}</strong>
-                    </div>
-                    <div class="task-detail-field">
-                        <span>失败文件</span>
-                        <strong>{{ selectedTask.result?.failedFiles ?? 0 }}</strong>
-                    </div>
-                </div>
+                    <el-descriptions :column="2" border>
+                        <el-descriptions-item label="当前阶段">{{ selectedTask.currentStage || '等待回传' }}</el-descriptions-item>
+                        <el-descriptions-item label="结束时间">{{ formatDateTime(selectedTask.endTime) }}</el-descriptions-item>
+                        <el-descriptions-item label="产物 ID">{{ selectedTask.result?.artifactId || '-' }}</el-descriptions-item>
+                        <el-descriptions-item label="成功文件">{{ selectedTask.result?.completedFiles ?? 0 }}</el-descriptions-item>
+                        <el-descriptions-item label="失败文件">{{ selectedTask.result?.failedFiles ?? 0 }}</el-descriptions-item>
+                        <el-descriptions-item label="任务类型">{{ inferTaskType(selectedTask) }}</el-descriptions-item>
+                        <el-descriptions-item label="输出目录" :span="2">{{ selectedTask.result?.outputPath || '-' }}</el-descriptions-item>
+                        <el-descriptions-item label="合并输出" :span="2">{{ selectedTask.result?.mergedOutputPath || '-' }}</el-descriptions-item>
+                    </el-descriptions>
 
-                <div class="task-detail-message-box">
-                    {{ selectedTask.message || '暂无过程说明' }}
-                </div>
+                    <el-alert
+                        :title="selectedTask.message || '暂无过程说明'"
+                        type="info"
+                        :closable="false"
+                        show-icon
+                    />
 
-                <div v-if="taskEvents.length" class="task-event-list">
-                    <div class="task-event-title">最近过程信息</div>
-                    <el-timeline class="task-detail-timeline">
-                        <el-timeline-item
-                            v-for="event in taskEvents.slice(0, 12)"
-                            :key="event.id || `${event.eventType}-${event.eventAt}`"
-                            :timestamp="formatDateTime(event.eventAt)"
-                        >
-                            <strong>{{ formatEventType(event.eventType) }}</strong>
-                            <div>{{ event.details?.message || event.details?.stage || event.details?.status || '过程已记录' }}</div>
-                        </el-timeline-item>
-                    </el-timeline>
+                    <div v-if="taskEvents.length">
+                        <div class="standard-block-title">最近过程信息</div>
+                        <el-timeline>
+                            <el-timeline-item
+                                v-for="event in taskEvents.slice(0, 12)"
+                                :key="event.id || `${event.eventType}-${event.eventAt}`"
+                                :timestamp="formatDateTime(event.eventAt)"
+                            >
+                                <strong>{{ formatEventType(event.eventType) }}</strong>
+                                <div>{{ event.details?.message || event.details?.stage || event.details?.status || '过程已记录' }}</div>
+                            </el-timeline-item>
+                        </el-timeline>
+                    </div>
                 </div>
             </template>
-        </el-dialog>
+        </ResizableDrawer>
     </section>
 </template>
 
 <style scoped>
-.task-filter-regular {
-    width: 100%;
-    display: grid;
-    gap: 12px;
-    grid-template-columns: minmax(220px, 1fr) minmax(280px, 420px);
-}
-
-.task-list-body {
-    min-height: 520px;
-}
-
-.task-list-pagination {
+.page-banner {
     display: flex;
-    justify-content: flex-end;
-    padding: 16px 18px 18px;
-    border-top: 1px solid rgba(145, 160, 180, 0.12);
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 22px;
+    border: 1px solid #e5eaf3;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
 }
 
-.task-table-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.task-list-shell {
-    border: 1px solid rgba(145, 160, 180, 0.14);
-    background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
-        linear-gradient(160deg, rgba(8, 16, 28, 0.92), rgba(10, 19, 32, 0.96));
-    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.16);
-}
-
-.task-list-shell.data-panel {
-    border-radius: 30px;
-    border-color: rgba(129, 150, 181, 0.16);
-    background:
-        radial-gradient(circle at top right, rgba(92, 132, 190, 0.1), transparent 26%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
-        linear-gradient(160deg, rgba(7, 14, 24, 0.98), rgba(8, 15, 26, 0.95));
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.04),
-        0 26px 54px rgba(0, 0, 0, 0.22);
-}
-
-.task-filter-panel {
-    border-bottom: 1px solid rgba(145, 160, 180, 0.12);
-}
-
-.task-list-shell :deep(.el-input__wrapper),
-.task-list-shell :deep(.el-range-editor.el-input__wrapper) {
-    background: rgba(6, 14, 24, 0.9) !important;
-    border-radius: 14px !important;
-    box-shadow:
-        inset 0 0 0 1px rgba(82, 112, 147, 0.3) !important,
-        0 10px 24px rgba(0, 0, 0, 0.08) !important;
-}
-
-.task-list-shell :deep(.el-input__wrapper.is-focus),
-.task-list-shell :deep(.el-range-editor.el-input__wrapper.is-active) {
-    box-shadow:
-        inset 0 0 0 1px rgba(103, 240, 255, 0.26) !important,
-        0 0 0 4px rgba(31, 164, 255, 0.08) !important;
-}
-
-.task-list-shell :deep(.el-input__inner),
-.task-list-shell :deep(.el-range-input),
-.task-list-shell :deep(.el-range-separator),
-.task-list-shell :deep(.el-input__icon) {
-    color: var(--tf-text) !important;
-}
-
-.task-list-shell :deep(.el-input__inner::placeholder),
-.task-list-shell :deep(.el-range-input::placeholder) {
-    color: var(--tf-text-dim) !important;
-}
-
-.task-list-shell :deep(.el-table) {
-    color: var(--tf-text) !important;
-    border: 1px solid rgba(108, 134, 168, 0.14) !important;
-    border-radius: 26px !important;
-    overflow: hidden !important;
-    background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
-        linear-gradient(150deg, rgba(10, 17, 29, 0.96), rgba(9, 15, 25, 0.92)) !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.03),
-        0 16px 30px rgba(0, 0, 0, 0.14) !important;
-}
-
-.task-list-shell :deep(.el-table::before),
-.task-list-shell :deep(.el-table__inner-wrapper::before) {
-    display: none !important;
-}
-
-.task-list-shell :deep(.el-table__header-wrapper) {
-    background: linear-gradient(180deg, rgba(31, 43, 63, 0.96), rgba(25, 35, 52, 0.92)) !important;
-}
-
-.task-list-shell :deep(.el-table__header-wrapper th.el-table__cell) {
-    background: transparent !important;
-    border-bottom-color: rgba(108, 134, 168, 0.16) !important;
-    color: #dbe7f4 !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.02em !important;
-    padding-top: 18px !important;
-    padding-bottom: 18px !important;
-}
-
-.task-list-shell :deep(.el-table__body td.el-table__cell) {
-    border-bottom-color: rgba(108, 134, 168, 0.1) !important;
-    padding-top: 18px !important;
-    padding-bottom: 18px !important;
-}
-
-.task-list-shell :deep(.el-table__body tr.el-table__row > td.el-table__cell),
-.task-list-shell :deep(.el-table__fixed-body-wrapper tr.el-table__row > td.el-table__cell) {
-    background: rgba(11, 20, 33, 0.82) !important;
-}
-
-.task-list-shell :deep(.el-table--striped .el-table__body tr.el-table__row--striped > td.el-table__cell) {
-    background: rgba(15, 25, 40, 0.86) !important;
-}
-
-.task-list-shell :deep(.el-table__body tr.el-table__row:hover > td.el-table__cell),
-.task-list-shell :deep(.el-table__fixed-body-wrapper tr.el-table__row:hover > td.el-table__cell) {
-    background: rgba(20, 33, 50, 0.94) !important;
-}
-
-.task-list-shell :deep(.el-table__fixed),
-.task-list-shell :deep(.el-table__fixed-right),
-.task-list-shell :deep(.el-table__fixed-right-patch) {
-    background: rgba(11, 19, 31, 0.96) !important;
-}
-
-.task-list-shell :deep(.el-table__fixed-right::before),
-.task-list-shell :deep(.el-table__fixed::before) {
-    background: linear-gradient(180deg, rgba(108, 134, 168, 0.16), rgba(108, 134, 168, 0.04)) !important;
-}
-
-.task-list-shell :deep(.el-table .cell) {
-    line-height: 1.6;
-}
-
-.task-table-actions :deep(.el-button),
-.task-header-actions :deep(.el-button) {
-    min-width: 62px;
-    border-radius: 10px;
-    padding-inline: 14px;
+.page-banner__title {
+    color: #1f2d3d;
+    font-size: 18px;
     font-weight: 700;
 }
 
-.task-header-actions :deep(.el-button--primary),
-.task-table-actions :deep(.el-button--primary) {
-    border-color: rgba(196, 205, 216, 0.16);
-    background: linear-gradient(135deg, rgba(142, 169, 201, 0.96), rgba(88, 109, 137, 0.92));
-    color: #08111b;
-    box-shadow: 0 10px 24px rgba(44, 56, 74, 0.26);
+.page-banner__desc {
+    margin-top: 6px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
 }
 
-.task-table-actions :deep(.el-button--warning) {
-    border-color: rgba(246, 207, 140, 0.16);
-    background: linear-gradient(135deg, rgba(198, 161, 102, 0.94), rgba(139, 113, 67, 0.9));
-    color: #101010;
-}
-
-.task-table-actions :deep(.el-button--danger) {
-    border-color: rgba(233, 171, 183, 0.16);
-    background: linear-gradient(135deg, rgba(201, 103, 120, 0.94), rgba(138, 59, 76, 0.9));
-}
-
-.task-table-actions :deep(.el-button:not(.el-button--primary):not(.el-button--warning):not(.el-button--danger)),
-.task-header-actions :deep(.el-button:not(.el-button--primary):not(.el-button--warning):not(.el-button--danger)) {
-    border-color: rgba(156, 170, 188, 0.16);
-    background: linear-gradient(135deg, rgba(34, 44, 58, 0.96), rgba(22, 29, 39, 0.94));
-    color: #dce6f1;
-}
-
-.task-detail-overview {
-    padding: 14px 16px;
-    border-radius: 14px;
-    border: 1px solid rgba(74, 195, 255, 0.22);
-    background: linear-gradient(145deg, rgba(14, 33, 54, 0.62), rgba(8, 19, 34, 0.72));
-    display: grid;
-    gap: 12px;
-}
-
-.task-detail-overview-main {
+.page-banner__actions {
     display: flex;
-    flex-direction: column;
-    gap: 5px;
-}
-
-.task-detail-overview-label {
-    font-size: 12px;
-    color: var(--tf-text-dim);
-    letter-spacing: 0.04em;
-}
-
-.task-detail-overview-id {
-    color: var(--tf-text);
-    font-size: 22px;
-    line-height: 1.35;
-    word-break: break-word;
-}
-
-.task-detail-overview-meta {
-    display: flex;
-    align-items: center;
+    gap: 10px;
     flex-wrap: wrap;
-    gap: 10px;
-    color: var(--tf-text-soft);
 }
 
-.task-detail-overview-meta span {
-    padding: 4px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(74, 195, 255, 0.2);
-    background: rgba(5, 16, 30, 0.64);
-    font-size: 12px;
-}
-
-.task-detail-overview-progress {
+.app-scroll {
     display: flex;
     flex-direction: column;
-    gap: 8px;
 }
 
-.task-detail-overview-progress > span {
-    font-size: 12px;
-    color: var(--tf-text-dim);
+.layui-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: #fff;
+    border: 1px solid #e6edf7;
+    border-radius: 16px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.04);
+    overflow: hidden;
 }
 
-.task-detail-grid {
-    margin-top: 16px;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+.layui-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 18px 20px;
+    border-bottom: 1px solid #edf2f7;
+    background: #fbfcfe;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.layui-toolbar-left {
+    display: flex;
+    align-items: center;
     gap: 10px;
-}
-
-.task-detail-field {
+    flex-wrap: wrap;
+    flex: 1;
     min-width: 0;
-    padding: 12px 14px;
+}
+
+.layui-search-input {
+    width: 340px;
+    max-width: 100%;
+}
+
+.layui-date-input {
+    max-width: 100%;
+}
+
+.layui-table-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.layui-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    table-layout: fixed;
+}
+
+.layui-table thead tr {
+    background: #f8fafc;
+}
+
+.layui-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 14px 14px;
+    font-weight: 600;
+    color: #475467;
+    font-size: 13px;
+    text-align: left;
+    border-bottom: 1px solid #e9eef5;
+    border-right: 1px solid #eef2f7;
+    background: #f8fafc;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.layui-table th:last-child {
+    border-right: none;
+}
+
+.layui-table td {
+    padding: 14px 14px;
+    color: #475467;
+    font-size: 13px;
+    border-bottom: 1px solid #eef2f7;
+    border-right: 1px solid #f2f4f7;
+    line-height: 1.7;
+    word-break: break-all;
+    transition: background 0.2s ease;
+    vertical-align: middle;
+}
+
+.layui-table td:last-child {
+    border-right: none;
+}
+
+.layui-table tbody tr:nth-child(odd) {
+    background: #fff;
+}
+
+.layui-table tbody tr:nth-child(even) {
+    background: #fcfdff;
+}
+
+.layui-table tbody tr {
+    transition: background 0.2s ease;
+}
+
+.layui-table tbody tr:hover td {
+    background: #f5f9ff;
+}
+
+.cell-center {
+    text-align: center;
+}
+
+.cell-id {
+    font-family: "Consolas", "Monaco", "Courier New", monospace;
+    font-size: 13px;
+    color: #344054;
+}
+
+.cell-empty {
+    text-align: center;
+    color: #c0c4cc;
+    padding: 60px 14px !important;
+    font-size: 13px;
+}
+
+.layui-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 56px;
+    padding: 4px 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    border-radius: 999px;
+    color: #fff;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.layui-badge-success {
+    background: #67c23a;
+}
+
+.layui-badge-warning {
+    background: #e6a23c;
+}
+
+.layui-badge-danger {
+    background: #f56c6c;
+}
+
+.layui-badge-info {
+    background: #909399;
+}
+
+.layui-progress {
+    position: relative;
+    height: 18px;
+    background: #e9eef6;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.layui-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #67c23a, #85ce61);
+    border-radius: 999px;
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.layui-progress-bar-active {
+    background: linear-gradient(90deg, #409eff, #66b1ff);
+    background-size: 200% 100%;
+    animation: layui-progress-shimmer 2s ease infinite;
+}
+
+@keyframes layui-progress-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.layui-progress-text {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.layui-table-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+}
+
+.layui-link {
+    color: #409eff;
+    cursor: pointer;
+    font-size: 13px;
+    text-decoration: none;
+    transition: color 0.2s ease, opacity 0.2s ease;
+}
+
+.layui-link:hover {
+    color: #66b1ff;
+    text-decoration: none;
+    opacity: 0.85;
+}
+
+.layui-link-warn {
+    color: #e6a23c;
+}
+
+.layui-link-warn:hover {
+    color: #f0c060;
+}
+
+.layui-link-danger {
+    color: #f56c6c;
+}
+
+.layui-link-danger:hover {
+    color: #f89898;
+}
+
+.layui-table-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-top: 1px solid #edf2f7;
+    background: #fbfcfe;
+    flex-shrink: 0;
+}
+
+.layui-table-count {
+    color: #667085;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.layui-toolbar :deep(.el-input__wrapper),
+.layui-toolbar :deep(.el-range-editor.el-input__wrapper) {
+    min-height: 42px;
     border-radius: 12px;
-    border: 1px solid rgba(74, 195, 255, 0.18);
-    background: rgba(7, 20, 36, 0.62);
+    box-shadow: 0 0 0 1px #e4eaf2 inset;
+}
+
+.layui-toolbar :deep(.el-input__wrapper.is-focus),
+.layui-toolbar :deep(.el-range-editor.el-input__wrapper.is-focus) {
+    box-shadow: 0 0 0 1px #409eff inset;
+}
+
+.dialog-loading-text {
+    color: #909399;
+}
+
+.standard-detail-stack {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 16px;
 }
 
-.task-detail-field span {
-    color: var(--tf-text-dim);
-    font-size: 12px;
+.standard-detail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
 }
 
-.task-detail-field strong {
-    color: var(--tf-text);
-    line-height: 1.5;
+.standard-detail-id {
+    font-size: 18px;
+    font-weight: 700;
+    color: #303133;
+    line-height: 1.4;
     word-break: break-word;
 }
 
-.task-detail-field-wide {
-    grid-column: span 2;
+.standard-detail-meta {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    color: #606266;
+    font-size: 13px;
 }
 
-.task-detail-message-box {
-    margin-top: 16px;
-    padding: 12px 14px;
-    border-radius: 10px;
-    border: 1px solid var(--tf-border);
-    background: linear-gradient(145deg, rgba(103, 240, 255, 0.06), rgba(31, 164, 255, 0.03));
-    color: var(--tf-text-soft);
+.standard-detail-progress {
+    min-width: 280px;
 }
 
-.task-event-list {
-    margin-top: 20px;
+.standard-detail-progress span {
+    display: block;
+    margin-bottom: 8px;
+    color: #606266;
+    font-size: 13px;
 }
 
-.task-event-title {
-    font-weight: 600;
+.standard-block-title {
     margin-bottom: 10px;
-    color: var(--tf-text);
-}
-
-.task-list-shell :deep(.el-progress-bar__outer) {
-    background: rgba(255, 255, 255, 0.06);
-}
-
-.task-list-shell :deep(.el-progress-bar__inner) {
-    background: linear-gradient(90deg, rgba(114, 213, 224, 0.92), rgba(82, 150, 217, 0.86));
-}
-
-.task-list-shell :deep(.el-tag) {
-    border-radius: 999px;
-    font-weight: 700;
-    padding-inline: 10px;
-}
-
-.task-list-pagination :deep(.el-pagination) {
-    gap: 8px;
-}
-
-.task-list-pagination :deep(.btn-prev),
-.task-list-pagination :deep(.btn-next),
-.task-list-pagination :deep(.el-pager li) {
-    min-width: 38px;
-    height: 38px;
-    border: 1px solid rgba(108, 134, 168, 0.14) !important;
-    border-radius: 12px;
-    background: rgba(16, 27, 42, 0.92) !important;
-    color: var(--tf-text) !important;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-.task-list-pagination :deep(.el-pager li.is-active) {
-    border-color: rgba(103, 240, 255, 0.2) !important;
-    background: linear-gradient(135deg, rgba(75, 133, 214, 0.96), rgba(62, 111, 176, 0.92)) !important;
-    color: #f5fbff !important;
-}
-
-.task-list-pagination :deep(.el-pagination__total),
-.task-list-pagination :deep(.el-pagination__jump),
-.task-list-pagination :deep(.el-pagination__sizes),
-.task-list-pagination :deep(.el-pagination__goto) {
-    color: var(--tf-text-soft) !important;
-}
-
-.task-list-pagination :deep(.el-select .el-select__wrapper),
-.task-list-pagination :deep(.el-input .el-input__wrapper) {
-    min-height: 38px;
-    border-radius: 12px;
-    background: rgba(16, 27, 42, 0.92) !important;
-    box-shadow: inset 0 0 0 1px rgba(108, 134, 168, 0.18) !important;
-}
-
-.task-list-pagination :deep(.el-select__selected-item),
-.task-list-pagination :deep(.el-input__inner),
-.task-list-pagination :deep(.el-select__caret),
-.task-list-pagination :deep(.el-input__icon) {
-    color: var(--tf-text) !important;
-}
-
-:deep(.task-detail-dialog.el-dialog) {
-    background: linear-gradient(160deg, rgba(4, 14, 26, 0.96), rgba(9, 24, 42, 0.97));
-    border: 1px solid rgba(74, 195, 255, 0.3);
-    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.5);
-}
-
-:deep(.task-detail-dialog .el-dialog__header) {
-    border-bottom: 1px solid rgba(74, 195, 255, 0.2);
-    margin-right: 0;
-    padding: 16px 20px;
-}
-
-:deep(.task-detail-dialog .el-dialog__title),
-:deep(.task-detail-dialog .el-dialog__close) {
-    color: var(--tf-text);
-}
-
-:deep(.task-detail-dialog .el-dialog__body) {
-    color: var(--tf-text-soft);
-    padding-top: 14px;
-}
-
-:deep(.task-detail-dialog .el-progress__text) {
-    color: var(--tf-text-soft);
-}
-
-:deep(.task-detail-dialog .el-timeline-item__tail) {
-    border-left-color: rgba(74, 195, 255, 0.36);
-}
-
-:deep(.task-detail-dialog .el-timeline-item__node--normal) {
-    background: var(--tf-accent);
-}
-
-:deep(.task-detail-dialog .el-timeline-item__timestamp) {
-    color: var(--tf-text-dim);
-}
-
-:deep(.task-detail-dialog .el-timeline-item__content) {
-    color: var(--tf-text-soft);
+    font-size: 14px;
+    font-weight: 600;
+    color: #303133;
 }
 
 @media (max-width: 960px) {
-    .task-filter-regular {
-        grid-template-columns: 1fr;
+    .page-banner {
+        flex-direction: column;
+        align-items: stretch;
     }
 
-    .task-table-actions {
-        flex-wrap: wrap;
+    .standard-detail-head {
+        flex-direction: column;
     }
 
-    .task-detail-grid {
-        grid-template-columns: 1fr;
+    .standard-detail-progress {
+        min-width: 0;
+        width: 100%;
     }
 
-    .task-detail-field-wide {
-        grid-column: auto;
+    .layui-search-input {
+        width: 100%;
     }
 }
 </style>

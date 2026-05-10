@@ -52,11 +52,6 @@ const memoryOptions = [
     { value: '64g', label: '64 GB' }
 ];
 
-function isHttpSourcePattern(value) {
-    const text = String(value || '').trim().toLowerCase();
-    return text.startsWith('http://') || text.startsWith('https://');
-}
-
 function openPicker(config) {
     Object.assign(picker, config, { visible: true });
 }
@@ -174,145 +169,107 @@ async function submit() {
 </script>
 
 <template>
-    <section class="app-view app-view-workbench">
-        <div class="section-header section-header-workbench section-header-compact">
-            <div class="section-header-actions">
-                <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始地形切片</button>
-            </div>
-        </div>
-
+    <section class="app-view standard-page">
         <div class="app-scroll">
-            <div class="content-stack content-stack-workbench">
-                <div class="workbench-shell">
-                    <section class="form-section workbench-section-wide workbench-section-lead">
-                        <div class="workbench-section-head">
-                            <div>
-                                <h3>输入与输出</h3>
-                            </div>
-                        </div>
-                        <div class="form-stack">
-                            <div class="form-group">
-                                <label>数据源目录</label>
-                                <div class="path-field">
-                                    <input v-model="form.folderPaths" type="text" placeholder="多个目录用逗号分隔，可留空">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择地形数据源目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('folderPaths')">清空</button>
-                                    </div>
-                                </div>
-                                <p class="workbench-note form-inline-help">可留空。留空时会默认从数据源根目录开始匹配。</p>
-                            </div>
-                            <div class="form-group">
-                                <label>文件匹配模式</label>
-                                <div class="path-field">
-                                    <input v-model="form.filePatterns" type="text" placeholder="支持具体 tif、通配符、txt 文件列表或 http/https 网络地址">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择地形源文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: ['.tif', '.tiff', '.txt'] })">选择文件</button>
-                                        <button class="btn btn-secondary" type="button" @click="requestRecommendation">智能推荐</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('filePatterns')">清空</button>
-                                    </div>
-                                </div>
-                                <p class="workbench-note form-inline-help">
-                                    可直接传网络地址，例如 <code>https://example.com/dem.tif</code>；多个来源用逗号分隔。系统会自动下载到数据源目录下当天日期文件夹（YYYYMMDD）后继续切片。
-                                    <a :href="apiDocsUrl" target="_blank" rel="noreferrer">接口示例</a>
-                                </p>
-                            </div>
-                            <div class="form-group">
-                                <label>输出目录</label>
-                                <div class="path-field">
-                                    <input v-model="form.outputPath" type="text" placeholder="例如 terrain/project/v1">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择地形输出目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'outputPath', allowedExtensions: [] })">选择目录</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('outputPath')">清空</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <div class="workbench-grid">
-                        <section class="form-section workbench-section-wide">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>层级与范围</h3>
-                                </div>
-                            </div>
-                            <div class="form-row form-row-3">
-                                <div class="form-group">
-                                    <label>起始层级</label>
-                                    <input v-model="form.startZoom" type="number" min="0" max="20">
-                                </div>
-                                <div class="form-group">
-                                    <label>结束层级</label>
-                                    <input v-model="form.endZoom" type="number" min="0" max="20">
-                                </div>
-                                <div class="form-group">
-                                    <label>最大三角形数</label>
-                                    <input v-model="form.maxTriangles" type="number" min="1024">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>地理边界</label>
-                                <input v-model="form.bounds" type="text" placeholder="west,south,east,north">
-                            </div>
-                        </section>
-
-                        <section class="form-section">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>执行策略</h3>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>线程数</label>
-                                    <input v-model="form.threads" type="number" min="1" max="64">
-                                </div>
-                                <div class="form-group">
-                                    <label>最大内存</label>
-                                    <select v-model="form.maxMemory">
-                                        <option v-for="option in memoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>分级策略</label>
-                                <select v-model="form.zoomStrategy">
-                                    <option value="conservative">稳健优先</option>
-                                    <option value="balanced">均衡模式</option>
-                                    <option value="aggressive">激进压缩</option>
-                                </select>
-                            </div>
-                        </section>
-
-                        <section class="form-section">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>构建选项</h3>
-                                </div>
-                            </div>
-                            <div class="checkbox-grid">
-                                <label class="checkbox-label">
-                                    <input v-model="form.compression" type="checkbox">
-                                    输出压缩
-                                </label>
-                                <label class="checkbox-label">
-                                    <input v-model="form.decompress" type="checkbox">
-                                    构建后自动解压
-                                </label>
-                                <label class="checkbox-label">
-                                    <input v-model="form.autoZoom" type="checkbox">
-                                    启用智能分级
-                                </label>
-                                <label class="checkbox-label">
-                                    <input v-model="form.mergeTerrains" type="checkbox">
-                                    合并多个地形输入
-                                </label>
-                            </div>
-                        </section>
+            <div class="tile-page">
+                <div class="tile-page-toolbar">
+                    <div class="tile-page-toolbar__meta">
+                        <div class="tile-page-toolbar__title">地形切片</div>
+                        <div class="tile-page-toolbar__desc">DEM 输入、层级范围、执行策略和构建选项按纵向模块拆开配置。</div>
                     </div>
-
+                    <div class="tile-page-toolbar__actions">
+                        <el-button @click="requestRecommendation">智能推荐</el-button>
+                        <el-button type="primary" @click="submit">开始地形切片</el-button>
+                    </div>
                 </div>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">输入与输出</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-form-item label="数据源目录">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.folderPaths" placeholder="多个目录用逗号分隔，可留空" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择地形数据源目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('folderPaths')">清空</el-button>
+                                </div>
+                            </div>
+                            <div class="tile-help">可留空。留空时默认从数据源根目录开始匹配。</div>
+                        </el-form-item>
+
+                        <el-form-item label="文件匹配模式">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.filePatterns" placeholder="支持具体 tif、通配符、txt 文件列表或 http/https 网络地址" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择地形源文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: ['.tif', '.tiff', '.txt'] })">选择文件</el-button>
+                                    <el-button @click="requestRecommendation">智能推荐</el-button>
+                                    <el-button @click="clearField('filePatterns')">清空</el-button>
+                                </div>
+                            </div>
+                            <div class="tile-help">
+                                可直接传网络地址，例如 <code>https://example.com/dem.tif</code>；多个来源用逗号分隔。
+                                <a :href="apiDocsUrl" target="_blank" rel="noreferrer">接口示例</a>
+                            </div>
+                        </el-form-item>
+
+                        <el-form-item label="输出目录">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.outputPath" placeholder="例如 terrain/project/v1" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择地形输出目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'outputPath', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('outputPath')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">层级与范围</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="12"><el-form-item label="起始层级"><el-input-number v-model="form.startZoom" :min="0" :max="20" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="结束层级"><el-input-number v-model="form.endZoom" :min="0" :max="20" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="最大三角形数"><el-input-number v-model="form.maxTriangles" :min="1024" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="地理边界"><el-input v-model="form.bounds" placeholder="west,south,east,north" /></el-form-item></el-col>
+                        </el-row>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">执行策略</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="12"><el-form-item label="线程数"><el-input-number v-model="form.threads" :min="1" :max="64" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="最大内存">
+                                    <el-select v-model="form.maxMemory">
+                                        <el-option v-for="option in memoryOptions" :key="option.value" :label="option.label" :value="option.value" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="分级策略">
+                                    <el-select v-model="form.zoomStrategy">
+                                        <el-option label="稳健优先" value="conservative" />
+                                        <el-option label="均衡模式" value="balanced" />
+                                        <el-option label="激进压缩" value="aggressive" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                        </el-row>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">构建选项</div></template>
+                    <div class="tile-check-grid">
+                        <el-checkbox v-model="form.compression">输出压缩</el-checkbox>
+                        <el-checkbox v-model="form.decompress">构建后自动解压</el-checkbox>
+                        <el-checkbox v-model="form.autoZoom">启用智能分级</el-checkbox>
+                        <el-checkbox v-model="form.mergeTerrains">合并多个地形输入</el-checkbox>
+                    </div>
+                </el-card>
             </div>
         </div>
 
@@ -338,25 +295,106 @@ async function submit() {
 </template>
 
 <style scoped>
-.form-inline-help {
+.tile-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.tile-page-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 22px;
+    border: 1px solid #e5eaf3;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+}
+
+.tile-page-toolbar__title {
+    color: #1f2d3d;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.tile-page-toolbar__desc {
+    margin-top: 6px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.tile-page-toolbar__actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.tile-module {
+    border-radius: 16px;
+}
+
+.tile-module__title {
+    color: #1f2d3d;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.tile-form :deep(.el-input),
+.tile-form :deep(.el-select),
+.tile-form :deep(.el-input-number) {
+    width: 100%;
+}
+
+.path-field-inline {
+    align-items: center;
+}
+
+.path-field-inline :deep(.el-input) {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.path-field-inline .path-field-actions {
+    flex: 0 0 auto;
+}
+
+.tile-help {
     margin-top: 8px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
 }
 
-.form-inline-help code {
-    background: rgba(103, 240, 255, 0.12);
-    color: var(--tf-accent);
-    border-radius: 6px;
+.tile-help code {
     padding: 2px 6px;
+    border-radius: 6px;
+    background: #f3f6fb;
+    color: #334155;
 }
 
-.form-inline-help a {
+.tile-help a {
     margin-left: 8px;
-    color: var(--tf-accent);
+    color: #409eff;
     text-decoration: none;
 }
 
-.form-inline-help a:hover {
-    color: var(--tf-accent-warm);
-    text-decoration: underline;
+.tile-check-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px 18px;
+}
+
+@media (max-width: 900px) {
+    .tile-page-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .path-field-inline {
+        flex-direction: column;
+        align-items: stretch;
+    }
 }
 </style>

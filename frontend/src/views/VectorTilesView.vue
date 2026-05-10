@@ -147,145 +147,134 @@ async function submit() {
 </script>
 
 <template>
-    <section class="app-view app-view-workbench">
-        <div class="section-header section-header-workbench section-header-compact">
-            <div class="section-header-actions">
-                <button class="btn btn-primary btn-header-action" type="button" @click="submit">开始矢量切片</button>
-            </div>
-        </div>
-
+    <section class="app-view standard-page">
         <div class="app-scroll">
-            <div class="content-stack content-stack-workbench">
-                <div class="workbench-shell">
-                    <section class="form-section workbench-section-wide workbench-section-lead">
-                        <div class="workbench-section-head">
-                            <div>
-                                <h3>输入与输出</h3>
-                            </div>
-                        </div>
-                        <div class="form-stack">
-                            <div class="form-group">
-                                <label>数据源目录</label>
-                                <div class="path-field">
-                                    <input v-model="form.folderPaths" type="text" placeholder="多个目录用逗号分隔，可留空">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择矢量数据目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('folderPaths')">清空</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="form-group">
-                                <label>文件匹配模式</label>
-                                <div class="path-field">
-                                    <input v-model="form.filePatterns" type="text" placeholder="支持 .geojson、.shp、.gpkg 或通配符">
-                                    <div class="path-field-actions">
-                                        <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择矢量文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: ['.geojson', '.json', '.shp', '.gpkg'] })">选择文件</button>
-                                        <button class="btn btn-secondary" type="button" @click="clearField('filePatterns')">清空</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>输出目录</label>
-                                    <div class="path-field">
-                                        <input v-model="form.outputPath" type="text" placeholder="例如 vector/roads/v1">
-                                        <div class="path-field-actions">
-                                            <button class="btn btn-secondary" type="button" @click="openPicker({ title: '选择输出目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'outputPath', allowedExtensions: [] })">选择目录</button>
-                                            <button class="btn btn-secondary" type="button" @click="clearField('outputPath')">清空</button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label>数据集名称（可选）</label>
-                                    <input v-model="form.datasetName" type="text" placeholder="留空则自动生成默认名称">
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <div class="workbench-grid">
-                        <section class="form-section workbench-section-wide">
-                            <div class="workbench-section-head">
-                                <div>
-                                    <h3>金字塔参数</h3>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>输出格式</label>
-                                    <select v-model="form.tileFormat">
-                                        <option value="mvt">MVT / PBF</option>
-                                        <option value="geojson">GeoJSON 瓦片</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>最小层级</label>
-                                    <input v-model="form.minZoom" type="number" min="0" max="22">
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>最大层级</label>
-                                    <input v-model="form.maxZoom" type="number" min="0" max="22">
-                                </div>
-                            </div>
-                            <div v-if="form.tileFormat === 'geojson'" class="form-stack">
-                                <div class="form-group">
-                                    <label>层级字段（可选）</label>
-                                    <input v-model="form.levelField" type="text" placeholder="例如 level、ad_level、type；留空则不过滤">
-                                    <p class="form-hint">只有填写字段名时，才按字段值和 zoom 规则筛选要素。</p>
-                                </div>
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label>未匹配规则的要素</label>
-                                        <select v-model="form.unmatchedPolicy">
-                                            <option value="include">保留</option>
-                                            <option value="exclude">丢弃</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group level-rule-actions">
-                                        <label>规则模板</label>
-                                        <div class="level-rule-action-row">
-                                            <button class="btn btn-secondary" type="button" @click="applyLevelRuleTemplate">填入行政区模板</button>
-                                            <button class="btn btn-secondary" type="button" @click="addLevelRule">添加规则</button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label>层级规则</label>
-                                    <div class="level-rule-table">
-                                        <div class="level-rule-head">
-                                            <span>层级值</span>
-                                            <span>最小 zoom</span>
-                                            <span>最大 zoom</span>
-                                            <span>操作</span>
-                                        </div>
-                                        <div
-                                            v-for="(rule, index) in form.levelRules"
-                                            :key="index"
-                                            class="level-rule-row"
-                                        >
-                                            <input v-model="rule.values" type="text" placeholder="country 或 A,B">
-                                            <input v-model="rule.minZoom" type="number" min="0" max="22">
-                                            <input v-model="rule.maxZoom" type="number" min="0" max="22">
-                                            <button class="btn btn-ghost-danger level-rule-remove" type="button" @click="removeLevelRule(index)">删除</button>
-                                        </div>
-                                    </div>
-                                    <p class="form-hint">层级值可填多个，用逗号、分号或空格分隔。</p>
-                                </div>
-                            </div>
-                            <div class="checkbox-grid">
-                                <label class="checkbox-label">
-                                    <input v-model="form.overwrite" type="checkbox">
-                                    允许覆盖非空输出目录
-                                </label>
-                            </div>
-                        </section>
-
+            <div class="tile-page">
+                <div class="tile-page-toolbar">
+                    <div class="tile-page-toolbar__meta">
+                        <div class="tile-page-toolbar__title">二维矢量切片</div>
+                        <div class="tile-page-toolbar__desc">GeoJSON、SHP、GPKG 统一按纵向模块配置，GeoJSON 可附加 zoom 过滤规则。</div>
+                    </div>
+                    <div class="tile-page-toolbar__actions">
+                        <el-button @click="applyLevelRuleTemplate" :disabled="form.tileFormat !== 'geojson'">填入行政区模板</el-button>
+                        <el-button type="primary" @click="submit">开始矢量切片</el-button>
                     </div>
                 </div>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">输入与输出</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-form-item label="数据源目录">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.folderPaths" placeholder="多个目录用逗号分隔，可留空" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择矢量数据目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'folderPaths', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('folderPaths')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+                        <el-form-item label="文件匹配模式">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.filePatterns" placeholder="支持 .geojson、.shp、.gpkg 或通配符" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择矢量文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: ['.geojson', '.json', '.shp', '.gpkg'] })">选择文件</el-button>
+                                    <el-button @click="clearField('filePatterns')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+                        <el-form-item label="输出目录">
+                            <div class="path-field path-field-inline">
+                                <el-input v-model="form.outputPath" placeholder="例如 vector/roads/v1" />
+                                <div class="path-field-actions">
+                                    <el-button @click="openPicker({ title: '选择输出目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'outputPath', allowedExtensions: [] })">选择目录</el-button>
+                                    <el-button @click="clearField('outputPath')">清空</el-button>
+                                </div>
+                            </div>
+                        </el-form-item>
+                        <el-form-item label="数据集名称（可选）">
+                            <el-input v-model="form.datasetName" placeholder="留空则自动生成默认名称" />
+                        </el-form-item>
+                    </el-form>
+                </el-card>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">金字塔参数</div></template>
+                    <el-form label-position="top" class="tile-form">
+                        <el-row :gutter="16">
+                            <el-col :xs="24" :md="12">
+                                <el-form-item label="输出格式">
+                                    <el-select v-model="form.tileFormat">
+                                        <el-option label="MVT / PBF" value="mvt" />
+                                        <el-option label="GeoJSON 瓦片" value="geojson" />
+                                    </el-select>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="最小层级"><el-input-number v-model="form.minZoom" :min="0" :max="22" controls-position="right" /></el-form-item></el-col>
+                            <el-col :xs="24" :md="12"><el-form-item label="最大层级"><el-input-number v-model="form.maxZoom" :min="0" :max="22" controls-position="right" /></el-form-item></el-col>
+                        </el-row>
+                    </el-form>
+                </el-card>
+
+                <template v-if="form.tileFormat === 'geojson'">
+                    <el-card shadow="never" class="tile-module">
+                        <template #header><div class="tile-module__title">GeoJSON 层级规则</div></template>
+                        <el-form label-position="top" class="tile-form">
+                            <el-row :gutter="16">
+                                <el-col :xs="24" :md="12">
+                                    <el-form-item label="层级字段（可选）">
+                                        <el-input v-model="form.levelField" placeholder="例如 level、ad_level、type；留空则不过滤" />
+                                        <div class="tile-help">只有填写字段名时，才按字段值和 zoom 规则筛选要素。</div>
+                                    </el-form-item>
+                                </el-col>
+                                <el-col :xs="24" :md="12">
+                                    <el-form-item label="未匹配规则的要素">
+                                        <el-select v-model="form.unmatchedPolicy">
+                                            <el-option label="保留" value="include" />
+                                            <el-option label="丢弃" value="exclude" />
+                                        </el-select>
+                                    </el-form-item>
+                                </el-col>
+                            </el-row>
+                        </el-form>
+
+                        <div class="rule-toolbar">
+                            <el-button @click="applyLevelRuleTemplate">填入行政区模板</el-button>
+                            <el-button type="primary" plain @click="addLevelRule">添加规则</el-button>
+                        </div>
+
+                        <el-table :data="form.levelRules" border stripe class="rule-table">
+                            <el-table-column label="层级值" min-width="220">
+                                <template #default="{ row }">
+                                    <el-input v-model="row.values" placeholder="country 或 A,B" />
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="最小 zoom" width="140">
+                                <template #default="{ row }">
+                                    <el-input-number v-model="row.minZoom" :min="0" :max="22" controls-position="right" />
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="最大 zoom" width="140">
+                                <template #default="{ row }">
+                                    <el-input-number v-model="row.maxZoom" :min="0" :max="22" controls-position="right" />
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="操作" width="100" fixed="right">
+                                <template #default="{ $index }">
+                                    <el-button type="danger" link @click="removeLevelRule($index)">删除</el-button>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+
+                        <div class="tile-help">层级值可填多个，用逗号、分号或空格分隔。</div>
+                    </el-card>
+                </template>
+
+                <el-card shadow="never" class="tile-module">
+                    <template #header><div class="tile-module__title">构建选项</div></template>
+                    <div class="tile-check-grid">
+                        <el-checkbox v-model="form.overwrite">允许覆盖非空输出目录</el-checkbox>
+                    </div>
+                </el-card>
             </div>
         </div>
 
@@ -303,49 +292,104 @@ async function submit() {
 </template>
 
 <style scoped>
-.level-rule-action-row {
+.tile-page {
     display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
+    flex-direction: column;
+    gap: 16px;
 }
 
-.level-rule-table {
-    display: grid;
-    gap: 8px;
+.tile-page-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 22px;
+    border: 1px solid #e5eaf3;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
 }
 
-.level-rule-head,
-.level-rule-row {
-    display: grid;
-    grid-template-columns: minmax(160px, 1fr) minmax(96px, 120px) minmax(96px, 120px) 76px;
-    gap: 10px;
-    align-items: center;
-}
-
-.level-rule-head {
-    color: var(--tf-text-soft);
-    font-size: 12px;
+.tile-page-toolbar__title {
+    color: #1f2d3d;
+    font-size: 18px;
     font-weight: 700;
 }
 
-.level-rule-remove {
-    min-width: 0;
-    width: 76px;
+.tile-page-toolbar__desc {
+    margin-top: 6px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
 }
 
-@media (max-width: 720px) {
-    .level-rule-head {
-        display: none;
+.tile-page-toolbar__actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.tile-module {
+    border-radius: 16px;
+}
+
+.tile-module__title {
+    color: #1f2d3d;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.tile-form :deep(.el-input),
+.tile-form :deep(.el-select),
+.tile-form :deep(.el-input-number) {
+    width: 100%;
+}
+
+.path-field-inline {
+    align-items: center;
+}
+
+.path-field-inline :deep(.el-input) {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.path-field-inline .path-field-actions {
+    flex: 0 0 auto;
+}
+
+.tile-help {
+    margin-top: 8px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.rule-toolbar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.rule-table {
+    margin-top: 6px;
+}
+
+.tile-check-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px 18px;
+}
+
+@media (max-width: 900px) {
+    .tile-page-toolbar {
+        flex-direction: column;
+        align-items: stretch;
     }
 
-    .level-rule-row {
-        grid-template-columns: 1fr 1fr;
-    }
-
-    .level-rule-row input:first-child,
-    .level-rule-remove {
-        grid-column: 1 / -1;
-        width: 100%;
+    .path-field-inline {
+        flex-direction: column;
+        align-items: stretch;
     }
 }
 </style>

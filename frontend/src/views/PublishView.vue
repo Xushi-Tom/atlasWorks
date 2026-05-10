@@ -1,10 +1,24 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import {
+    Clock,
+    CopyDocument,
+    Delete,
+    EditPen,
+    MoreFilled,
+    Plus,
+    Refresh,
+    Search,
+    View
+} from '@element-plus/icons-vue';
 
 import PathPickerModal from '../components/PathPickerModal.vue';
+import ResizableDrawer from '../components/ResizableDrawer.vue';
 import { api } from '../services/api';
 import { formatDateTime, normalizeListInput } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
+
+const PublicationPreviewModal = defineAsyncComponent(() => import('../components/PublicationPreviewModal.vue'));
 
 const picker = reactive({
     visible: false,
@@ -32,9 +46,12 @@ const createVisible = ref(false);
 const detailVisible = ref(false);
 const detailPublication = ref(null);
 const detailLoading = ref(false);
+const previewVisible = ref(false);
 const keyword = ref('');
 const publications = ref([]);
 const tasks = ref([]);
+const tasksLoaded = ref(false);
+const tasksLoading = ref(false);
 const editingPublicationId = ref('');
 const currentPage = ref(1);
 const pageSize = ref(10);
@@ -91,10 +108,10 @@ const visibilityLabelMap = {
 };
 
 const publicationStatusLabelMap = {
-    enabled: '已启用',
-    disabled: '未启用',
-    published: '已启用',
-    draft: '草稿',
+    enabled: '已启动',
+    disabled: '未启动',
+    published: '已启动',
+    draft: '构建中',
     failed: '失败'
 };
 
@@ -140,6 +157,42 @@ const publishableTasks = computed(() => {
 const selectedTask = computed(() => publishableTasks.value.find(task => task.taskId === form.taskId) || null);
 const modalTitle = computed(() => editingPublicationId.value ? '编辑发布' : '创建发布');
 
+function normalizeDisplayUrl(url) {
+    const value = String(url || '').trim();
+    if (!value) return '';
+    return value
+        .replace(/^((?:https?):\/\/)([^/?#]+)/i, (_, protocol, hostPart) => {
+            const portMatch = String(hostPart || '').match(/:(\d+)$/);
+            return `${protocol}localhost${portMatch ? `:${portMatch[1]}` : ''}`;
+        })
+        .replace(/%7B/ig, '{')
+        .replace(/%7D/ig, '}');
+}
+
+function resolveInteractiveUrl(url) {
+    const value = String(url || '').trim();
+    if (!value) return '';
+    return value
+        .replace(/^((?:https?):\/\/)([^/?#]+)/i, (_, protocol, hostPart) => {
+            const portMatch = String(hostPart || '').match(/:(\d+)$/);
+            const nextHost = window.location.hostname || 'localhost';
+            return `${protocol}${nextHost}${portMatch ? `:${portMatch[1]}` : ''}`;
+        })
+        .replace(/%7B/ig, '{')
+        .replace(/%7D/ig, '}');
+}
+
+function toPreviewPublication(item) {
+    if (!item) return null;
+    return {
+        ...item,
+        browserUrl: resolveInteractiveUrl(item.browserUrl),
+        launchUrl: resolveInteractiveUrl(item.launchUrl),
+        accessUrl: resolveInteractiveUrl(item.accessUrl),
+        sampleUrl: resolveInteractiveUrl(item.sampleUrl)
+    };
+}
+
 function isPublicationEnabled(item) {
     return Boolean(item?.metadata?.enabled ?? (item?.status === 'enabled' || item?.status === 'published'));
 }
@@ -161,15 +214,39 @@ function getPublicationSourceSummary(item) {
 
 function getPublicationCacheStatus(item) {
     if (!isTitilerPublication(item)) return '-';
+    const buildState = item?.buildState || item?.cache?.buildState || item?.metadata?.buildState || {};
+    const state = String(buildState?.state || '').toLowerCase();
+    if (state === 'failed') return '失败';
+    if (state === 'running') return `构建中 ${Number(buildState?.progress || 0)}%`;
+    if (state === 'pending') return '排队中';
     return item?.cache?.mosaicReady ? '已就绪' : '未生成';
+}
+
+function isPublicationBuilding(item) {
+    const buildState = item?.buildState || item?.cache?.buildState || item?.metadata?.buildState || {};
+    const state = String(buildState?.state || '').toLowerCase();
+    return state === 'pending' || state === 'running';
+}
+
+function getPublicationBuildMessage(item) {
+    const buildState = item?.buildState || item?.cache?.buildState || item?.metadata?.buildState || {};
+    return String(buildState?.message || '').trim();
 }
 
 function getPrimaryPublicationUrl(item) {
     if (!item) return '';
     if (isTitilerPublication(item)) {
-        return String(item?.browserUrl || item?.launchUrl || '').trim();
+        return normalizeDisplayUrl(item?.browserUrl || item?.launchUrl || '');
     }
-    return String(item?.accessUrl || item?.browserUrl || item?.launchUrl || '').trim();
+    return normalizeDisplayUrl(item?.accessUrl || item?.browserUrl || item?.launchUrl || '');
+}
+
+function getPrimaryPublicationHref(item) {
+    if (!item) return '';
+    if (isTitilerPublication(item)) {
+        return resolveInteractiveUrl(item?.browserUrl || item?.launchUrl || '');
+    }
+    return resolveInteractiveUrl(item?.accessUrl || item?.browserUrl || item?.launchUrl || '');
 }
 
 function getPrimaryPublicationUrlLabel(item) {
@@ -183,7 +260,15 @@ function getPrimaryPublicationUrlLabel(item) {
 function getSecondaryPublicationUrl(item) {
     if (!item) return '';
     if (isTitilerPublication(item)) {
-        return String(item?.launchUrl || '').trim();
+        return normalizeDisplayUrl(item?.launchUrl || '');
+    }
+    return '';
+}
+
+function getSecondaryPublicationHref(item) {
+    if (!item) return '';
+    if (isTitilerPublication(item)) {
+        return resolveInteractiveUrl(item?.launchUrl || '');
     }
     return '';
 }
@@ -235,6 +320,15 @@ function getPublicationDataSourcePaths(item) {
         .filter(Boolean);
 }
 
+function getPublicationSourceTarget(item) {
+    const sourceMode = item?.metadata?.sourceMode || (item?.metadata?.taskId ? 'task' : 'manual');
+    if (sourceMode === 'datasource') {
+        const paths = getPublicationDataSourcePaths(item);
+        return paths.length ? paths.join(', ') : '-';
+    }
+    return normalizeWorkspacePath(item?.metadata?.workspacePath || item?.publishPath || '') || '-';
+}
+
 function getTaskResultPath(task) {
     const rawPath = task?.result?.mergedOutputPath || task?.result?.outputPath || '';
     const normalizedPath = normalizeWorkspacePath(rawPath);
@@ -257,9 +351,54 @@ function getPublicationStatusTag(value) {
     return publicationStatusTagMap[value] || 'info';
 }
 
+function getPublicationStatusBadgeClass(item) {
+    const status = String(item?.status || '').toLowerCase();
+    if (status === 'failed') return 'is-danger';
+    if (status === 'draft') return 'is-warning';
+    return isPublicationEnabled(item) ? 'is-success' : 'is-muted';
+}
+
+function getPublicationVisibilityBadgeClass(item) {
+    return String(item?.metadata?.visibility || '').toLowerCase() === 'private' ? 'is-private' : 'is-shared';
+}
+
+function getPublicationVisibilityBadgeLabel(item) {
+    return String(item?.metadata?.visibility || '').toLowerCase() === 'private' ? '私有' : '共享';
+}
+
 function getPublishMethodLabel(publishType, publishMethod) {
     const option = (publishMethodCatalog[publishType] || []).find(item => item.value === publishMethod);
     return option?.label || publishMethod || '-';
+}
+
+function getPublicationCategoryLine(item) {
+    return [
+        getPublishTypeLabel(item?.publishType),
+        getPublishMethodLabel(item?.publishType, item?.metadata?.publishMethod || item?.publishMethod)
+    ].filter(Boolean).join(' / ');
+}
+
+function getPublicationUpdatedTime(item) {
+    return formatDateTime(item?.updatedAt || item?.publishedAt || item?.createdAt);
+}
+
+function getPublicationPublishedTime(item) {
+    return formatDateTime(item?.publishedAt || item?.createdAt);
+}
+
+function getPublicationTileSchemeLabel(item) {
+    const method = String(item?.metadata?.publishMethod || item?.publishMethod || '').trim().toLowerCase();
+    if (method === 'wmts') return 'WMTS';
+    return getSourceTileScheme(item);
+}
+
+function getPublicationCopyUrl(item) {
+    return getPrimaryPublicationUrl(item) || getSecondaryPublicationUrl(item) || '';
+}
+
+function getDefaultPublishMethodForType(publishType) {
+    const options = (publishMethodCatalog[publishType] || []).filter(item => !TITILER_METHODS.includes(String(item.value || '').toLowerCase()));
+    return options[0]?.value || 'wmts';
 }
 
 async function copyText(text) {
@@ -295,6 +434,32 @@ async function copyPublicationUrl(url) {
     }
 }
 
+function handlePublicationMenu(command, item) {
+    if (command === 'edit') {
+        editPublication(item);
+        return;
+    }
+
+    if (command === 'toggle') {
+        togglePublicationStatus(item, !isPublicationEnabled(item));
+        return;
+    }
+
+    if (command === 'rebuild') {
+        rebuildPublicationCache(item);
+        return;
+    }
+
+    if (command === 'clear') {
+        clearPublicationCache(item);
+        return;
+    }
+
+    if (command === 'delete') {
+        removePublication(item);
+    }
+}
+
 function openPublicationDetail(item) {
     detailPublication.value = item || null;
     detailVisible.value = true;
@@ -305,6 +470,11 @@ function closePublicationDetail() {
     detailVisible.value = false;
     detailPublication.value = null;
     detailLoading.value = false;
+}
+
+function openPublicationPreview(item) {
+    detailPublication.value = toPreviewPublication(item || detailPublication.value);
+    previewVisible.value = true;
 }
 
 async function loadPublicationDetail(publicationId) {
@@ -336,99 +506,20 @@ function getVectorSourceLayerHint(item) {
     return 'source-layer-name';
 }
 
+function getSourceTileScheme(item) {
+    const raw = String(
+        item?.metadata?.sourceTileScheme
+        || item?.customMetadata?.sourceTileScheme
+        || item?.sourceTileScheme
+        || ''
+    ).trim().toLowerCase();
+    if (raw === 'google' || raw === 'xyz') return 'XYZ';
+    return 'TMS';
+}
+
 function formatBounds(bounds) {
     if (!Array.isArray(bounds) || bounds.length !== 4) return '-';
     return bounds.map(value => Number(value).toFixed(6)).join(', ');
-}
-
-function buildVectorClientGuides(item, vectorKind) {
-    const tileJsonUrl = String(item?.launchUrl || '').trim();
-    const xyzTemplate = String(item?.accessUrl || '').trim();
-    const sourceLayer = getVectorSourceLayerHint(item);
-
-    if (vectorKind === 'mvt') {
-        return [
-            {
-                name: 'MapLibre',
-                recommended: true,
-                description: '二维矢量金字塔首选。直接使用 TileJSON，样式和交互都更完整。',
-                snippet: `map.addSource('atlasworks-vector', {
-  type: 'vector',
-  url: '${tileJsonUrl}'
-});
-
-map.addLayer({
-  id: 'atlasworks-fill',
-  type: 'fill',
-  source: 'atlasworks-vector',
-  'source-layer': '${sourceLayer}',
-  paint: {
-    'fill-color': '#3b82f6',
-    'fill-opacity': 0.35
-  }
-});`
-            },
-            {
-                name: 'OpenLayers',
-                recommended: true,
-                description: 'OpenLayers 对 MVT 支持成熟，适合桌面 GIS 风格的二维应用。',
-                snippet: `import VectorTileLayer from 'ol/layer/VectorTile';
-import VectorTileSource from 'ol/source/VectorTile';
-import MVT from 'ol/format/MVT';
-
-const layer = new VectorTileLayer({
-  source: new VectorTileSource({
-    format: new MVT(),
-    url: '${xyzTemplate}'
-  })
-});
-
-map.addLayer(layer);`
-            },
-            {
-                name: 'Cesium',
-                recommended: false,
-                description: 'Cesium 对二维 MVT 不是一等公民，没有标准内置加载方式。需要第三方 MVT 适配层，或改走影像/GeoJSON/3D Tiles 方案。',
-                snippet: `// CesiumJS 当前不建议直接承载二维 MVT 金字塔。
-// 推荐：
-// 1. 二维场景用 MapLibre / OpenLayers
-// 2. Cesium 只负责三维或影像底图
-// 3. 必要时再接第三方 MVT 适配插件`
-            }
-        ];
-    }
-
-    if (vectorKind === 'geojson') {
-        return [
-            {
-                name: 'OpenLayers',
-                recommended: true,
-                description: 'GeoJSON 瓦片更适合调试、小数据量或直接查看单瓦片内容。',
-                snippet: `fetch('${xyzTemplate.replace('{z}', '0').replace('{x}', '0').replace('{y}', '0')}')
-  .then((resp) => resp.json())
-  .then((data) => {
-    console.log('tile geojson', data);
-  });`
-            },
-            {
-                name: 'MapLibre',
-                recommended: false,
-                description: 'MapLibre 主线支持的是 MVT，不适合直接对接 GeoJSON 瓦片。正式发布建议改用 MVT。',
-                snippet: `// 不建议使用 GeoJSON 瓦片作为 MapLibre 正式数据源。
-// 若目标客户端是 MapLibre，请优先发布为 MVT。`
-            },
-            {
-                name: 'Cesium',
-                recommended: false,
-                description: 'Cesium 可以对接 GeoJSON Z/X/Y 瓦片，但通常需要你自己按当前缩放级别和视域管理瓦片请求、加载与卸载，不像影像图层那样原生一键接入。',
-                snippet: `// Cesium 可以使用 GeoJSON 瓦片模板。
-// 常见做法是根据当前缩放级别和视域计算可见 z/x/y，
-// 再逐块请求 ${xyzTemplate} 并作为 GeoJsonDataSource / Entity / Primitive 加载。`
-            }
-        ];
-    }
-
-    return [];
 }
 
 function getPublicationGuide(item) {
@@ -436,8 +527,7 @@ function getPublicationGuide(item) {
         return {
             endpoints: [],
             notes: [],
-            concepts: [],
-            clients: []
+            concepts: []
         };
     }
 
@@ -446,14 +536,14 @@ function getPublicationGuide(item) {
     const endpoints = [];
     const notes = [];
     const concepts = [];
-    const clients = [];
     const metadataRows = [];
 
     if (item.browserUrl) {
         endpoints.push({
             key: 'browser',
             label: '浏览器预览',
-            url: item.browserUrl,
+            url: normalizeDisplayUrl(item.browserUrl),
+            href: resolveInteractiveUrl(item.browserUrl),
             description: publishMethod.includes('titiler')
                 ? '直接在浏览器打开，查看 TiTiler 自带调试预览页。'
                 : '直接在浏览器打开，用于查看已发布内容或入口文件。'
@@ -484,12 +574,18 @@ function getPublicationGuide(item) {
             label: 'source-layer',
             value: getVectorSourceLayerHint(item)
         });
+        metadataRows.push({
+            key: 'vector-scheme',
+            label: '行号规则',
+            value: getSourceTileScheme(item)
+        });
 
         if (item.launchUrl) {
             endpoints.push({
                 key: 'tilejson',
                 label: 'TileJSON',
-                url: item.launchUrl,
+                url: normalizeDisplayUrl(item.launchUrl),
+                href: resolveInteractiveUrl(item.launchUrl),
                 description: vectorKind === 'mvt'
                     ? '矢量发布入口。MapLibre 优先使用这个地址。'
                     : '矢量瓦片描述文件，可用于查看层级、范围和模板地址。'
@@ -499,7 +595,8 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'xyz',
                 label: 'XYZ 模板',
-                url: item.accessUrl,
+                url: normalizeDisplayUrl(item.accessUrl),
+                href: resolveInteractiveUrl(item.accessUrl),
                 description: vectorKind === 'mvt'
                     ? '按 {z}/{x}/{y} 请求 PBF 瓦片。OpenLayers 常直接使用这个地址。'
                     : '按 {z}/{x}/{y} 请求 GeoJSON 瓦片，适合调试或小数据量使用。'
@@ -509,37 +606,36 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'sample',
                 label: '示例瓦片',
-                url: item.sampleUrl,
+                url: normalizeDisplayUrl(item.sampleUrl),
+                href: resolveInteractiveUrl(item.sampleUrl),
                 description: '用于直接验证某一级某一块瓦片是否可访问。'
             });
         }
 
         if (vectorKind === 'mvt') {
             notes.push('二维矢量正式发布优先使用 MVT。');
-            notes.push('MapLibre 推荐直接读取 TileJSON；OpenLayers 常直接读取 XYZ 模板。');
-            notes.push('Cesium 不适合作为二维 MVT 的主客户端。');
-            notes.push('Cesium 若一定要接，通常需要先转影像、3D 数据，或接第三方 MVT 适配层。');
+            notes.push('程序接入时可直接使用 TileJSON，或按 XYZ 模板请求 PBF 瓦片。');
+            notes.push('预览按钮可直接检查当前发布是否能正常出图。');
             concepts.push({
                 title: 'MVT 是什么',
                 text: 'MVT 是二进制矢量瓦片格式，体积更小、客户端支持更广，适合正式发布。'
             });
         } else {
             notes.push('GeoJSON 瓦片更适合调试、小数据量或兼容用途。');
-            notes.push('如果目标客户端是 MapLibre，建议改发 MVT。');
-            notes.push('Cesium 可以接 GeoJSON Z/X/Y 瓦片，但一般需要自定义按视域分块加载。');
+            notes.push('正式发布如需更高性能，建议改发 MVT。');
+            notes.push('预览按钮可直接检查 GeoJSON 瓦片是否按层级正常返回。');
             concepts.push({
                 title: 'GeoJSON 瓦片适用场景',
                 text: 'GeoJSON 瓦片可读性高，但体积和客户端生态都不如 MVT，更适合调试和小规模数据。'
             });
         }
-
-        clients.push(...buildVectorClientGuides(item, vectorKind));
     } else if (publishMethod.includes('titiler')) {
         if (item.launchUrl) {
             endpoints.push({
                 key: 'tilejson',
                 label: 'TileJSON',
-                url: item.launchUrl,
+                url: normalizeDisplayUrl(item.launchUrl),
+                href: resolveInteractiveUrl(item.launchUrl),
                 description: '这是给前端程序读取的 JSON，里面包含范围、层级和瓦片模板地址。'
             });
         }
@@ -547,7 +643,8 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'tiles',
                 label: '瓦片模板',
-                url: item.accessUrl,
+                url: normalizeDisplayUrl(item.accessUrl),
+                href: resolveInteractiveUrl(item.accessUrl),
                 description: '这是动态瓦片模板地址，程序按 {z}/{x}/{y} 请求 PNG 瓦片。'
             });
         }
@@ -555,7 +652,8 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'sample',
                 label: '调试地址',
-                url: item.sampleUrl,
+                url: normalizeDisplayUrl(item.sampleUrl),
+                href: resolveInteractiveUrl(item.sampleUrl),
                 description: '用于直接验证服务是否返回影像。'
             });
         }
@@ -563,6 +661,11 @@ function getPublicationGuide(item) {
         notes.push('浏览器想直接看效果，打开“浏览器预览”。');
         notes.push('程序对接优先使用“TileJSON”，不要自己手写完整请求参数。');
         notes.push('只有在前端明确支持 Z/X/Y 模板时，再直接使用“瓦片模板”。');
+        metadataRows.push({
+            key: 'imagery-scheme',
+            label: '行号规则',
+            value: getSourceTileScheme(item)
+        });
         concepts.push({
             title: 'TileJSON 是什么',
             text: 'TileJSON 是一份描述瓦片图层的 JSON，里面通常会给出 minzoom、maxzoom、bounds 和 tiles 模板地址。'
@@ -572,7 +675,8 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'capabilities',
                 label: 'Capabilities',
-                url: item.launchUrl,
+                url: normalizeDisplayUrl(item.launchUrl),
+                href: resolveInteractiveUrl(item.launchUrl),
                 description: 'WMTS 元数据入口，GIS 客户端一般先读取这个地址。'
             });
         }
@@ -580,7 +684,8 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'tiles',
                 label: 'GetTile 模板',
-                url: item.accessUrl,
+                url: normalizeDisplayUrl(item.accessUrl),
+                href: resolveInteractiveUrl(item.accessUrl),
                 description: 'WMTS GetTile 请求模板。'
             });
         }
@@ -588,19 +693,26 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'sample',
                 label: '示例请求',
-                url: item.sampleUrl,
+                url: normalizeDisplayUrl(item.sampleUrl),
+                href: resolveInteractiveUrl(item.sampleUrl),
                 description: '可直接打开验证某一级某一块瓦片。'
             });
         }
 
         notes.push('GIS 客户端优先加载 Capabilities。');
         notes.push('浏览器直接验证时，可先打开“示例请求”。');
+        metadataRows.push({
+            key: 'wmts-scheme',
+            label: '行号规则',
+            value: getSourceTileScheme(item)
+        });
     } else {
         if (item.launchUrl && item.launchUrl !== item.browserUrl && item.launchUrl !== item.accessUrl) {
             endpoints.push({
                 key: 'launch',
                 label: '程序入口',
-                url: item.launchUrl,
+                url: normalizeDisplayUrl(item.launchUrl),
+                href: resolveInteractiveUrl(item.launchUrl),
                 description: '给客户端或前端程序使用的入口地址。'
             });
         }
@@ -608,7 +720,8 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'access',
                 label: '访问地址',
-                url: item.accessUrl,
+                url: normalizeDisplayUrl(item.accessUrl),
+                href: resolveInteractiveUrl(item.accessUrl),
                 description: '这是当前发布记录的主要访问地址。'
             });
         }
@@ -616,13 +729,14 @@ function getPublicationGuide(item) {
             endpoints.push({
                 key: 'sample',
                 label: '示例地址',
-                url: item.sampleUrl,
+                url: normalizeDisplayUrl(item.sampleUrl),
+                href: resolveInteractiveUrl(item.sampleUrl),
                 description: '用于快速验证发布内容。'
             });
         }
     }
 
-    return { endpoints, notes, concepts, clients, metadataRows };
+    return { endpoints, notes, concepts, metadataRows };
 }
 
 const detailGuide = computed(() => getPublicationGuide(detailPublication.value));
@@ -639,10 +753,30 @@ function resetForm() {
     form.note = '';
 }
 
+async function ensureTasksLoaded(force = false) {
+    if (tasksLoading.value) return;
+    if (tasksLoaded.value && !force) return;
+    tasksLoading.value = true;
+    try {
+        const response = await api.getAllTasks({
+            page: 1,
+            pageSize: 500,
+            status: 'completed'
+        });
+        tasks.value = Object.values(response?.data?.tasks || {});
+        tasksLoaded.value = true;
+    } catch (error) {
+        pushToast(`可发布任务加载失败: ${error.message}`, 'error', 4500);
+    } finally {
+        tasksLoading.value = false;
+    }
+}
+
 function openCreateModal() {
     editingPublicationId.value = '';
     resetForm();
     createVisible.value = true;
+    ensureTasksLoaded();
 }
 
 function openPicker(config) {
@@ -678,6 +812,9 @@ function editPublication(item) {
         form.publishMethod = DATASOURCE_PUBLISH_METHOD;
     }
     createVisible.value = true;
+    if (form.sourceMode === 'task') {
+        ensureTasksLoaded();
+    }
 }
 
 async function togglePublicationStatus(item, explicitEnabled = null) {
@@ -727,7 +864,7 @@ async function removePublication(item) {
 async function rebuildPublicationCache(item) {
     try {
         await api.rebuildPublicationCache(item.publicationId);
-        pushToast('发布缓存已重建', 'success');
+        pushToast('已进入后台重建', 'success');
         await loadPublications();
     } catch (error) {
         pushToast(`重建发布缓存失败: ${error.message}`, 'error', 5000);
@@ -771,9 +908,6 @@ watch(() => form.publishMethod, value => {
     if (TITILER_METHODS.includes(normalizedValue)) {
         form.sourceMode = 'datasource';
         form.taskId = '';
-    } else if (form.sourceMode === 'datasource') {
-        form.sourceMode = 'manual';
-        form.workspacePath = '';
     }
 });
 
@@ -786,6 +920,8 @@ watch(() => form.sourceMode, value => {
     if (value === 'datasource') {
         form.publishType = DATASOURCE_PUBLISH_TYPE;
         form.publishMethod = DATASOURCE_PUBLISH_METHOD;
+    } else if (TITILER_METHODS.includes(String(form.publishMethod || '').toLowerCase())) {
+        form.publishMethod = getDefaultPublishMethodForType(form.publishType);
     }
 });
 
@@ -825,16 +961,7 @@ async function loadPublications() {
 }
 
 async function loadTasks() {
-    try {
-        const response = await api.getAllTasks({
-            page: 1,
-            pageSize: 500,
-            status: 'completed'
-        });
-        tasks.value = Object.values(response?.data?.tasks || {});
-    } catch (error) {
-        pushToast(`可发布任务加载失败: ${error.message}`, 'error', 4500);
-    }
+    await ensureTasksLoaded(true);
 }
 
 async function submitPublication() {
@@ -878,7 +1005,7 @@ async function submitPublication() {
             pushToast('发布记录已更新', 'success');
         } else {
             await api.createPublication(payload);
-            pushToast('发布记录已创建', 'success');
+            pushToast(form.sourceMode === 'datasource' ? '发布记录已创建，后台正在构建缓存' : '发布记录已创建', 'success');
         }
 
         createVisible.value = false;
@@ -890,7 +1017,7 @@ async function submitPublication() {
 }
 
 onMounted(async () => {
-    await Promise.all([loadPublications(), loadTasks()]);
+    await loadPublications();
 });
 
 function handlePageChange(page) {
@@ -911,7 +1038,7 @@ function scheduleLoad() {
     loadTimer = window.setTimeout(() => {
         loadTimer = null;
         loadPublications();
-    }, 250);
+    }, 120);
 }
 
 watch(keyword, () => {
@@ -928,165 +1055,143 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <section class="app-view">
-        <div class="section-header section-header-product">
-            <div>
-                <h2>发布中心</h2>
-                <p class="section-subtitle">统一管理发布记录，支持按任务生成发布、手动目录发布、启停切换与生命周期维护。</p>
+    <section class="app-view standard-page">
+        <div class="page-banner">
+            <div class="page-banner__meta">
+                <div class="page-banner__title">发布中心</div>
+                <div class="page-banner__desc">统一管理发布记录，支持按任务生成发布、手动目录发布、启停切换与生命周期维护。</div>
             </div>
-            <div class="tool-actions publish-header-actions">
-                <el-button @click="loadPublications">刷新</el-button>
-                <el-button type="primary" @click="openCreateModal">创建发布</el-button>
+            <div class="page-banner__actions publish-header-actions">
+                <el-button :icon="Refresh" @click="loadPublications">刷新</el-button>
+                <el-button type="primary" :icon="Plus" @click="openCreateModal">创建发布</el-button>
             </div>
         </div>
 
         <div class="app-scroll">
-            <div class="content-stack">
-                <div class="card publish-list-shell data-panel">
-                    <div class="card-header task-filter-panel task-filter-panel-simple data-toolbar">
-                        <el-input v-model="keyword" clearable placeholder="发布名称 / 路径 / 任务 / 发布方式" />
-                    </div>
+            <el-card class="standard-panel publish-panel" shadow="never">
+                <el-form class="standard-filter-form" inline>
+                    <el-form-item class="standard-filter-keyword">
+                        <el-input v-model="keyword" clearable :prefix-icon="Search" placeholder="发布名称 / 路径 / 任务 / 发布方式" />
+                    </el-form-item>
+                </el-form>
 
-                    <div class="card-body publish-table data-table-shell">
-                        <div class="publish-table-scroller">
-                        <el-table class="publish-data-table" :data="publications" :fit="false" stripe border height="100%" scrollbar-always-on>
-                            <el-table-column prop="alias" label="发布名称" min-width="160">
-                                <template #default="{ row }">
-                                    {{ row.alias || '-' }}
+                <div v-if="publications.length" class="publication-card-grid">
+                    <el-card
+                        v-for="row in publications"
+                        :key="row.id || row.alias || row.publishPath"
+                        class="publication-card"
+                        shadow="never"
+                    >
+                        <div class="publication-card-header">
+                            <button class="publication-card-title-button" type="button" @click="openPublicationDetail(row)">
+                                <div class="publication-card-title">{{ row.alias || '-' }}</div>
+                            </button>
+                            <el-dropdown trigger="click" placement="bottom-end" @command="command => handlePublicationMenu(command, row)">
+                                <button class="publication-card-more publication-card-more-inline publication-card-more-top" type="button" aria-label="更多操作">
+                                    <el-icon><MoreFilled /></el-icon>
+                                </button>
+                                <template #dropdown>
+                                    <el-dropdown-menu class="publication-card-menu">
+                                        <el-dropdown-item command="edit">
+                                            <el-icon><EditPen /></el-icon>
+                                            <span>编辑</span>
+                                        </el-dropdown-item>
+                                        <el-dropdown-item
+                                            v-if="isTitilerPublication(row)"
+                                            command="rebuild"
+                                            :disabled="isPublicationBuilding(row)"
+                                        >
+                                            <el-icon><Refresh /></el-icon>
+                                            <span>重建缓存</span>
+                                        </el-dropdown-item>
+                                        <el-dropdown-item
+                                            v-if="isTitilerPublication(row)"
+                                            command="clear"
+                                            :disabled="isPublicationBuilding(row)"
+                                        >
+                                            <el-icon><Delete /></el-icon>
+                                            <span>清理缓存</span>
+                                        </el-dropdown-item>
+                                        <el-dropdown-item command="delete" class="is-danger">
+                                            <el-icon><Delete /></el-icon>
+                                            <span>删除</span>
+                                        </el-dropdown-item>
+                                    </el-dropdown-menu>
                                 </template>
-                            </el-table-column>
-                            <el-table-column label="发布类型" min-width="210">
-                                <template #default="{ row }">
-                                    {{ getPublishTypeLabel(row.publishType) }} / {{ getPublishMethodLabel(row.publishType, row.metadata?.publishMethod) }}
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="发布地址" min-width="300">
-                                <template #default="{ row }">
-                                    <div v-if="getPrimaryPublicationUrl(row)" class="publish-address-stack">
-                                        <div class="publish-address-line">
-                                            <span class="publish-address-type">{{ getPrimaryPublicationUrlLabel(row) }}</span>
-                                            <div class="publish-address-cell">
-                                                <a
-                                                    class="publish-address-link"
-                                                    :href="getPrimaryPublicationUrl(row)"
-                                                    :title="getPrimaryPublicationUrl(row)"
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                >{{ getPrimaryPublicationUrl(row) }}</a>
-                                                <button
-                                                    class="publish-copy-button"
-                                                    type="button"
-                                                    :title="`复制地址: ${getPrimaryPublicationUrl(row)}`"
-                                                    @click="copyPublicationUrl(getPrimaryPublicationUrl(row))"
-                                                >
-                                                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                                                        <path d="M9 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
-                                                        <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
-                                                    </svg>
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div v-if="getSecondaryPublicationUrl(row)" class="publish-address-line publish-address-line-secondary">
-                                            <span class="publish-address-type">TileJSON</span>
-                                            <div class="publish-address-cell">
-                                                <a
-                                                    class="publish-address-link"
-                                                    :href="getSecondaryPublicationUrl(row)"
-                                                    :title="getSecondaryPublicationUrl(row)"
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                >{{ getSecondaryPublicationUrl(row) }}</a>
-                                                <button
-                                                    class="publish-copy-button"
-                                                    type="button"
-                                                    :title="`复制地址: ${getSecondaryPublicationUrl(row)}`"
-                                                    @click="copyPublicationUrl(getSecondaryPublicationUrl(row))"
-                                                >
-                                                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                                                        <path d="M9 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
-                                                        <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
-                                                    </svg>
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <span v-else>-</span>
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="可见性" width="100">
-                                <template #default="{ row }">
-                                    {{ getVisibilityLabel(row.metadata?.visibility) }}
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="数据源" min-width="180">
-                                <template #default="{ row }">
-                                    {{ getPublicationSourceSummary(row) }}
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="缓存" width="100">
-                                <template #default="{ row }">
-                                    {{ getPublicationCacheStatus(row) }}
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="状态" width="100">
-                                <template #default="{ row }">
-                                    <el-tag :type="getPublicationStatusTag(row.status)">{{ getPublicationStatusLabel(row.status) }}</el-tag>
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="发布时间" min-width="170">
-                                <template #default="{ row }">
-                                    {{ formatDateTime(row.publishedAt || row.createdAt) }}
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="操作" width="410" fixed="right">
-                                <template #default="{ row }">
-                                    <div class="publish-table-actions">
-                                        <el-switch
-                                            :model-value="isPublicationEnabled(row)"
-                                            active-text="启"
-                                            inactive-text="停"
-                                            inline-prompt
-                                            @change="value => togglePublicationStatus(row, value)"
-                                        />
-                                        <el-button size="small" @click="openPublicationDetail(row)">详情</el-button>
-                                        <el-button size="small" @click="editPublication(row)">编辑</el-button>
-                                        <el-button v-if="isTitilerPublication(row)" size="small" @click="rebuildPublicationCache(row)">重建缓存</el-button>
-                                        <el-button v-if="isTitilerPublication(row)" size="small" @click="clearPublicationCache(row)">清理缓存</el-button>
-                                        <el-button size="small" type="danger" @click="removePublication(row)">删除</el-button>
-                                    </div>
-                                </template>
-                            </el-table-column>
-                        </el-table>
+                            </el-dropdown>
                         </div>
-                        <div class="publish-list-pagination">
-                            <el-pagination
-                                :current-page="currentPage"
-                                :page-size="pageSize"
-                                :page-sizes="[10, 20, 50, 100]"
-                                :total="totalPublications"
-                                background
-                                layout="total, sizes, prev, pager, next, jumper"
-                                @current-change="handlePageChange"
-                                @size-change="handlePageSizeChange"
-                            />
+
+                        <div class="publication-card-summary">
+                            <span class="publication-inline-text" :class="getPublicationStatusBadgeClass(row)">{{ getPublicationStatusLabel(row.status) }}</span>
+                            <span class="publication-summary-separator">|</span>
+                            <span class="publication-inline-text" :class="getPublicationVisibilityBadgeClass(row)">{{ getPublicationVisibilityBadgeLabel(row) }}</span>
+                            <span class="publication-summary-separator">|</span>
+                            <span class="publication-inline-text is-type">{{ getPublishTypeLabel(row?.publishType) }}</span>
+                            <span class="publication-summary-separator">|</span>
+                            <span class="publication-inline-text is-method">{{ getPublishMethodLabel(row?.publishType, row?.metadata?.publishMethod || row?.publishMethod) }}</span>
                         </div>
-                    </div>
+
+                        <div class="publication-card-meta">
+                            <span class="publication-card-meta-item">
+                                <el-icon><Clock /></el-icon>
+                                <span>{{ getPublicationTileSchemeLabel(row) }}</span>
+                                <span class="publication-meta-separator">|</span>
+                                <span>发布时间：{{ getPublicationPublishedTime(row) }}</span>
+                                <span class="publication-meta-separator">|</span>
+                                <span>更新时间：{{ getPublicationUpdatedTime(row) }}</span>
+                            </span>
+                        </div>
+
+                        <div v-if="isTitilerPublication(row) && getPublicationBuildMessage(row)" class="publication-build-banner">
+                            {{ getPublicationBuildMessage(row) }}
+                        </div>
+
+                        <div class="publication-card-toolbar">
+                            <el-button size="default" class="publication-action-button" :icon="View" @click="openPublicationPreview(row)">
+                                预览
+                            </el-button>
+                            <el-button size="default" class="publication-action-button" :icon="CopyDocument" :disabled="!getPublicationCopyUrl(row)" @click="copyPublicationUrl(getPublicationCopyUrl(row))">
+                                复制地址
+                            </el-button>
+                            <div class="publication-card-switch-inline">
+                                <span class="publication-card-switch-label">启用状态</span>
+                                <el-switch
+                                    :model-value="isPublicationEnabled(row)"
+                                    @change="value => togglePublicationStatus(row, value)"
+                                />
+                            </div>
+                        </div>
+                    </el-card>
                 </div>
-            </div>
+                <el-empty v-else description="暂无发布记录" />
+
+                <div class="standard-pagination">
+                    <el-pagination
+                        :current-page="currentPage"
+                        :page-size="pageSize"
+                        :page-sizes="[10, 20, 50, 100]"
+                        :total="totalPublications"
+                        background
+                        layout="total, sizes, prev, pager, next, jumper"
+                        @current-change="handlePageChange"
+                        @size-change="handlePageSizeChange"
+                    />
+                </div>
+            </el-card>
         </div>
 
-        <el-dialog v-model="createVisible" class="publish-editor-dialog" :title="modalTitle" width="860px" destroy-on-close>
+        <ResizableDrawer v-model="createVisible" :title="modalTitle" :width="860" :min-width="520" :max-width="1200" destroy-on-close>
             <el-form class="publish-editor-form" label-width="110px">
                 <el-form-item label="发布来源">
-                    <el-radio-group v-model="form.sourceMode" class="publish-source-mode">
-                        <el-radio-button label="task" :disabled="isDatasourcePublish">按任务发布</el-radio-button>
-                        <el-radio-button label="manual" :disabled="isDatasourcePublish">手动目录</el-radio-button>
+                    <el-radio-group v-model="form.sourceMode">
+                        <el-radio-button label="task">按任务发布</el-radio-button>
+                        <el-radio-button label="manual">手动目录</el-radio-button>
                         <el-radio-button label="datasource">数据源文件</el-radio-button>
                     </el-radio-group>
                 </el-form-item>
 
                 <el-form-item v-if="form.sourceMode === 'task'" label="任务结果">
-                    <el-select v-model="form.taskId" filterable placeholder="请选择已完成任务">
+                    <el-select v-model="form.taskId" filterable placeholder="请选择已完成任务" :loading="tasksLoading" :teleported="false">
                         <el-option v-for="task in publishableTasks" :key="task.taskId" :label="`${task.taskId} / ${getTaskResultPath(task)}`" :value="task.taskId" />
                     </el-select>
                     <div v-if="selectedTask" class="publish-source-preview">
@@ -1100,8 +1205,7 @@ onBeforeUnmount(() => {
                     <div class="path-field">
                         <el-input v-model="form.workspacePath" :placeholder="dataSourcePlaceholder" />
                         <div class="path-field-actions">
-                            <el-button @click="openPicker({ title: '选择数据源文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'workspacePath', allowedExtensions: dataSourceAllowedExtensions })">选择文件</el-button>
-                            <el-button v-if="isTitilerPublish" @click="openPicker({ title: '选择多个 GeoTIFF 文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'workspacePath', allowedExtensions: ['.tif', '.tiff'] })">选择多个文件</el-button>
+                            <el-button @click="openPicker({ title: isTitilerPublish ? '选择 GeoTIFF 文件' : '选择数据源文件', source: 'datasource', selectionMode: 'file', multiple: isTitilerPublish, field: 'workspacePath', allowedExtensions: dataSourceAllowedExtensions })">选择文件</el-button>
                             <el-button v-if="isTitilerPublish" @click="openPicker({ title: '选择包含 GeoTIFF 的目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'workspacePath', allowedExtensions: [] })">选择目录</el-button>
                             <el-button @click="form.workspacePath = ''">清空</el-button>
                         </div>
@@ -1126,7 +1230,7 @@ onBeforeUnmount(() => {
 
                 <el-form-item label="发布类型">
                     <div v-if="isDatasourceMode" class="publish-fixed-field">{{ DATASOURCE_PUBLISH_TYPE_LABEL }}</div>
-                    <el-select v-else v-model="form.publishType">
+                    <el-select v-else v-model="form.publishType" :teleported="false">
                         <el-option label="地图 / 遥感" value="imagery" />
                         <el-option label="地图 / 电子地图" value="electronic-map" />
                         <el-option label="地形" value="terrain" />
@@ -1137,13 +1241,13 @@ onBeforeUnmount(() => {
 
                 <el-form-item label="发布方式">
                     <div v-if="isDatasourceMode" class="publish-fixed-field">{{ DATASOURCE_PUBLISH_METHOD_LABEL }}</div>
-                    <el-select v-else v-model="form.publishMethod">
+                    <el-select v-else v-model="form.publishMethod" :teleported="false">
                         <el-option v-for="option in publishMethodOptions" :key="option.value" :label="option.label" :value="option.value" />
                     </el-select>
                 </el-form-item>
 
                 <el-form-item label="可见性">
-                    <el-select v-model="form.visibility">
+                    <el-select v-model="form.visibility" :teleported="false">
                         <el-option label="私有" value="private" />
                         <el-option label="内部" value="internal" />
                         <el-option label="公开" value="public" />
@@ -1163,120 +1267,67 @@ onBeforeUnmount(() => {
                 <el-button @click="createVisible = false">取消</el-button>
                 <el-button type="primary" @click="submitPublication">{{ editingPublicationId ? '保存修改' : '创建发布' }}</el-button>
             </template>
-        </el-dialog>
+        </ResizableDrawer>
 
-        <el-dialog
+        <ResizableDrawer
             v-model="detailVisible"
-            class="publish-detail-dialog"
             title="发布详情"
-            width="920px"
+            :width="920"
+            :min-width="560"
+            :max-width="1320"
             destroy-on-close
             @closed="closePublicationDetail"
         >
-            <div v-if="detailPublication" class="publish-detail-panel">
-                <div class="publish-detail-meta">
-                    <div class="publish-detail-meta-item">
-                        <span class="publish-detail-meta-label">发布名称</span>
-                        <strong>{{ detailPublication.alias || '-' }}</strong>
-                    </div>
-                    <div class="publish-detail-meta-item">
-                        <span class="publish-detail-meta-label">发布类型</span>
-                        <strong>{{ getPublishTypeLabel(detailPublication.publishType) }} / {{ getPublishMethodLabel(detailPublication.publishType, detailPublication.metadata?.publishMethod) }}</strong>
-                    </div>
-                    <div class="publish-detail-meta-item">
-                        <span class="publish-detail-meta-label">状态</span>
-                        <strong>{{ getPublicationStatusLabel(detailPublication.status) }}</strong>
-                    </div>
-                    <div class="publish-detail-meta-item">
-                        <span class="publish-detail-meta-label">数据源</span>
-                        <strong>{{ isTitilerPublication(detailPublication) ? getPublicationSourceSummary(detailPublication) : (detailPublication.publishPath || '-') }}</strong>
-                    </div>
-                </div>
+            <div v-if="detailPublication" class="standard-detail-stack">
+                <el-descriptions :column="2" border>
+                    <el-descriptions-item label="发布名称">{{ detailPublication.alias || '-' }}</el-descriptions-item>
+                    <el-descriptions-item label="发布类型">{{ getPublishTypeLabel(detailPublication.publishType) }} / {{ getPublishMethodLabel(detailPublication.publishType, detailPublication.metadata?.publishMethod) }}</el-descriptions-item>
+                    <el-descriptions-item label="状态">{{ getPublicationStatusLabel(detailPublication.status) }}</el-descriptions-item>
+                    <el-descriptions-item label="数据源">{{ isTitilerPublication(detailPublication) ? getPublicationSourceSummary(detailPublication) : (detailPublication.publishPath || '-') }}</el-descriptions-item>
+                    <el-descriptions-item label="切片文件/文件夹" :span="2">{{ getPublicationSourceTarget(detailPublication) }}</el-descriptions-item>
+                </el-descriptions>
 
-                <div v-if="detailGuide.metadataRows.length" class="publish-detail-section">
-                    <h3>接入参数</h3>
-                    <div class="publish-detail-meta publish-detail-meta-compact">
-                        <div
+                <div v-if="detailGuide.metadataRows.length">
+                    <div class="standard-block-title">接入参数</div>
+                    <el-descriptions :column="2" border>
+                        <el-descriptions-item
                             v-for="row in detailGuide.metadataRows"
                             :key="row.key"
-                            class="publish-detail-meta-item"
+                            :label="row.label"
                         >
-                            <span class="publish-detail-meta-label">{{ row.label }}</span>
-                            <strong>{{ row.value || '-' }}</strong>
-                        </div>
-                    </div>
+                            {{ row.value || '-' }}
+                        </el-descriptions-item>
+                    </el-descriptions>
                 </div>
 
-                <div class="publish-detail-section">
-                    <h3>地址</h3>
-                    <div class="publish-detail-endpoints">
-                        <div
+                <div>
+                    <div class="standard-block-head">
+                        <div class="standard-block-title">地址</div>
+                        <el-button size="small" type="primary" plain @click="openPublicationPreview(detailPublication)">预览</el-button>
+                    </div>
+                    <div class="standard-detail-stack">
+                        <el-card
                             v-for="endpoint in detailGuide.endpoints"
                             :key="endpoint.key"
-                            class="publish-detail-endpoint"
+                            shadow="never"
                         >
-                            <div class="publish-detail-endpoint-head">
-                                <strong>{{ endpoint.label }}</strong>
-                                <button
-                                    class="publish-copy-button"
-                                    type="button"
-                                    :title="`复制地址: ${endpoint.url}`"
-                                    @click="copyPublicationUrl(endpoint.url)"
-                                >
-                                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                                        <path d="M9 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2z" />
-                                        <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
-                                    </svg>
-                                </button>
+                            <template #header>
+                                <div class="standard-endpoint-head">
+                                    <strong>{{ endpoint.label }}</strong>
+                                    <el-button size="small" @click="copyPublicationUrl(endpoint.url)">复制</el-button>
+                                </div>
+                            </template>
+                            <div class="standard-endpoint-url">
+                                <a :href="endpoint.href || endpoint.url" target="_blank" rel="noreferrer">{{ endpoint.url }}</a>
                             </div>
-                            <a :href="endpoint.url" target="_blank" rel="noreferrer">{{ endpoint.url }}</a>
-                            <p>{{ endpoint.description }}</p>
-                        </div>
+                            <p class="standard-endpoint-desc">{{ endpoint.description }}</p>
+                        </el-card>
                     </div>
                 </div>
 
-                <div v-if="detailGuide.clients.length" class="publish-detail-section">
-                    <h3>推荐客户端</h3>
-                    <div class="publish-detail-clients">
-                        <div
-                            v-for="client in detailGuide.clients"
-                            :key="client.name"
-                            class="publish-detail-client"
-                        >
-                            <div class="publish-detail-client-head">
-                                <strong>{{ client.name }}</strong>
-                                <span v-if="client.recommended" class="publish-detail-badge">推荐</span>
-                            </div>
-                            <p>{{ client.description }}</p>
-                            <pre class="publish-detail-code"><code>{{ client.snippet }}</code></pre>
-                        </div>
-                    </div>
-                </div>
-
-                <div v-if="detailGuide.notes.length" class="publish-detail-section">
-                    <h3>怎么用</h3>
-                    <ul class="publish-detail-list">
-                        <li v-for="note in detailGuide.notes" :key="note">{{ note }}</li>
-                    </ul>
-                </div>
-
-                <div v-if="detailGuide.concepts.length" class="publish-detail-section">
-                    <h3>说明</h3>
-                    <div class="publish-detail-concepts">
-                        <div
-                            v-for="concept in detailGuide.concepts"
-                            :key="concept.title"
-                            class="publish-detail-concept"
-                        >
-                            <strong>{{ concept.title }}</strong>
-                            <p>{{ concept.text }}</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div v-if="detailLoading" class="publish-detail-loading">详情刷新中...</div>
+                <div v-if="detailLoading" class="dialog-loading-text">详情刷新中...</div>
             </div>
-        </el-dialog>
+        </ResizableDrawer>
 
         <PathPickerModal
             v-model="picker.visible"
@@ -1289,197 +1340,383 @@ onBeforeUnmount(() => {
             overlay-class="picker-modal-overlay-top"
             @apply="applyPickerSelection"
         />
+
+        <PublicationPreviewModal
+            v-model="previewVisible"
+            :publication="detailPublication"
+        />
     </section>
 </template>
 
 <style scoped>
-.publish-table {
-    min-height: 520px;
-}
-
-.publish-table-scroller {
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-bottom: 8px;
-    margin-inline: -4px;
-}
-
-.publish-table-scroller::-webkit-scrollbar {
-    height: 10px;
-}
-
-.publish-table-scroller::-webkit-scrollbar-track {
-    background: rgba(15, 26, 41, 0.78);
-    border-radius: 999px;
-}
-
-.publish-table-scroller::-webkit-scrollbar-thumb {
-    background: linear-gradient(90deg, rgba(79, 129, 196, 0.9), rgba(92, 159, 224, 0.95));
-    border-radius: 999px;
-}
-
-.publish-list-pagination {
+.page-banner {
     display: flex;
-    justify-content: flex-end;
-    padding: 16px 18px 18px;
-    border-top: 1px solid rgba(145, 160, 180, 0.12);
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 22px;
+    border: 1px solid #e5eaf3;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
 }
 
-.publish-table-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.publish-list-shell {
-    border: 1px solid rgba(145, 160, 180, 0.14);
-    background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
-        linear-gradient(160deg, rgba(8, 16, 28, 0.92), rgba(10, 19, 32, 0.96));
-    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.16);
-}
-
-.publish-list-shell.data-panel {
-    border-radius: 24px;
-    border-color: rgba(129, 150, 181, 0.16);
-    background:
-        radial-gradient(circle at top right, rgba(92, 132, 190, 0.12), transparent 24%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 22%),
-        linear-gradient(160deg, rgba(7, 14, 24, 0.98), rgba(9, 17, 29, 0.96));
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.04),
-        0 26px 54px rgba(0, 0, 0, 0.22);
-}
-
-.publish-list-shell :deep(.el-input__wrapper) {
-    background: rgba(6, 14, 24, 0.9) !important;
-    border-radius: 14px !important;
-    box-shadow:
-        inset 0 0 0 1px rgba(82, 112, 147, 0.3) !important,
-        0 10px 24px rgba(0, 0, 0, 0.08) !important;
-}
-
-.publish-list-shell :deep(.el-input__wrapper.is-focus) {
-    box-shadow:
-        inset 0 0 0 1px rgba(103, 240, 255, 0.26) !important,
-        0 0 0 4px rgba(31, 164, 255, 0.08) !important;
-}
-
-.publish-list-shell :deep(.el-input__inner),
-.publish-list-shell :deep(.el-input__icon) {
-    color: var(--tf-text) !important;
-}
-
-.publish-list-shell :deep(.el-input__inner::placeholder) {
-    color: var(--tf-text-dim) !important;
-}
-
-.publish-list-shell :deep(.el-table) {
-    color: var(--tf-text) !important;
-    border: 1px solid rgba(108, 134, 168, 0.14) !important;
-    border-radius: 20px !important;
-    overflow: hidden !important;
-    background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent),
-        linear-gradient(150deg, rgba(10, 17, 29, 0.98), rgba(8, 14, 23, 0.95)) !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.03),
-        0 16px 30px rgba(0, 0, 0, 0.14) !important;
-}
-
-.publish-data-table {
-    min-width: 1760px;
-}
-
-.publish-list-shell :deep(.el-table::before),
-.publish-list-shell :deep(.el-table__inner-wrapper::before) {
-    display: none !important;
-}
-
-.publish-list-shell :deep(.el-table__header-wrapper) {
-    background: linear-gradient(180deg, rgba(31, 43, 63, 0.96), rgba(25, 35, 52, 0.92)) !important;
-}
-
-.publish-list-shell :deep(.el-table__header-wrapper th.el-table__cell) {
-    background: transparent !important;
-    border-bottom-color: rgba(108, 134, 168, 0.16) !important;
-    color: #eef5ff !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.02em !important;
-    padding-top: 16px !important;
-    padding-bottom: 16px !important;
-    font-size: 12px;
-}
-
-.publish-list-shell :deep(.el-table__body td.el-table__cell) {
-    border-bottom-color: rgba(108, 134, 168, 0.1) !important;
-    padding-top: 14px !important;
-    padding-bottom: 14px !important;
-    vertical-align: top;
-}
-
-.publish-list-shell :deep(.el-table__body tr.el-table__row > td.el-table__cell),
-.publish-list-shell :deep(.el-table__fixed-body-wrapper tr.el-table__row > td.el-table__cell) {
-    background: rgba(9, 18, 31, 0.86) !important;
-}
-
-.publish-list-shell :deep(.el-table--striped .el-table__body tr.el-table__row--striped > td.el-table__cell) {
-    background: rgba(13, 23, 38, 0.92) !important;
-}
-
-.publish-list-shell :deep(.el-table__body tr.el-table__row:hover > td.el-table__cell),
-.publish-list-shell :deep(.el-table__fixed-body-wrapper tr.el-table__row:hover > td.el-table__cell) {
-    background: rgba(20, 34, 52, 0.98) !important;
-}
-
-.publish-list-shell :deep(.el-table__fixed),
-.publish-list-shell :deep(.el-table__fixed-right),
-.publish-list-shell :deep(.el-table__fixed-right-patch) {
-    background: rgba(11, 19, 31, 0.96) !important;
-}
-
-.publish-list-shell :deep(.el-table__fixed-right::before),
-.publish-list-shell :deep(.el-table__fixed::before) {
-    background: linear-gradient(180deg, rgba(108, 134, 168, 0.16), rgba(108, 134, 168, 0.04)) !important;
-}
-
-.publish-list-shell :deep(.el-table__cell .cell) {
-    line-height: 1.55;
-}
-
-.publish-list-shell :deep(.el-table__body-wrapper),
-.publish-list-shell :deep(.el-scrollbar__wrap) {
-    scrollbar-color: rgba(91, 140, 206, 0.95) rgba(14, 25, 39, 0.82);
-}
-
-.publish-list-shell :deep(.el-scrollbar__bar.is-horizontal) {
-    height: 10px;
-    bottom: 2px;
-}
-
-.publish-list-shell :deep(.el-scrollbar__bar.is-horizontal .el-scrollbar__thumb) {
-    background: linear-gradient(90deg, rgba(79, 129, 196, 0.92), rgba(92, 159, 224, 0.96));
-}
-
-.publish-table-actions :deep(.el-button),
-.publish-header-actions :deep(.el-button) {
-    min-width: 58px;
-    padding-inline: 12px;
-    border-radius: 10px;
+.page-banner__title {
+    color: #1f2d3d;
+    font-size: 18px;
     font-weight: 700;
 }
 
-.publish-header-actions :deep(.el-button--primary),
-.publish-table-actions :deep(.el-button--primary) {
-    border-color: rgba(196, 205, 216, 0.16);
-    background: linear-gradient(135deg, rgba(142, 169, 201, 0.96), rgba(88, 109, 137, 0.92));
-    color: #08111b;
-    box-shadow: 0 10px 24px rgba(44, 56, 74, 0.26);
+.page-banner__desc {
+    margin-top: 6px;
+    color: #6b7280;
+    font-size: 13px;
+    line-height: 1.7;
 }
 
-.publish-table-actions :deep(.el-button--danger) {
-    border-color: rgba(233, 171, 183, 0.16);
-    background: linear-gradient(135deg, rgba(201, 103, 120, 0.94), rgba(138, 59, 76, 0.9));
+.page-banner__actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.standard-panel {
+    border-radius: 12px;
+}
+
+.standard-filter-form {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 18px;
+}
+
+.publish-panel {
+    border-radius: 20px;
+    border-color: #e8eef7;
+}
+
+.publish-panel :deep(.el-card__body) {
+    padding: 22px;
+}
+
+.standard-filter-form :deep(.el-form-item) {
+    margin-bottom: 0;
+}
+
+.standard-filter-keyword {
+    flex: 1 1 360px;
+}
+
+.standard-filter-keyword :deep(.el-input__wrapper) {
+    min-height: 44px;
+    border-radius: 14px;
+    box-shadow: 0 0 0 1px #e5ebf3 inset;
+}
+
+.standard-filter-keyword :deep(.el-input__wrapper.is-focus) {
+    box-shadow: 0 0 0 1px #3b82f6 inset;
+}
+
+.standard-filter-action :deep(.el-button) {
+    min-width: 92px;
+    height: 44px;
+    border-radius: 14px;
+    padding: 0 18px;
+    font-weight: 600;
+}
+
+.standard-pagination {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 24px;
+}
+
+.publication-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.publication-card {
+    height: 100%;
+    border-radius: 18px;
+    border: 1px solid #e6edf7;
+    background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%);
+    transition:
+        border-color 0.2s ease,
+        box-shadow 0.2s ease,
+        transform 0.2s ease;
+}
+
+.publication-card:hover {
+    transform: translateY(-2px);
+    border-color: #d8e6f6;
+    box-shadow: 0 14px 30px rgba(46, 84, 134, 0.08);
+}
+
+.publication-card :deep(.el-card__body) {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 22px 24px 20px;
+}
+
+.publication-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.publication-card-summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    flex-wrap: nowrap;
+}
+
+.publication-inline-text {
+    display: inline-block;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
+.publication-summary-separator {
+    color: #c1c9d6;
+    font-size: 14px;
+    line-height: 1;
+    flex: 0 0 auto;
+}
+
+.publication-inline-text.is-success {
+    color: #2fa84f;
+}
+
+.publication-inline-text.is-warning {
+    color: #d9911a;
+}
+
+.publication-inline-text.is-danger {
+    color: #e34d59;
+}
+
+.publication-inline-text.is-muted {
+    color: #8a94a6;
+}
+
+.publication-inline-text.is-private {
+    color: #4a8ef7;
+}
+
+.publication-inline-text.is-shared {
+    color: #ed9a1a;
+}
+
+.publication-inline-text.is-type {
+    color: #2563eb;
+}
+
+.publication-inline-text.is-method {
+    color: #475467;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.publication-card-more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.publication-card-title {
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1.3;
+    color: #1296f3;
+    word-break: break-word;
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+}
+
+.publication-card-title-button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    align-self: flex-start;
+}
+
+.publication-card-title-button:hover .publication-card-title {
+    color: #0b7cd6;
+}
+
+.publication-card-meta {
+    display: flex;
+    align-items: center;
+    min-height: 28px;
+}
+
+.publication-card-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #94a3b8;
+    font-size: 14px;
+    flex-wrap: wrap;
+}
+
+.publication-card-meta-item .el-icon {
+    font-size: 18px;
+}
+
+.publication-meta-separator {
+    color: #c1c9d6;
+    font-size: 13px;
+    line-height: 1;
+}
+
+.publication-build-banner {
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid #f8dfb0;
+    background: #fff8ea;
+    color: #a16207;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.publication-card-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #eef2f7;
+    flex-wrap: nowrap;
+}
+
+.publication-action-button {
+    min-width: 0;
+    height: 50px;
+    padding: 0 22px;
+    margin: 0;
+    border-radius: 16px;
+    border: 1px solid #dbe5f2;
+    color: #56657a;
+    background: #ffffff;
+    font-size: 15px;
+    font-weight: 600;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.publication-action-button:hover {
+    border-color: #bfd4ee;
+    color: #2563eb;
+    background: #f8fbff;
+}
+
+.publication-action-button :deep(.el-icon) {
+    font-size: 18px;
+}
+
+.publication-card-menu :deep(.el-dropdown-menu__item) {
+    gap: 8px;
+}
+
+.publication-card-menu :deep(.el-dropdown-menu__item.is-danger) {
+    color: #ef4444;
+}
+
+.publication-card-menu :deep(.el-dropdown-menu__item.is-danger:not(.is-disabled):focus) {
+    background: #fff1f2;
+    color: #ef4444;
+}
+
+.publication-card-footer :deep(.el-switch) {
+    --el-switch-on-color: #2f87f6;
+    --el-switch-off-color: #d5deeb;
+}
+
+.publish-header-actions :deep(.el-button) {
+    height: 46px;
+    padding: 0 18px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+
+.publish-header-actions :deep(.el-button--primary) {
+    box-shadow: 0 12px 24px rgba(47, 135, 246, 0.18);
+}
+
+.publish-header-actions :deep(.el-button .el-icon) {
+    font-size: 16px;
+}
+
+.publication-card-switch-inline {
+    min-height: 50px;
+    padding: 0 0 0 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    border-left: 1px solid #edf1f6;
+    margin-left: 8px;
+    flex: 0 0 auto;
+}
+
+.publication-card-switch-label {
+    font-size: 15px;
+    font-weight: 600;
+    color: #526074;
+    white-space: nowrap;
+}
+
+.publication-card-switch-inline :deep(.el-switch) {
+    --el-switch-on-color: #409eff;
+    --el-switch-off-color: #d5deeb;
+}
+
+.publication-card-more-inline {
+    width: 50px;
+    height: 50px;
+    padding: 0;
+    border: 1px solid #dbe5f2;
+    border-radius: 16px;
+    background: #ffffff;
+    color: #667085;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    flex: 0 0 auto;
+}
+
+.publication-card-more-top {
+    margin-left: auto;
+}
+
+.publication-card-more-inline:hover {
+    border-color: #bfd4ee;
+    color: #2563eb;
+    background: #f8fbff;
+}
+
+.publication-card-more-inline .el-icon {
+    font-size: 20px;
+}
+
+.publish-panel :deep(.el-pagination) {
+    width: 100%;
+    justify-content: flex-end;
 }
 
 .publish-fixed-field {
@@ -1488,22 +1725,10 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     padding: 0 12px;
-    border: 1px solid rgba(108, 134, 168, 0.18);
-    border-radius: 12px;
-    background: rgba(8, 16, 28, 0.74);
-    color: var(--tf-text);
-}
-
-.publish-header-actions :deep(.el-button:not(.el-button--primary):not(.el-button--danger)),
-.publish-table-actions :deep(.el-button:not(.el-button--primary):not(.el-button--danger)) {
-    border-color: rgba(156, 170, 188, 0.16);
-    background: linear-gradient(135deg, rgba(34, 44, 58, 0.96), rgba(22, 29, 39, 0.94));
-    color: #dce6f1;
-}
-
-.publish-table-actions {
-    flex-wrap: wrap;
-    row-gap: 6px;
+    border: 1px solid var(--el-border-color);
+    border-radius: 10px;
+    background: var(--el-fill-color-blank);
+    color: #303133;
 }
 
 .path-field {
@@ -1513,197 +1738,62 @@ onBeforeUnmount(() => {
     gap: 8px;
 }
 
+.standard-table-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 .publish-source-preview {
     margin-top: 10px;
     padding: 10px 12px;
-    border-radius: 10px;
-    border: 1px solid var(--tf-border);
-    background: rgba(6, 17, 31, 0.66);
+    border-radius: 8px;
+    border: 1px solid #e4e7ed;
+    background: #f5f7fa;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    color: var(--tf-text-soft);
+    color: #606266;
 }
 
-.publish-detail-panel {
+.standard-detail-stack {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 16px;
 }
 
-.publish-detail-meta {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-}
-
-.publish-detail-meta-compact {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.publish-detail-meta-item,
-.publish-detail-endpoint,
-.publish-detail-concept {
-    padding: 16px 18px;
-    border-radius: 16px;
-    border: 1px solid rgba(109, 141, 177, 0.16);
-    background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent),
-        linear-gradient(145deg, rgba(11, 20, 33, 0.92), rgba(8, 15, 26, 0.88));
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.03),
-        0 14px 24px rgba(0, 0, 0, 0.14);
-}
-
-.publish-detail-meta-item {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.publish-detail-meta-label {
-    color: #8ca2bc;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-
-.publish-detail-meta-item strong {
-    color: #eef5ff;
-    font-size: 20px;
-    line-height: 1.35;
-    word-break: break-word;
-}
-
-.publish-detail-section {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 4px 0;
-}
-
-.publish-detail-section h3 {
-    margin: 0;
-    font-size: 13px;
-    color: #93acd3;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-}
-
-.publish-detail-endpoints,
-.publish-detail-concepts,
-.publish-detail-clients {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.publish-detail-client {
-    padding: 16px 18px;
-    border-radius: 16px;
-    border: 1px solid rgba(109, 141, 177, 0.16);
-    background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent),
-        linear-gradient(145deg, rgba(11, 20, 33, 0.92), rgba(8, 15, 26, 0.88));
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.03),
-        0 14px 24px rgba(0, 0, 0, 0.14);
-}
-
-.publish-detail-client-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
-}
-
-.publish-detail-client-head strong,
-.publish-detail-endpoint-head strong,
-.publish-detail-concept strong {
-    color: #eef5ff;
-    font-size: 16px;
-}
-
-.publish-detail-badge {
-    display: inline-flex;
-    align-items: center;
-    min-height: 22px;
-    padding: 0 8px;
-    border-radius: 999px;
-    background: rgba(74, 222, 128, 0.16);
-    color: #a7f3d0;
-    font-size: 12px;
-}
-
-.publish-detail-endpoint-head {
+.standard-endpoint-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    margin-bottom: 8px;
 }
 
-.publish-detail-endpoint a {
-    display: block;
-    color: #66e3ff;
+.standard-endpoint-url a {
+    display: inline-block;
+    margin-top: 8px;
+    color: #409eff;
     text-decoration: none;
     line-break: anywhere;
-    margin-bottom: 10px;
-    padding: 10px 12px;
-    border-radius: 10px;
-    background: rgba(6, 14, 24, 0.86);
-    border: 1px solid rgba(104, 128, 160, 0.14);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13px;
+    transition: color 0.2s ease;
 }
 
-.publish-detail-endpoint p,
-.publish-detail-concept p,
-.publish-detail-client p {
-    margin: 0;
-    color: #b8c7d9;
+.standard-endpoint-url a:hover,
+.publish-address-link:hover {
+    color: #1d4ed8;
+}
+
+.standard-endpoint-desc {
+    margin: 10px 0 0;
+    color: #606266;
     line-height: 1.6;
-}
-
-.publish-detail-code {
-    margin: 12px 0 0;
-    padding: 12px;
-    overflow: auto;
-    border-radius: 10px;
-    border: 1px solid rgba(108, 134, 168, 0.14);
-    background: rgba(5, 12, 22, 0.92);
-    color: #dbe7f4;
-    font-size: 12px;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.publish-detail-list {
-    margin: 0;
-    padding-left: 20px;
-    color: #c3d1e2;
-    line-height: 1.7;
-}
-
-.publish-detail-list li + li {
-    margin-top: 8px;
-}
-
-.publish-table a {
-    color: var(--tf-accent);
-    text-decoration: none;
-}
-
-.publish-table a:hover {
-    color: var(--tf-accent-warm);
-    text-decoration: underline;
 }
 
 .publish-address-cell {
     min-width: 0;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
 }
 
@@ -1726,257 +1816,102 @@ onBeforeUnmount(() => {
 
 .publish-address-type {
     font-size: 12px;
-    color: var(--tf-text-dim);
+    color: #909399;
 }
 
 .publish-address-link {
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    line-break: anywhere;
+    font-size: 14px;
+    line-height: 1.6;
 }
 
-.publish-copy-button {
-    flex: 0 0 auto;
-    width: 32px;
-    height: 32px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(103, 240, 255, 0.16);
-    border-radius: 10px;
-    background: rgba(10, 24, 39, 0.72);
-    color: var(--tf-text-soft);
-    cursor: pointer;
-    transition:
-        background 0.18s ease,
-        border-color 0.18s ease,
-        color 0.18s ease,
-        transform 0.18s ease;
-}
-
-.publish-copy-button:hover {
-    background: rgba(19, 38, 58, 0.94);
-    border-color: rgba(103, 240, 255, 0.26);
-    color: var(--tf-text);
-    transform: translateY(-1px);
-}
-
-.publish-copy-button svg {
-    width: 15px;
-    height: 15px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.9;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-}
-
-.publish-detail-loading {
-    color: #95aac3;
+.dialog-loading-text {
+    color: #909399;
     font-size: 12px;
-    padding: 0 4px 12px;
+}
+
+.standard-block-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #303133;
+    margin-bottom: 2px;
+}
+
+.standard-block-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
 }
 .publish-editor-form :deep(.el-input__wrapper),
 .publish-editor-form :deep(.el-textarea__inner),
 .publish-editor-form :deep(.el-select__wrapper) {
-    background: rgba(3, 12, 24, 0.72);
-    box-shadow: 0 0 0 1px rgba(74, 195, 255, 0.22) inset;
+    background: #ffffff;
 }
 
-.publish-editor-form :deep(.el-input__inner),
-.publish-editor-form :deep(.el-textarea__inner),
-.publish-editor-form :deep(.el-select__selected-item) {
-    color: var(--tf-text);
+.publish-editor-form :deep(.el-select) {
+    width: 100%;
 }
 
-.publish-editor-form :deep(.el-input__inner::placeholder),
-.publish-editor-form :deep(.el-textarea__inner::placeholder) {
-    color: var(--tf-text-dim);
+.publish-editor-form :deep(.el-select__popper) {
+    z-index: 3600 !important;
 }
 
-.publish-list-shell :deep(.el-switch__label) {
-    color: var(--tf-text-soft);
+:deep(.el-textarea__inner) {
+    background: #ffffff;
+    color: #303133;
 }
 
-.publish-list-shell :deep(.el-tag) {
-    border-radius: 999px;
-    font-weight: 700;
-    padding-inline: 10px;
-}
+@media (max-width: 768px) {
+    .page-banner {
+        flex-direction: column;
+        align-items: stretch;
+    }
 
-.publish-list-pagination :deep(.el-pagination) {
-    gap: 8px;
-}
-
-.publish-list-pagination :deep(.btn-prev),
-.publish-list-pagination :deep(.btn-next),
-.publish-list-pagination :deep(.el-pager li) {
-    min-width: 38px;
-    height: 38px;
-    border: 1px solid rgba(108, 134, 168, 0.14) !important;
-    border-radius: 12px;
-    background: rgba(16, 27, 42, 0.92) !important;
-    color: var(--tf-text) !important;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-.publish-list-pagination :deep(.el-pager li.is-active) {
-    border-color: rgba(103, 240, 255, 0.2) !important;
-    background: linear-gradient(135deg, rgba(75, 133, 214, 0.96), rgba(62, 111, 176, 0.92)) !important;
-    color: #f5fbff !important;
-}
-
-.publish-list-pagination :deep(.el-pagination__total),
-.publish-list-pagination :deep(.el-pagination__jump),
-.publish-list-pagination :deep(.el-pagination__sizes),
-.publish-list-pagination :deep(.el-pagination__goto) {
-    color: var(--tf-text-soft) !important;
-}
-
-.publish-list-pagination :deep(.el-select .el-select__wrapper),
-.publish-list-pagination :deep(.el-input .el-input__wrapper) {
-    min-height: 38px;
-    border-radius: 12px;
-    background: rgba(16, 27, 42, 0.92) !important;
-    box-shadow: inset 0 0 0 1px rgba(108, 134, 168, 0.18) !important;
-}
-
-.publish-list-pagination :deep(.el-select__selected-item),
-.publish-list-pagination :deep(.el-input__inner),
-.publish-list-pagination :deep(.el-select__caret),
-.publish-list-pagination :deep(.el-input__icon) {
-    color: var(--tf-text) !important;
-}
-
-@media (max-width: 900px) {
-    .publish-detail-meta {
+    .publication-card-grid {
         grid-template-columns: 1fr;
     }
 
-    .publish-detail-meta-compact {
-        grid-template-columns: 1fr;
+    .publication-card :deep(.el-card__body) {
+        min-height: unset;
     }
-}
-
-:deep(.publish-editor-dialog.el-dialog) {
-    background: linear-gradient(160deg, rgba(4, 14, 26, 0.96), rgba(9, 24, 42, 0.97));
-    border: 1px solid rgba(74, 195, 255, 0.3);
-    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.5);
-}
-
-:deep(.publish-editor-dialog .el-dialog__header) {
-    border-bottom: 1px solid rgba(74, 195, 255, 0.2);
-    margin-right: 0;
-    padding: 16px 20px;
-}
-
-:deep(.publish-editor-dialog .el-dialog__title),
-:deep(.publish-editor-dialog .el-dialog__close),
-:deep(.publish-editor-dialog .el-form-item__label),
-:deep(.publish-editor-dialog .el-radio-button__inner) {
-    color: var(--tf-text);
-}
-
-:deep(.publish-editor-dialog .el-dialog__body) {
-    color: var(--tf-text-soft);
-    padding-top: 14px;
-}
-
-:deep(.publish-editor-dialog .publish-source-mode.el-radio-group) {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px;
-    border-radius: 12px;
-    border: 1px solid rgba(74, 195, 255, 0.34);
-    background: linear-gradient(145deg, rgba(6, 16, 30, 0.88), rgba(9, 24, 42, 0.86));
-    box-shadow: inset 0 0 0 1px rgba(103, 240, 255, 0.08);
-}
-
-:deep(.publish-editor-dialog .publish-source-mode .el-radio-button__inner) {
-    min-width: 128px;
-    padding: 10px 14px;
-    border: 0;
-    border-radius: 8px;
-    color: var(--tf-text-soft);
-    background: transparent;
-    font-weight: 600;
-    transition: all 0.2s ease;
-    box-shadow: none;
 }
 
 :deep(.publish-editor-dialog .el-form-item) {
     margin-bottom: 18px;
 }
 
-:deep(.publish-editor-dialog .publish-source-mode .el-radio-button__original-radio:checked + .el-radio-button__inner) {
-    background: linear-gradient(135deg, var(--tf-accent-strong), var(--tf-accent));
-    border-color: transparent;
-    color: #001621;
-    box-shadow: 0 8px 16px rgba(18, 120, 211, 0.32);
-}
-
-:deep(.publish-editor-dialog .publish-source-mode .el-radio-button__original-radio:not(:checked) + .el-radio-button__inner:hover) {
-    color: var(--tf-text);
-    background: rgba(31, 164, 255, 0.16);
-}
-
 :deep(.publish-editor-dialog .el-switch) {
-    --el-switch-on-color: var(--tf-accent-strong);
-    --el-switch-off-color: rgba(74, 195, 255, 0.34);
-}
-
-:deep(.publish-detail-dialog.el-dialog) {
-    background:
-        radial-gradient(circle at top right, rgba(78, 126, 188, 0.12), transparent 24%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 22%),
-        linear-gradient(160deg, rgba(6, 14, 25, 0.98), rgba(8, 16, 28, 0.97));
-    border: 1px solid rgba(88, 118, 154, 0.2);
-    border-radius: 24px;
-    box-shadow: 0 28px 60px rgba(0, 0, 0, 0.42);
-}
-
-:deep(.publish-detail-dialog .el-dialog__header) {
-    margin-right: 0;
-    padding: 18px 22px 16px;
-    border-bottom: 1px solid rgba(103, 125, 154, 0.14);
-}
-
-:deep(.publish-detail-dialog .el-dialog__title),
-:deep(.publish-detail-dialog .el-dialog__close) {
-    color: #eef5ff;
-}
-
-:deep(.publish-detail-dialog .el-dialog__title) {
-    font-size: 28px;
-    font-weight: 700;
-}
-
-:deep(.publish-detail-dialog .el-dialog__body) {
-    padding: 18px 22px 22px;
-    color: #d9e5f2;
-    max-height: 76vh;
-    overflow: auto;
-}
-
-:deep(.publish-detail-dialog .el-dialog__body::-webkit-scrollbar) {
-    width: 10px;
-}
-
-:deep(.publish-detail-dialog .el-dialog__body::-webkit-scrollbar-thumb) {
-    background: rgba(92, 137, 196, 0.9);
-    border-radius: 999px;
+    --el-switch-on-color: #409eff;
+    --el-switch-off-color: #c0c4cc;
 }
 
 @media (max-width: 960px) {
-    .publish-table-actions {
-        flex-wrap: wrap;
-    }
-
     .path-field {
         flex-direction: column;
         align-items: stretch;
+    }
+}
+
+@media (max-width: 760px) {
+    .publication-card-summary {
+        flex-wrap: wrap;
+        white-space: normal;
+    }
+
+    .publication-card-toolbar {
+        flex-wrap: wrap;
+    }
+
+    .publication-card-switch-inline {
+        width: 100%;
+        margin-left: 0;
+        padding-left: 0;
+        border-left: 0;
+        border-top: 1px solid #edf1f6;
+        padding-top: 12px;
     }
 }
 </style>

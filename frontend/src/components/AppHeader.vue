@@ -47,6 +47,10 @@ const currentTime = computed(() => now.value.toLocaleTimeString('zh-CN', { hour1
             <div class="logo">
                 <span>AtlasWorks</span>
             </div>
+            <div class="header-section-copy">
+                <strong>{{ sectionLabel }}</strong>
+                <small>{{ sectionCaption }}</small>
+            </div>
         </div>
         <div class="header-right">
             <button
