@@ -73,6 +73,8 @@ def systemInfo():
                 "memoryTotal": psutil.virtual_memory().total,
                 "memoryAvailable": psutil.virtual_memory().available,
                 "diskUsage": psutil.disk_usage("/").percent,
+                "diskTotal": psutil.disk_usage("/").total,
+                "diskFree": psutil.disk_usage("/").free,
             }
         except Exception:
             system_info["system"] = {
@@ -80,6 +82,8 @@ def systemInfo():
                 "memoryTotal": 8589934592,
                 "memoryAvailable": 4294967296,
                 "diskUsage": 50,
+                "diskTotal": 107374182400,
+                "diskFree": 53687091200,
             }
 
         with taskLock:

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 
 const props = defineProps({
     modelValue: { type: Boolean, required: true },
@@ -15,12 +15,15 @@ const emit = defineEmits(['update:modelValue', 'closed']);
 
 const drawerWidth = ref(props.width);
 const dragging = ref(false);
+const visible = ref(props.modelValue);
+const animating = ref(false);
 
 let startX = 0;
 let startWidth = 0;
+let closeTimer = null;
 
 const widthStyle = computed(() => `${drawerWidth.value}px`);
-const shouldRender = computed(() => props.modelValue || !props.destroyOnClose);
+const shouldRender = computed(() => visible.value || !props.destroyOnClose);
 
 function close() {
     emit('update:modelValue', false);
@@ -39,6 +42,13 @@ function stopDragging() {
     window.removeEventListener('mouseup', stopDragging);
     document.body.style.userSelect = '';
     document.body.style.cursor = '';
+}
+
+function stopCloseTimer() {
+    if (closeTimer) {
+        window.clearTimeout(closeTimer);
+        closeTimer = null;
+    }
 }
 
 function handleMouseMove(event) {
@@ -61,21 +71,32 @@ watch(() => props.width, value => {
 }, { immediate: true });
 
 watch(() => props.modelValue, value => {
-    if (!value) {
+    stopCloseTimer();
+    if (value) {
+        visible.value = true;
+        nextTick(() => {
+            animating.value = true;
+        });
+        return;
+    }
+    animating.value = false;
+    closeTimer = window.setTimeout(() => {
+        visible.value = false;
         stopDragging();
         emit('closed');
-    }
+    }, 220);
 });
 
 onBeforeUnmount(() => {
+    stopCloseTimer();
     stopDragging();
 });
 </script>
 
 <template>
     <Teleport to="body">
-        <div v-if="shouldRender" v-show="modelValue" class="drawer-overlay" @click.self="close">
-            <aside class="drawer-shell" :style="{ width: widthStyle }" @click.stop>
+        <div v-if="shouldRender" class="drawer-overlay" :class="{ 'is-open': animating }" @click.self="close">
+            <aside class="drawer-shell" :class="{ 'is-open': animating }" :style="{ width: widthStyle }" @click.stop>
                 <div class="drawer-resize-handle" @mousedown.prevent="startDragging"></div>
                 <header class="drawer-header">
                     <div class="drawer-header-copy">
@@ -102,9 +123,15 @@ onBeforeUnmount(() => {
     position: fixed;
     inset: 0;
     z-index: 3000;
-    background: rgba(15, 23, 42, 0.18);
+    background: var(--tf-overlay, rgba(15, 23, 42, 0.18));
     display: flex;
     justify-content: flex-end;
+    opacity: 0;
+    transition: opacity 0.22s ease;
+}
+
+.drawer-overlay.is-open {
+    opacity: 1;
 }
 
 .drawer-shell {
@@ -113,9 +140,19 @@ onBeforeUnmount(() => {
     max-width: calc(100vw - 32px);
     display: flex;
     flex-direction: column;
-    background: #ffffff;
-    border-left: 1px solid #e4e7ed;
+    background: var(--tf-surface);
+    border-left: 1px solid var(--tf-border);
     box-shadow: -12px 0 32px rgba(15, 23, 42, 0.14);
+    transform: translateX(32px);
+    opacity: 0;
+    transition:
+        transform 0.22s ease,
+        opacity 0.22s ease;
+}
+
+.drawer-shell.is-open {
+    transform: translateX(0);
+    opacity: 1;
 }
 
 .drawer-resize-handle {
@@ -134,7 +171,7 @@ onBeforeUnmount(() => {
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
-    border-bottom: 1px solid #ebeef5;
+    border-bottom: 1px solid var(--tf-border);
 }
 
 .drawer-header-copy {
@@ -146,13 +183,13 @@ onBeforeUnmount(() => {
 
 .drawer-header-copy h3 {
     margin: 0;
-    color: #303133;
+    color: var(--tf-text-primary);
     font-size: 18px;
     line-height: 1.3;
 }
 
 .drawer-header-copy span {
-    color: #909399;
+    color: var(--tf-text-muted);
     font-size: 12px;
     line-height: 1.5;
 }
@@ -160,19 +197,19 @@ onBeforeUnmount(() => {
 .drawer-close {
     width: 32px;
     height: 32px;
-    border: 1px solid #dcdfe6;
+    border: 1px solid var(--tf-border-strong);
     border-radius: 8px;
-    background: #ffffff;
-    color: #606266;
+    background: var(--tf-surface);
+    color: var(--tf-text-secondary);
     font-size: 18px;
     line-height: 1;
     cursor: pointer;
 }
 
 .drawer-close:hover {
-    border-color: #c0d7ff;
-    color: #409eff;
-    background: #f5f9ff;
+    border-color: var(--tf-accent);
+    color: var(--tf-accent);
+    background: var(--tf-accent-soft);
 }
 
 .drawer-body {
@@ -184,7 +221,7 @@ onBeforeUnmount(() => {
 
 .drawer-footer {
     padding: 14px 20px 18px;
-    border-top: 1px solid #ebeef5;
+    border-top: 1px solid var(--tf-border);
     display: flex;
     justify-content: flex-end;
     gap: 10px;

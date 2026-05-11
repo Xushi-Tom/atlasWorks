@@ -718,6 +718,20 @@ body.tf-app [id^="el-popper-container-"] > * {
     color: var(--tf-text-primary) !important;
 }
 
+.tf-app .el-descriptions__body,
+.tf-app .el-descriptions__table {
+    background: var(--tf-surface) !important;
+}
+
+.tf-app .el-alert {
+    background: var(--tf-surface) !important;
+    border: 1px solid var(--tf-border) !important;
+}
+
+.tf-app .el-alert--info.is-light {
+    background: var(--tf-surface) !important;
+}
+
 .tf-app .el-timeline-item__timestamp,
 .tf-app .el-alert__title,
 .tf-app .el-alert__description,
@@ -747,6 +761,14 @@ body.tf-app [id^="el-popper-container-"] > * {
     box-shadow: -1px 0 0 0 var(--tf-accent);
 }
 
+.tf-app .el-timeline-item__node {
+    background: var(--tf-accent);
+}
+
+.tf-app .el-timeline-item__tail {
+    border-left-color: var(--tf-border);
+}
+
 .tf-app .el-dropdown-menu,
 .tf-app .el-select-dropdown,
 .tf-app .el-picker-panel,
@@ -756,6 +778,54 @@ body.tf-app [id^="el-popper-container-"] > * {
     background: var(--tf-surface) !important;
     border-color: var(--tf-border) !important;
     color: var(--tf-text-primary) !important;
+}
+
+body.tf-app .el-select__popper,
+body.tf-app .el-select-dropdown,
+body.tf-app .el-select-dropdown__wrap,
+body.tf-app .el-select-dropdown__list,
+body.tf-app .el-popper.is-light,
+body.tf-app .el-picker__popper,
+body.tf-app .el-picker-panel,
+body.tf-app .el-date-range-picker,
+body.tf-app .el-time-panel,
+body.tf-app .el-time-spinner,
+body.tf-app .el-dropdown__popper,
+body.tf-app .el-dropdown-menu {
+    background: var(--tf-surface) !important;
+    border-color: var(--tf-border) !important;
+    color: var(--tf-text-primary) !important;
+}
+
+body.tf-app .el-select-dropdown__item,
+body.tf-app .el-dropdown-menu__item,
+body.tf-app .el-picker-panel__shortcut,
+body.tf-app .el-date-table td .el-date-table-cell__text,
+body.tf-app .el-month-table td .cell,
+body.tf-app .el-year-table td .cell {
+    color: var(--tf-text-primary) !important;
+}
+
+body.tf-app .el-select-dropdown__item.is-selected {
+    background: var(--tf-accent-soft) !important;
+    color: var(--tf-accent) !important;
+    font-weight: 600;
+}
+
+body.tf-app .el-select-dropdown__item.hover,
+body.tf-app .el-select-dropdown__item:hover,
+body.tf-app .el-dropdown-menu__item:not(.is-disabled):hover,
+body.tf-app .el-picker-panel__shortcut:hover,
+body.tf-app .el-date-table td.available:hover,
+body.tf-app .el-month-table td .cell:hover,
+body.tf-app .el-year-table td .cell:hover {
+    background: var(--tf-surface-soft) !important;
+    color: var(--tf-accent) !important;
+}
+
+body.tf-app .el-popper__arrow::before {
+    background: var(--tf-surface) !important;
+    border-color: var(--tf-border) !important;
 }
 
 .tf-app .el-dropdown-menu__item:not(.is-disabled):hover,

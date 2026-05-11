@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, ref } from 'vue';
+import { ElMessageBox } from 'element-plus';
 import { Document, Folder } from '@element-plus/icons-vue';
 
 import ResizableDrawer from '../components/ResizableDrawer.vue';
@@ -253,8 +254,13 @@ function navigateUp() {
 
 async function deleteItem(item, type) {
     const label = type === 'directory' ? '目录' : '文件';
-    if (!window.confirm(`确认删除${label}“${item.name}”吗？该操作不可恢复。`)) return;
     try {
+        await ElMessageBox.confirm(`确认删除${label}“${item.name}”吗？该操作不可恢复。`, `删除${label}`, {
+            type: 'warning',
+            confirmButtonText: '删除',
+            cancelButtonText: '取消',
+            confirmButtonClass: 'el-button--danger'
+        });
         if (type === 'directory') {
             await api.deleteDatasourceFolder(item.path);
         } else {
@@ -263,19 +269,28 @@ async function deleteItem(item, type) {
         pushToast(`${label}删除成功`, 'success');
         await loadLibrary(currentPath.value, 1, false);
     } catch (error) {
+        if (error === 'cancel' || error === 'close' || error?.message === 'cancel') return;
         pushToast(`删除${label}失败: ${error.message}`, 'error', 5000);
     }
 }
 
 async function extractArchive(file) {
-    if (!window.confirm(`确认解压“${file.name}”到当前目录吗？`)) return;
-    const extractFolderName = window.prompt('解压后文件夹名称（可选，留空使用默认）', '');
-    if (extractFolderName === null) return;
     try {
+        const { value: extractFolderName } = await ElMessageBox.prompt(
+            `确认解压“${file.name}”到当前目录，可选填写解压后的目标文件夹名称。`,
+            '解压压缩文件',
+            {
+                confirmButtonText: '开始解压',
+                cancelButtonText: '取消',
+                inputPlaceholder: '留空则使用默认名称',
+                inputValue: ''
+            }
+        );
         await api.extractArchive(file.path, 'datasource', false, extractFolderName);
         pushToast('压缩文件解压完成', 'success');
         await loadLibrary(currentPath.value, 1, false);
     } catch (error) {
+        if (error === 'cancel' || error === 'close' || error?.message === 'cancel') return;
         pushToast(`解压失败: ${error.message}`, 'error', 5000);
     }
 }
@@ -296,7 +311,7 @@ onMounted(async () => {
 
         <div ref="appScrollRef" class="app-scroll" @scroll.passive="handleBrowserScroll">
             <div class="content-stack">
-                <el-card class="standard-panel" shadow="never">
+                <el-card class="standard-panel browser-panel" shadow="never">
                     <template #header>
                         <div class="standard-browser-head">
                             <div class="standard-browser-breadcrumb">
@@ -460,20 +475,20 @@ onMounted(async () => {
 <style scoped>
 .page-banner {
     padding: 20px 22px;
-    border: 1px solid #e5eaf3;
+    border: 1px solid var(--tf-border);
     border-radius: 16px;
-    background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+    background: linear-gradient(180deg, var(--tf-surface) 0%, var(--tf-surface-soft) 100%);
 }
 
 .page-banner__title {
-    color: #1f2d3d;
+    color: var(--tf-text-primary);
     font-size: 18px;
     font-weight: 700;
 }
 
 .page-banner__desc {
     margin-top: 6px;
-    color: #6b7280;
+    color: var(--tf-text-secondary);
     font-size: 13px;
     line-height: 1.7;
 }
@@ -497,11 +512,11 @@ onMounted(async () => {
 }
 
 .browser-name-icon.is-folder {
-    color: #e6a23c;
+    color: var(--el-color-warning);
 }
 
 .browser-name-icon.is-file {
-    color: #5b8ff9;
+    color: var(--tf-accent);
 }
 
 .browser-name-copy {
@@ -509,7 +524,7 @@ onMounted(async () => {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    color: #101828;
+    color: var(--tf-text-primary);
     font-weight: 600;
 }
 
@@ -525,7 +540,19 @@ onMounted(async () => {
     display: flex;
     justify-content: flex-end;
     gap: 16px;
-    color: #667085;
+    color: var(--tf-text-muted);
     font-size: 13px;
+}
+
+.browser-panel {
+    overflow: visible;
+}
+
+.browser-panel :deep(.el-card__header) {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--tf-surface);
+    border-bottom: 1px solid var(--tf-border);
 }
 </style>

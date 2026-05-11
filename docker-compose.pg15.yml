@@ -86,7 +86,7 @@ services:
       # 发布地址完整覆盖（为空则按其他规则计算）
       - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLIC_BASE_URL:-}
       # 发布地址主机名/IP（默认写死，可按需覆盖）
-      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-10.168.1.113}
+      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-localhost}
       # 发布地址解析模式（request_host/auto 等）
       - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
       # 发布地址端口
@@ -436,7 +436,7 @@ services:
       # 发布访问地址完整覆盖；为空时按主机、端口和请求信息自动计算
       - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_URL:-}
       # 生成发布访问地址时使用的主机 IP 或域名
-      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-10.168.1.113}
+      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-localhost}
       # 发布访问地址解析模式，request_host 表示优先使用请求 Host
       - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
       # 生成发布访问地址时使用的端口

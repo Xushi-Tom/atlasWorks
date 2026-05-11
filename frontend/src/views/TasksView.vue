@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref } from 'vue';
+import { ElMessageBox } from 'element-plus';
 
 import ResizableDrawer from '../components/ResizableDrawer.vue';
 import { api } from '../services/api';
@@ -7,7 +8,7 @@ import { formatDateTime } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
 
 const tasks = ref([]);
-const keyword = ref('');
+const statusFilter = ref('');
 const dateRange = ref([]);
 const currentPage = ref(1);
 const pageSize = ref(20);
@@ -81,6 +82,20 @@ function formatEventType(eventType) {
         .join(' / ');
 }
 
+function getTaskSummaryStats(task) {
+    const result = task?.result || {};
+    return [
+        { label: '执行进度', value: `${formatProgress(task?.progress)}%` },
+        { label: '当前阶段', value: task?.currentStage || '等待回传' },
+        { label: '任务类型', value: inferTaskType(task) },
+        { label: '产物 ID', value: result?.artifactId || '-' },
+        { label: '输出目录', value: result?.outputPath || '-' },
+        { label: '结束时间', value: formatDateTime(task?.endTime) },
+        Number.isFinite(Number(result?.completedFiles)) ? { label: '成功文件', value: Number(result.completedFiles) } : null,
+        Number.isFinite(Number(result?.failedFiles)) && Number(result.failedFiles) > 0 ? { label: '失败文件', value: Number(result.failedFiles) } : null
+    ].filter(item => item && item.value !== '' && item.value !== null && item.value !== undefined && item.value !== '-');
+}
+
 const visibleTasks = computed(() => {
     const offset = (currentPage.value - 1) * pageSize.value;
     return tasks.value.map((task, index) => ({ ...task, orderNo: offset + index + 1 }));
@@ -91,7 +106,7 @@ async function load() {
         const taskResponse = await api.getAllTasks({
             page: currentPage.value,
             pageSize: pageSize.value,
-            keyword: String(keyword.value || '').trim() || undefined,
+            status: String(statusFilter.value || '').trim() || undefined,
             dateFrom: dateRange.value?.[0] || undefined,
             dateTo: dateRange.value?.[1] || undefined
         });
@@ -105,6 +120,11 @@ async function load() {
     }
 }
 
+function applyFilters() {
+    currentPage.value = 1;
+    load();
+}
+
 function handlePageChange(page) {
     currentPage.value = page;
     load();
@@ -114,16 +134,6 @@ function handlePageSizeChange(size) {
     pageSize.value = size;
     currentPage.value = 1;
     load();
-}
-
-function scheduleLoad() {
-    if (loadTimer) {
-        window.clearTimeout(loadTimer);
-    }
-    loadTimer = window.setTimeout(() => {
-        loadTimer = null;
-        load();
-    }, 250);
 }
 
 async function openDetail(task) {
@@ -159,27 +169,22 @@ async function stopTask(taskId) {
 
 async function removeTask(taskId) {
     try {
+        await ElMessageBox.confirm('确认删除这个任务吗？删除后不可恢复。', '删除任务', {
+            type: 'warning',
+            confirmButtonText: '删除',
+            cancelButtonText: '取消',
+            confirmButtonClass: 'el-button--danger'
+        });
         await api.deleteTask(taskId);
         pushToast('任务已删除', 'success');
         await load();
     } catch (error) {
+        if (error === 'cancel' || error === 'close' || error?.message === 'cancel') return;
         pushToast(`删除任务失败: ${error.message}`, 'error', 4500);
     }
 }
 
 onMounted(load);
-
-watch([keyword, dateRange], () => {
-    currentPage.value = 1;
-    scheduleLoad();
-}, { deep: true });
-
-onBeforeUnmount(() => {
-    if (loadTimer) {
-        window.clearTimeout(loadTimer);
-        loadTimer = null;
-    }
-});
 </script>
 
 <template>
@@ -196,24 +201,32 @@ onBeforeUnmount(() => {
 
         <div class="app-scroll">
             <div class="layui-panel">
-                <div class="layui-toolbar">
-                    <div class="layui-toolbar-left">
-                        <el-input
-                            v-model="keyword"
-                            clearable
-                            placeholder="任务 ID / 状态 / 阶段 / 结果路径"
-                            class="layui-search-input"
-                        />
-                        <el-date-picker
-                            v-model="dateRange"
-                            type="daterange"
-                            range-separator="—"
-                            start-placeholder="开始日期"
-                            end-placeholder="结束日期"
-                            value-format="YYYY-MM-DD"
-                            class="layui-date-input"
-                        />
-                    </div>
+                <div class="layui-toolbar" @keydown.capture.enter.prevent="applyFilters">
+                    <el-form class="layui-filter-form" @submit.prevent="applyFilters">
+                        <div class="layui-filter-item">
+                            <span class="layui-filter-label">状态：</span>
+                            <el-select v-model="statusFilter" clearable placeholder="全部状态" class="layui-filter-control layui-filter-status">
+                                <el-option label="排队中" value="queued" />
+                                <el-option label="运行中" value="running" />
+                                <el-option label="已完成" value="completed" />
+                                <el-option label="失败" value="failed" />
+                                <el-option label="已停止" value="stopped" />
+                            </el-select>
+                        </div>
+                        <div class="layui-filter-item">
+                            <span class="layui-filter-label">时间：</span>
+                            <el-date-picker
+                                v-model="dateRange"
+                                type="daterange"
+                                range-separator="—"
+                                start-placeholder="开始日期"
+                                end-placeholder="结束日期"
+                                value-format="YYYY-MM-DD"
+                                class="layui-filter-control layui-filter-date"
+                            />
+                        </div>
+                        <el-button type="primary" native-type="submit">搜索</el-button>
+                    </el-form>
                 </div>
 
                 <div class="layui-table-wrap">
@@ -294,51 +307,52 @@ onBeforeUnmount(() => {
         <ResizableDrawer v-model="detailVisible" title="任务详情" :width="980" :min-width="620" :max-width="1360" destroy-on-close>
             <div v-if="detailLoading" class="dialog-loading-text">正在加载任务详情...</div>
             <template v-else-if="selectedTask">
-                <div class="standard-detail-stack">
-                    <div class="standard-detail-head">
-                        <div>
-                            <div class="standard-detail-id">{{ selectedTask.taskId || '-' }}</div>
-                            <div class="standard-detail-meta">
+                <div class="task-detail-shell">
+                    <div class="task-detail-hero">
+                        <div class="task-detail-hero-main">
+                            <div class="task-detail-id">{{ selectedTask.taskId || '-' }}</div>
+                            <div class="task-detail-meta">
                                 <el-tag :type="getStatusTagType(selectedTask.status)">{{ getStatusLabel(selectedTask.status) }}</el-tag>
                                 <span>{{ inferTaskType(selectedTask) }}</span>
                                 <span>阶段：{{ selectedTask.currentStage || '等待回传' }}</span>
                                 <span>开始：{{ formatDateTime(selectedTask.startTime) }}</span>
                             </div>
                         </div>
-                        <div class="standard-detail-progress">
-                            <span>执行进度</span>
-                            <el-progress :percentage="formatProgress(selectedTask.progress)" :stroke-width="14" />
+                    </div>
+
+                    <div class="task-detail-card task-detail-card--summary">
+                        <div class="task-detail-card-title">核心信息</div>
+                        <div class="task-detail-progress-panel">
+                            <div class="task-detail-progress-row">
+                                <el-progress :percentage="formatProgress(selectedTask.progress)" :stroke-width="14" :show-text="false" />
+                                <strong>{{ formatProgress(selectedTask.progress) }}%</strong>
+                            </div>
+                        </div>
+                        <div class="task-detail-summary-stack">
+                            <div v-for="item in getTaskSummaryStats(selectedTask)" :key="item.label" class="task-detail-summary-item">
+                                <span>{{ item.label }}</span>
+                                <strong>{{ item.value || '-' }}</strong>
+                            </div>
+                        </div>
+                        <div class="task-detail-message-panel">
+                            <span>过程说明</span>
+                            <strong>{{ selectedTask.message || '暂无过程说明' }}</strong>
                         </div>
                     </div>
 
-                    <el-descriptions :column="2" border>
-                        <el-descriptions-item label="当前阶段">{{ selectedTask.currentStage || '等待回传' }}</el-descriptions-item>
-                        <el-descriptions-item label="结束时间">{{ formatDateTime(selectedTask.endTime) }}</el-descriptions-item>
-                        <el-descriptions-item label="产物 ID">{{ selectedTask.result?.artifactId || '-' }}</el-descriptions-item>
-                        <el-descriptions-item label="成功文件">{{ selectedTask.result?.completedFiles ?? 0 }}</el-descriptions-item>
-                        <el-descriptions-item label="失败文件">{{ selectedTask.result?.failedFiles ?? 0 }}</el-descriptions-item>
-                        <el-descriptions-item label="任务类型">{{ inferTaskType(selectedTask) }}</el-descriptions-item>
-                        <el-descriptions-item label="输出目录" :span="2">{{ selectedTask.result?.outputPath || '-' }}</el-descriptions-item>
-                        <el-descriptions-item label="合并输出" :span="2">{{ selectedTask.result?.mergedOutputPath || '-' }}</el-descriptions-item>
-                    </el-descriptions>
-
-                    <el-alert
-                        :title="selectedTask.message || '暂无过程说明'"
-                        type="info"
-                        :closable="false"
-                        show-icon
-                    />
-
-                    <div v-if="taskEvents.length">
-                        <div class="standard-block-title">最近过程信息</div>
-                        <el-timeline>
+                    <div v-if="taskEvents.length" class="task-detail-card">
+                        <div class="task-detail-card-title">最近过程信息</div>
+                        <el-timeline class="task-detail-native-timeline">
                             <el-timeline-item
                                 v-for="event in taskEvents.slice(0, 12)"
                                 :key="event.id || `${event.eventType}-${event.eventAt}`"
                                 :timestamp="formatDateTime(event.eventAt)"
+                                placement="top"
                             >
-                                <strong>{{ formatEventType(event.eventType) }}</strong>
-                                <div>{{ event.details?.message || event.details?.stage || event.details?.status || '过程已记录' }}</div>
+                                <div class="task-detail-timeline-card">
+                                    <strong>{{ formatEventType(event.eventType) }}</strong>
+                                    <div>{{ event.details?.message || event.details?.stage || event.details?.status || '过程已记录' }}</div>
+                                </div>
                             </el-timeline-item>
                         </el-timeline>
                     </div>
@@ -399,31 +413,46 @@ onBeforeUnmount(() => {
 .layui-toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 12px;
     padding: 18px 20px;
     border-bottom: 1px solid var(--tf-border);
     background: var(--tf-surface-soft);
-    flex-wrap: wrap;
     flex-shrink: 0;
 }
 
-.layui-toolbar-left {
+.layui-filter-form {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
     flex-wrap: wrap;
     flex: 1;
     min-width: 0;
 }
 
-.layui-search-input {
-    width: 340px;
+.layui-filter-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.layui-filter-label {
+    color: var(--tf-text-secondary);
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.layui-filter-control {
     max-width: 100%;
 }
 
-.layui-date-input {
-    max-width: 100%;
+.layui-filter-status {
+    width: 180px;
+}
+
+.layui-filter-date {
+    width: 360px;
 }
 
 .layui-table-wrap {
@@ -655,14 +684,24 @@ onBeforeUnmount(() => {
     gap: 16px;
 }
 
-.standard-detail-head {
+.task-detail-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.task-detail-hero {
     display: flex;
     align-items: flex-start;
-    justify-content: space-between;
     gap: 16px;
 }
 
-.standard-detail-id {
+.task-detail-hero-main {
+    min-width: 0;
+    flex: 1;
+}
+
+.task-detail-id {
     font-size: 18px;
     font-weight: 700;
     color: var(--tf-text-primary);
@@ -670,7 +709,7 @@ onBeforeUnmount(() => {
     word-break: break-word;
 }
 
-.standard-detail-meta {
+.task-detail-meta {
     margin-top: 8px;
     display: flex;
     align-items: center;
@@ -680,37 +719,127 @@ onBeforeUnmount(() => {
     font-size: 13px;
 }
 
-.standard-detail-progress {
-    min-width: 280px;
+.task-detail-card {
+    border: 1px solid var(--tf-border);
+    border-radius: 16px;
+    background: var(--tf-surface-soft);
 }
 
-.standard-detail-progress span {
+.task-detail-card-title {
     display: block;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
     color: var(--tf-text-secondary);
     font-size: 13px;
+    font-weight: 600;
 }
 
-.standard-block-title {
-    margin-bottom: 10px;
-    font-size: 14px;
-    font-weight: 600;
+.task-detail-progress-panel {
+    margin-bottom: 14px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--tf-surface);
+    border: 1px solid var(--tf-border);
+}
+
+.task-detail-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.task-detail-progress-row :deep(.el-progress) {
+    flex: 1;
+}
+
+.task-detail-progress-row strong {
     color: var(--tf-text-primary);
+    font-size: 18px;
+    line-height: 1;
+}
+
+.task-detail-card {
+    padding: 18px;
+}
+
+.task-detail-summary-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.task-detail-message-panel {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--tf-surface);
+    border: 1px solid var(--tf-border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.task-detail-summary-item {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--tf-surface);
+    border: 1px solid var(--tf-border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.task-detail-summary-item span {
+    color: var(--tf-text-muted);
+    font-size: 12px;
+}
+
+.task-detail-message-panel span {
+    color: var(--tf-text-muted);
+    font-size: 12px;
+}
+
+.task-detail-summary-item strong,
+.task-detail-message-panel strong,
+.task-detail-timeline-card strong {
+    color: var(--tf-text-primary);
+    font-size: 14px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.task-detail-native-timeline {
+    margin-top: 4px;
+}
+
+.task-detail-timeline-card {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--tf-surface);
+    border: 1px solid var(--tf-border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--tf-text-secondary);
+    line-height: 1.6;
+}
+
+.task-detail-native-timeline :deep(.el-timeline-item__node) {
+    background: var(--tf-accent);
+    box-shadow: 0 0 0 4px var(--tf-accent-soft);
+}
+
+.task-detail-native-timeline :deep(.el-timeline-item__tail) {
+    border-left-color: var(--tf-border);
+}
+
+.task-detail-native-timeline :deep(.el-timeline-item__timestamp) {
+    color: var(--tf-text-muted);
 }
 
 @media (max-width: 960px) {
     .page-banner {
         flex-direction: column;
         align-items: stretch;
-    }
-
-    .standard-detail-head {
-        flex-direction: column;
-    }
-
-    .standard-detail-progress {
-        min-width: 0;
-        width: 100%;
     }
 
     .layui-search-input {

@@ -30,7 +30,7 @@ from db import (
     upsertPublicationRecord,
 )
 from pagination import paginate_items, parse_pagination_args
-from utils import logMessage, validateDataSourcePath, validateWorkspacePath
+from utils import logMessage, normalizeProjection, validateDataSourcePath, validateWorkspacePath
 
 
 PUBLICATIONS_DIRNAME = "_publications"
@@ -262,6 +262,13 @@ def _extract_tile_profile_from_manifest(manifest):
     )
     if tile_scheme:
         profile["sourceTileScheme"] = _normalize_tile_scheme(tile_scheme)
+    projection = _first_non_blank(
+        render_options.get("projection"),
+        result_summary.get("projection"),
+        build_parameters.get("projection"),
+    )
+    if projection:
+        profile["sourceProjection"] = normalizeProjection(projection)
     if image_format:
         profile["tileExtension"] = ".jpg" if image_format in {"jpg", "jpeg"} else f".{image_format}"
     return profile
@@ -286,6 +293,15 @@ def _resolve_tile_publish_profile(full_path, metadata=None, artifact=None):
     )
     if stored_scheme:
         profile["sourceTileScheme"] = _normalize_tile_scheme(stored_scheme)
+    stored_projection = _first_non_blank(
+        metadata.get("sourceProjection"),
+        custom_metadata.get("sourceProjection"),
+        artifact_render_options.get("projection"),
+        artifact_result.get("projection"),
+        artifact_build_parameters.get("projection"),
+    )
+    if stored_projection:
+        profile["sourceProjection"] = normalizeProjection(stored_projection)
 
     stored_extension = _first_non_blank(
         metadata.get("tileExtension"),
@@ -305,6 +321,8 @@ def _resolve_tile_publish_profile(full_path, metadata=None, artifact=None):
             render_options = _safe_dict(tile_metadata.get("renderOptions"))
             if not profile.get("sourceTileScheme") and render_options.get("tileScheme"):
                 profile["sourceTileScheme"] = _normalize_tile_scheme(render_options.get("tileScheme"))
+            if not profile.get("sourceProjection") and render_options.get("projection"):
+                profile["sourceProjection"] = normalizeProjection(render_options.get("projection"))
             if not profile.get("tileExtension"):
                 image_format = str(render_options.get("imageFormat") or "").strip().lower()
                 if image_format:
@@ -335,6 +353,7 @@ def _resolve_tile_publish_profile(full_path, metadata=None, artifact=None):
         profile.setdefault("tileExtension", str(tile_info.get("extension") or "").strip().lower())
 
     profile["sourceTileScheme"] = _normalize_tile_scheme(profile.get("sourceTileScheme"))
+    profile["sourceProjection"] = normalizeProjection(profile.get("sourceProjection")) if profile.get("sourceProjection") else ""
     profile["tileExtension"] = str(profile.get("tileExtension") or "").strip().lower()
     if profile["tileExtension"] and not profile["tileExtension"].startswith("."):
         profile["tileExtension"] = f".{profile['tileExtension']}"
@@ -562,32 +581,44 @@ def _find_tile_template_info(full_path):
     if not os.path.isdir(full_path):
         return None
 
-    for zoom_name in sorted(os.listdir(full_path), key=lambda value: (not str(value).isdigit(), str(value))):
-        if not str(zoom_name).isdigit():
-            continue
+    zoom_names = sorted(
+        [name for name in os.listdir(full_path) if str(name).isdigit()],
+        key=lambda value: int(value),
+        reverse=True,
+    )
+    for zoom_name in zoom_names:
         zoom_dir = os.path.join(full_path, str(zoom_name))
         if not os.path.isdir(zoom_dir):
             continue
 
-        for x_name in sorted(os.listdir(zoom_dir), key=lambda value: (not str(value).isdigit(), str(value))):
-            if not str(x_name).isdigit():
-                continue
-            x_dir = os.path.join(zoom_dir, str(x_name))
-            if not os.path.isdir(x_dir):
-                continue
+        x_names = sorted(
+            [name for name in os.listdir(zoom_dir) if str(name).isdigit() and os.path.isdir(os.path.join(zoom_dir, str(name)))],
+            key=lambda value: int(value),
+        )
+        if not x_names:
+            continue
 
-            for filename in sorted(os.listdir(x_dir)):
-                if filename.endswith(".aux.xml"):
-                    continue
-                stem, extension = os.path.splitext(filename)
-                if not stem.isdigit() or not extension:
-                    continue
-                return {
-                    "extension": extension,
-                    "zoom": str(zoom_name),
-                    "x": str(x_name),
-                    "y": stem,
-                }
+        x_name = x_names[len(x_names) // 2]
+        x_dir = os.path.join(zoom_dir, str(x_name))
+        tile_candidates = []
+        for filename in sorted(os.listdir(x_dir)):
+            if filename.endswith(".aux.xml"):
+                continue
+            stem, extension = os.path.splitext(filename)
+            if not stem.isdigit() or not extension:
+                continue
+            tile_candidates.append((stem, extension))
+
+        if not tile_candidates:
+            continue
+
+        y_name, extension = tile_candidates[len(tile_candidates) // 2]
+        return {
+            "extension": extension,
+            "zoom": str(zoom_name),
+            "x": str(x_name),
+            "y": y_name,
+        }
     return None
 
 
@@ -1140,6 +1171,15 @@ def _augment_publication_response(payload, include_runtime_state=True, include_v
     publish_method = str(response.get("publishMethod") or metadata.get("publishMethod") or "").strip().lower()
     publish_type = str(response.get("publishType") or "").strip().lower()
     publish_path = response.get("publishPath") or metadata.get("workspacePath")
+    if publish_path and not metadata.get("sourceProjection"):
+        try:
+            _, full_path = _resolve_tiles_path(publish_path)
+            tile_profile = _resolve_tile_publish_profile(full_path, metadata=metadata)
+            if tile_profile.get("sourceProjection"):
+                metadata["sourceProjection"] = tile_profile.get("sourceProjection")
+        except Exception as exc:
+            logMessage(f"补充发布投影信息失败: {publish_path} - {exc}", "WARNING")
+    response["sourceProjection"] = metadata.get("sourceProjection") or ""
     is_vector_tile_publish = publish_method in {"mvt", "vector-tile", "vector-tiles", "geojson-tile", "geojson-tiles"} or publish_type == "vector"
     if include_vector_details and is_vector_tile_publish and publish_path:
         try:
@@ -1644,6 +1684,11 @@ def _prepare_publication_payload(data, existing_publication=None):
             existing_custom_metadata.get("sourceTileScheme"),
         )
     )
+    source_projection = _first_non_blank(
+        incoming_custom_metadata.get("sourceProjection"),
+        tile_profile.get("sourceProjection"),
+        existing_custom_metadata.get("sourceProjection"),
+    )
     tile_extension = _first_non_blank(
         incoming_custom_metadata.get("tileExtension"),
         tile_profile.get("tileExtension"),
@@ -1651,11 +1696,19 @@ def _prepare_publication_payload(data, existing_publication=None):
     )
     if source_tile_scheme:
         custom_metadata["sourceTileScheme"] = source_tile_scheme
+    if source_projection:
+        custom_metadata["sourceProjection"] = normalizeProjection(source_projection)
     if tile_extension:
         custom_metadata["tileExtension"] = tile_extension
 
-    # Persist an explicit timezone-aware timestamp to avoid frontend double-shifting.
-    published_at = datetime.now(timezone.utc).isoformat()
+    # Keep publish order stable on update: only initial creation should define publishedAt.
+    # Later edits such as enable/disable should refresh updatedAt but not change publishedAt.
+    published_at = (
+        existing_publication.get("publishedAt")
+        or existing_publication.get("createdAt")
+        or datetime.now(timezone.utc).isoformat()
+    )
+    updated_at = datetime.now(timezone.utc).isoformat()
     existing_build_state = _safe_dict(existing_metadata.get("buildState"))
     default_build_state = {
         "state": "pending" if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else "ready",
@@ -1674,7 +1727,7 @@ def _prepare_publication_payload(data, existing_publication=None):
                 "progress": 100,
                 "message": "已就绪",
                 "error": None,
-                "updatedAt": published_at,
+                "updatedAt": updated_at,
             }
     descriptor = {
         "id": publication_id,
@@ -1685,6 +1738,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         "status": "enabled" if enabled else "disabled",
         "publishedAt": published_at,
         "createdAt": existing_publication.get("createdAt") or published_at,
+        "updatedAt": updated_at,
         "metadata": {
             "artifactOutputPath": artifact.get("outputPath") if artifact else existing_metadata.get("artifactOutputPath"),
             "manifestPath": artifact.get("manifestPath") if artifact else existing_metadata.get("manifestPath"),
@@ -1712,6 +1766,7 @@ def _prepare_publication_payload(data, existing_publication=None):
             "note": note,
             "enabled": enabled,
             "sourceTileScheme": source_tile_scheme,
+            "sourceProjection": normalizeProjection(source_projection) if source_projection else None,
             "tileExtension": tile_extension,
             "buildState": build_state,
             "customMetadata": custom_metadata,
@@ -1859,6 +1914,11 @@ def _publication_record_to_response(record, include_runtime_state=True, include_
         should_refresh_urls = True
     if not should_refresh_urls and stored_access and computed_access and stored_access != computed_access:
         should_refresh_urls = True
+    if not should_refresh_urls:
+        stored_sample = str(record.get("sampleUrl") or "").strip()
+        computed_sample = str(computed_access_payload.get("sampleUrl") or "").strip()
+        if stored_sample and computed_sample and stored_sample != computed_sample:
+            should_refresh_urls = True
 
     if should_refresh_urls:
         response.update(computed_access_payload)

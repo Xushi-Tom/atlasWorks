@@ -299,6 +299,9 @@ async function submit() {
 }
 
 .tile-page-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -307,6 +310,7 @@ async function submit() {
     border: 1px solid var(--tf-border);
     border-radius: 16px;
     background: var(--tf-surface);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 
 .tile-page-toolbar__title {

@@ -49,6 +49,37 @@ const diskUsage = computed(() => {
     return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0;
 });
 
+const memoryUsed = computed(() => {
+    const total = Number(systemInfo.value?.system?.memoryTotal || 0);
+    const available = Number(systemInfo.value?.system?.memoryAvailable || 0);
+    return total > 0 ? Math.max(0, total - available) : 0;
+});
+
+const diskTotal = computed(() => Number(systemInfo.value?.system?.diskTotal || 0));
+const diskFree = computed(() => Number(systemInfo.value?.system?.diskFree || 0));
+const diskUsed = computed(() => {
+    const total = diskTotal.value;
+    const free = diskFree.value;
+    return total > 0 ? Math.max(0, total - free) : 0;
+});
+
+function translateHealthStatus(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return '未知';
+    if (normalized === 'ok' || normalized === 'healthy') return '正常';
+    if (normalized === 'warning' || normalized === 'degraded') return '告警';
+    if (normalized === 'error' || normalized === 'failed' || normalized === 'unhealthy') return '异常';
+    return value;
+}
+
+function healthTagType(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'ok' || normalized === 'healthy') return 'success';
+    if (normalized === 'warning' || normalized === 'degraded') return 'warning';
+    if (normalized === 'error' || normalized === 'failed' || normalized === 'unhealthy') return 'danger';
+    return 'info';
+}
+
 async function load() {
     loading.value = true;
     try {
@@ -103,8 +134,8 @@ onMounted(load);
                         <template #header>
                             <div class="dashboard-card__head">
                                 <span>服务健康</span>
-                                <el-tag :type="health?.status === 'ok' ? 'success' : 'warning'" effect="light">
-                                    {{ health?.status || 'unknown' }}
+                                <el-tag class="dashboard-status-tag" :type="healthTagType(health?.status)" effect="light">
+                                    {{ translateHealthStatus(health?.status) }}
                                 </el-tag>
                             </div>
                         </template>
@@ -115,7 +146,7 @@ onMounted(load);
                         <div v-else class="kv-stack">
                             <div class="kv-row">
                                 <span>数据库</span>
-                                <strong>{{ health?.database?.status || '-' }}</strong>
+                                <strong>{{ translateHealthStatus(health?.database?.status) }}</strong>
                             </div>
                             <div class="kv-row">
                                 <span>运行中任务</span>
@@ -149,23 +180,32 @@ onMounted(load);
                                     <span>内存占用</span>
                                     <strong>{{ memoryUsage }}%</strong>
                                 </div>
-                                <el-progress :percentage="memoryUsage" :stroke-width="10" />
+                                <el-progress :percentage="memoryUsage" :stroke-width="10" :show-text="false" />
                                 <div class="resource-row__desc">
-                                    {{ formatBytes(systemInfo?.system?.memoryTotal - systemInfo?.system?.memoryAvailable) }}
+                                    {{ formatBytes(memoryUsed) }}
                                     /
                                     {{ formatBytes(systemInfo?.system?.memoryTotal) }}
                                 </div>
+                            </div>
+                            <div class="resource-foot">
+                                <span>可用内存</span>
+                                <strong>{{ formatBytes(systemInfo?.system?.memoryAvailable) }}</strong>
                             </div>
                             <div class="resource-row">
                                 <div class="resource-row__head">
                                     <span>磁盘占用</span>
                                     <strong>{{ diskUsage }}%</strong>
                                 </div>
-                                <el-progress :percentage="diskUsage" :stroke-width="10" status="warning" />
+                                <el-progress :percentage="diskUsage" :stroke-width="10" status="warning" :show-text="false" />
+                                <div class="resource-row__desc">
+                                    {{ formatBytes(diskUsed) }}
+                                    /
+                                    {{ formatBytes(diskTotal) }}
+                                </div>
                             </div>
                             <div class="resource-foot">
-                                <span>可用内存</span>
-                                <strong>{{ formatBytes(systemInfo?.system?.memoryAvailable) }}</strong>
+                                <span>剩余磁盘</span>
+                                <strong>{{ formatBytes(diskFree) }}</strong>
                             </div>
                         </div>
                     </el-card>
@@ -218,6 +258,9 @@ onMounted(load);
 }
 
 .dashboard-hero {
+    position: sticky;
+    top: 0;
+    z-index: 25;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -314,6 +357,37 @@ onMounted(load);
     color: var(--tf-text-muted);
     font-size: 12px;
     font-weight: 500;
+}
+
+.dashboard-card :deep(.dashboard-status-tag.el-tag) {
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-weight: 600;
+}
+
+.dashboard-card :deep(.dashboard-status-tag.el-tag--success.el-tag--light) {
+    background: rgba(34, 197, 94, 0.14);
+    border-color: rgba(34, 197, 94, 0.28);
+    color: #4ade80;
+}
+
+.dashboard-card :deep(.dashboard-status-tag.el-tag--warning.el-tag--light) {
+    background: rgba(245, 158, 11, 0.16);
+    border-color: rgba(245, 158, 11, 0.3);
+    color: #fbbf24;
+}
+
+.dashboard-card :deep(.dashboard-status-tag.el-tag--danger.el-tag--light) {
+    background: rgba(239, 68, 68, 0.16);
+    border-color: rgba(239, 68, 68, 0.28);
+    color: #f87171;
+}
+
+.dashboard-card :deep(.dashboard-status-tag.el-tag--info.el-tag--light) {
+    background: rgba(148, 163, 184, 0.14);
+    border-color: rgba(148, 163, 184, 0.22);
+    color: #cbd5e1;
 }
 
 .dashboard-loading {
