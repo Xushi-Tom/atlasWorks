@@ -482,7 +482,36 @@ async function loadPublicationDetail(publicationId) {
     detailLoading.value = true;
     try {
         const response = await api.getPublication(normalizedId);
-        detailPublication.value = response?.data?.publication || detailPublication.value;
+        const publication = response?.data?.publication || detailPublication.value;
+        if (
+            publication
+            && TITILER_METHODS.includes(String(publication?.publishMethod || publication?.metadata?.publishMethod || '').toLowerCase())
+            && publication?.launchUrl
+        ) {
+            const tileJsonUrl = resolveInteractiveUrl(publication.launchUrl);
+            let tileJsonSummary = null;
+            try {
+                const tileJsonResponse = await fetch(tileJsonUrl);
+                if (tileJsonResponse.ok) {
+                    const tileJsonPayload = await tileJsonResponse.json();
+                    tileJsonSummary = {
+                        minzoom: Number.isFinite(Number(tileJsonPayload?.minzoom)) ? Number(tileJsonPayload.minzoom) : null,
+                        maxzoom: Number.isFinite(Number(tileJsonPayload?.maxzoom)) ? Number(tileJsonPayload.maxzoom) : null,
+                        bounds: Array.isArray(tileJsonPayload?.bounds) && tileJsonPayload.bounds.length === 4 ? tileJsonPayload.bounds : null,
+                        center: Array.isArray(tileJsonPayload?.center) && tileJsonPayload.center.length >= 3 ? tileJsonPayload.center : null,
+                        scheme: String(tileJsonPayload?.scheme || '').trim().toLowerCase() || null
+                    };
+                }
+            } catch (tileJsonError) {
+                console.warn('Load TiTiler TileJSON failed:', tileJsonError);
+            }
+            detailPublication.value = {
+                ...publication,
+                tileJsonSummary
+            };
+        } else {
+            detailPublication.value = publication;
+        }
     } catch (error) {
         pushToast(`发布详情加载失败: ${error.message}`, 'error', 4500);
     } finally {
@@ -629,6 +658,7 @@ function getPublicationGuide(item) {
             });
         }
     } else if (publishMethod.includes('titiler')) {
+        const tileJsonSummary = item?.tileJsonSummary || {};
         if (item.launchUrl) {
             endpoints.push({
                 key: 'tilejson',
@@ -664,6 +694,18 @@ function getPublicationGuide(item) {
             key: 'imagery-scheme',
             label: '行号规则',
             value: getSourceTileScheme(item)
+        });
+        metadataRows.push({
+            key: 'imagery-zoom',
+            label: '层级范围',
+            value: tileJsonSummary.minzoom !== null && tileJsonSummary.maxzoom !== null
+                ? `${tileJsonSummary.minzoom} - ${tileJsonSummary.maxzoom}`
+                : '-'
+        });
+        metadataRows.push({
+            key: 'imagery-bounds',
+            label: '数据范围',
+            value: formatBounds(tileJsonSummary.bounds)
         });
         concepts.push({
             title: 'TileJSON 是什么',
