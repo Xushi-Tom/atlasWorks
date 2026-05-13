@@ -7,7 +7,7 @@ from apiDocs import getOpenApiSpec, getSwaggerUi
 from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, servePublicationAsset, servePublishedPath, serveWmts, togglePublicationEnabled, updatePublication
 from dataSourceOps import getDataSourceInfo, getDataSourceWorkspaceInfo, listDataSources, recommendConfig, resolveDataSourceFiles, serveDataSourceFile
 from fileSplitOps import splitLargeFile
-from geoserverOps import geoserverDeleteLayer, geoserverHealth, geoserverLayerDetail, geoserverListLayers, geoserverPublish, geoserverSeed
+from geoserverOps import geoserverCancelSeed, geoserverDeleteLayer, geoserverHealth, geoserverLayerDetail, geoserverListLayers, geoserverPublish, geoserverSeed, geoserverSeedStatus
 from indexedTilesOps import createIndexedTiles, deleteNodataTiles, scanNodataTiles
 from preflight import runPreflightCheck
 from systemOps import healthCheck, listApiRoutes, systemInfo, updateContainerInfo
@@ -98,6 +98,8 @@ def registerRoutes(app):
     app.add_url_rule("/api/geoserver/layers/<name>", endpoint="geoserver_layer_detail", view_func=geoserverLayerDetail, methods=["GET"])
     app.add_url_rule("/api/geoserver/layers/<name>", endpoint="geoserver_layer_delete", view_func=geoserverDeleteLayer, methods=["DELETE"])
     app.add_url_rule("/api/geoserver/layers/<name>/seed", endpoint="geoserver_layer_seed", view_func=geoserverSeed, methods=["POST"])
+    app.add_url_rule("/api/geoserver/layers/<name>/seed", endpoint="geoserver_layer_seed_status", view_func=geoserverSeedStatus, methods=["GET"])
+    app.add_url_rule("/api/geoserver/layers/<name>/seed/cancel", endpoint="geoserver_layer_seed_cancel", view_func=geoserverCancelSeed, methods=["POST"])
     app.add_url_rule("/publication-assets/<publication_id>", endpoint="published_publication_root", view_func=servePublicationAsset, defaults={"relative_path": ""}, methods=["GET"])
     app.add_url_rule("/publication-assets/<publication_id>/<path:relative_path>", endpoint="published_publication_asset", view_func=servePublicationAsset, methods=["GET"])
     app.add_url_rule("/published", endpoint="published_root", view_func=servePublishedPath, defaults={"relative_path": ""}, methods=["GET"])

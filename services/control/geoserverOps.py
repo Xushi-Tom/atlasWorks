@@ -463,19 +463,28 @@ def deleteStore(workspace, storeName):
     return {"workspace": workspace, "storeName": store_name}
 
 
-def seedLayer(workspace, layerName, zoomStart, zoomStop, format_name):
+def _seed_request_payload(workspace, layerName, seed_type="seed", zoomStart=0, zoomStop=16, format_name="image/png", thread_count=1):
     layer_id = f"{workspace}:{_safe_name(layerName)}"
+    seed_type = str(seed_type or "seed").strip().lower()
     payload = (
         "<seedRequest>"
         f"<name>{escape(layer_id)}</name>"
-        "<srs><number>3857</number></srs>"
-        f"<zoomStart>{int(zoomStart)}</zoomStart>"
-        f"<zoomStop>{int(zoomStop)}</zoomStop>"
-        f"<format>{escape(str(format_name or 'image/png'))}</format>"
-        "<type>seed</type>"
-        "<threadCount>1</threadCount>"
-        "</seedRequest>"
+        f"<type>{escape(seed_type)}</type>"
     )
+    if seed_type not in {"kill_all", "kill_thread"}:
+        payload += (
+            "<srs><number>3857</number></srs>"
+            f"<zoomStart>{int(zoomStart)}</zoomStart>"
+            f"<zoomStop>{int(zoomStop)}</zoomStop>"
+            f"<format>{escape(str(format_name or 'image/png'))}</format>"
+            f"<threadCount>{max(1, int(thread_count or 1))}</threadCount>"
+        )
+    payload += "</seedRequest>"
+    return layer_id, payload
+
+
+def seedLayer(workspace, layerName, zoomStart, zoomStop, format_name, thread_count=1):
+    layer_id, payload = _seed_request_payload(workspace, layerName, "seed", zoomStart, zoomStop, format_name, thread_count)
     response = _geoserver_request(
         "POST",
         f"/gwc/rest/seed/{quote(layer_id, safe=':')}.xml",
@@ -487,6 +496,35 @@ def seedLayer(workspace, layerName, zoomStart, zoomStop, format_name):
         return response.json()
     except Exception:
         return {"success": True, "message": response.text.strip() or "seed accepted"}
+
+
+def getSeedStatus(workspace, layerName):
+    layer_id = f"{workspace}:{_safe_name(layerName)}"
+    response = _geoserver_request(
+        "GET",
+        f"/gwc/rest/seed/{quote(layer_id, safe=':')}.xml",
+        expected_statuses={200, 404},
+    )
+    text = response.text.strip() if response.status_code == 200 else ""
+    return {
+        "success": True,
+        "workspace": workspace,
+        "layerName": _safe_name(layerName),
+        "running": bool(text),
+        "status": text,
+    }
+
+
+def cancelSeed(workspace, layerName):
+    layer_id, payload = _seed_request_payload(workspace, layerName, "kill_all")
+    response = _geoserver_request(
+        "POST",
+        f"/gwc/rest/seed/{quote(layer_id, safe=':')}.xml",
+        data=payload,
+        headers={"Content-Type": "text/xml"},
+        expected_statuses={200, 201, 202},
+    )
+    return {"success": True, "workspace": workspace, "layerName": _safe_name(layerName), "message": response.text.strip() or "seed cancel accepted"}
 
 
 def getLayerPreviewUrl(workspace, layerName):
@@ -829,8 +867,27 @@ def geoserverSeed(name):
             int(data.get("minZoom", 0)),
             int(data.get("maxZoom", 16)),
             str(data.get("format") or "image/png"),
+            int(data.get("threadCount", 1)),
         )
         return jsonify({"success": True, "workspace": workspace, "layerName": _safe_name(name), "seed": result})
     except Exception as exc:
         logMessage(f"GeoServer seed 失败: {exc}", "ERROR")
+        return _json_error(str(exc), 500)
+
+
+def geoserverSeedStatus(name):
+    workspace = _safe_name(request.args.get("workspace") or config.get("geoserverWorkspace") or "atlasworks", "atlasworks")
+    try:
+        return jsonify(getSeedStatus(workspace, name))
+    except Exception as exc:
+        logMessage(f"GeoServer seed 状态读取失败: {exc}", "ERROR")
+        return _json_error(str(exc), 500)
+
+
+def geoserverCancelSeed(name):
+    workspace = _safe_name(request.args.get("workspace") or config.get("geoserverWorkspace") or "atlasworks", "atlasworks")
+    try:
+        return jsonify(cancelSeed(workspace, name))
+    except Exception as exc:
+        logMessage(f"GeoServer seed 取消失败: {exc}", "ERROR")
         return _json_error(str(exc), 500)

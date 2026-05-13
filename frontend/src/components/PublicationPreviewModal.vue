@@ -617,6 +617,7 @@ onBeforeUnmount(() => {
         :min-width="720"
         :max-width="1600"
         overlay-class="publication-preview-overlay"
+        overlay-background="rgba(0, 0, 0, 0.88)"
         destroy-on-close
         @update:model-value="value => emit('update:modelValue', value)"
     >
@@ -732,6 +733,6 @@ onBeforeUnmount(() => {
 }
 
 :global(.publication-preview-overlay) {
-    background: rgba(0, 0, 0, 0.88);
+    background: rgba(0, 0, 0, 0.88) !important;
 }
 </style>

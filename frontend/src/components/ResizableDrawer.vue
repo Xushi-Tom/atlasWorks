@@ -9,7 +9,8 @@ const props = defineProps({
     maxWidth: { type: Number, default: 1280 },
     destroyOnClose: { type: Boolean, default: false },
     subtitle: { type: String, default: '' },
-    overlayClass: { type: String, default: '' }
+    overlayClass: { type: String, default: '' },
+    overlayBackground: { type: String, default: '' }
 });
 
 const emit = defineEmits(['update:modelValue', 'closed']);
@@ -25,6 +26,7 @@ let closeTimer = null;
 
 const widthStyle = computed(() => `${drawerWidth.value}px`);
 const shouldRender = computed(() => visible.value || !props.destroyOnClose);
+const overlayStyle = computed(() => (props.overlayBackground ? { background: props.overlayBackground } : {}));
 
 function close() {
     emit('update:modelValue', false);
@@ -96,7 +98,7 @@ onBeforeUnmount(() => {
 
 <template>
     <Teleport to="body">
-        <div v-if="shouldRender" class="drawer-overlay" :class="[overlayClass, { 'is-open': animating }]" @click.self="close">
+        <div v-if="shouldRender" class="drawer-overlay" :class="[overlayClass, { 'is-open': animating }]" :style="overlayStyle" @click.self="close">
             <aside class="drawer-shell" :class="{ 'is-open': animating }" :style="{ width: widthStyle }" @click.stop>
                 <div class="drawer-resize-handle" @mousedown.prevent="startDragging"></div>
                 <header class="drawer-header">

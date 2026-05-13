@@ -304,6 +304,17 @@ class AtlasWorksApi {
         });
     }
 
+    async geoserverSeedStatus(name, params = {}) {
+        return this.get(`/api/geoserver/layers/${encodeURIComponent(name)}/seed`, params);
+    }
+
+    async geoserverCancelSeed(name, params = {}) {
+        const workspace = params.workspace;
+        const target = new URL(`${this.baseURL}/api/geoserver/layers/${encodeURIComponent(name)}/seed/cancel`);
+        if (workspace) target.searchParams.append('workspace', workspace);
+        return this.request(target.toString(), { method: 'POST' });
+    }
+
     async geoserverHealth() {
         return this.get('/api/geoserver/health');
     }
