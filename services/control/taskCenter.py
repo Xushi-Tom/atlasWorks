@@ -267,11 +267,25 @@ def listTasks():
             status_filter=status_filter,
         )
     ]
+    status_summary = {}
+    for task in filtered_tasks:
+        status = str(task.get("status") or "unknown").strip().lower() or "unknown"
+        status_summary[status] = status_summary.get(status, 0) + 1
     paged_tasks, pagination = paginate_items(filtered_tasks, page, page_size)
     tasks_with_ids = {task["taskId"]: task for task in paged_tasks if task.get("taskId")}
 
     return jsonify({
         "tasks": tasks_with_ids,
+        "stats": {
+            "total": len(filtered_tasks),
+            "running": status_summary.get("running", 0),
+            "queued": status_summary.get("queued", 0),
+            "completed": status_summary.get("completed", 0),
+            "failed": status_summary.get("failed", 0),
+            "stopped": status_summary.get("stopped", 0),
+            "unknown": status_summary.get("unknown", 0),
+            "byStatus": status_summary,
+        },
         **pagination,
     })
 

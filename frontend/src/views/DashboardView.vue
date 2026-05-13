@@ -9,32 +9,49 @@ import { formatBytes } from '../utils/formatters';
 const health = ref(null);
 const systemInfo = ref(null);
 const tasks = ref([]);
+const taskTotal = ref(0);
+const taskStats = ref({});
 const loading = ref(true);
 
 const metrics = computed(() => {
-    const taskStats = systemInfo.value?.tasks || {};
+    const stats = taskStats.value || {};
     return [
         {
             label: '总任务数',
-            value: taskStats.total ?? tasks.value.length ?? 0,
+            value: taskTotal.value,
             tone: 'primary'
         },
         {
             label: '运行中',
-            value: taskStats.running ?? 0,
+            value: stats.running ?? 0,
             tone: 'processing'
         },
         {
             label: '已完成',
-            value: taskStats.completed ?? 0,
+            value: stats.completed ?? 0,
             tone: 'success'
         },
         {
             label: '失败',
-            value: taskStats.failed ?? 0,
+            value: stats.failed ?? 0,
             tone: 'danger'
         }
     ];
+});
+
+const taskSummary = computed(() => {
+    const summary = {
+        running: 0,
+        completed: 0,
+        failed: 0
+    };
+    tasks.value.forEach(task => {
+        const status = String(task?.status || '').toLowerCase();
+        if (status === 'running') summary.running += 1;
+        if (status === 'completed') summary.completed += 1;
+        if (status === 'failed') summary.failed += 1;
+    });
+    return summary;
 });
 
 const memoryUsage = computed(() => {
@@ -86,11 +103,13 @@ async function load() {
         const [healthResponse, systemResponse, tasksResponse] = await Promise.all([
             api.getHealth(),
             api.getSystemInfo(),
-            api.getAllTasks()
+            api.getAllTasks({ page: 1, pageSize: 500 })
         ]);
         health.value = healthResponse?.data || null;
         systemInfo.value = systemResponse?.data || null;
         tasks.value = Object.values(tasksResponse?.data?.tasks || {});
+        taskStats.value = tasksResponse?.data?.stats || taskSummary.value;
+        taskTotal.value = Number(tasksResponse?.data?.total ?? taskStats.value?.total ?? tasks.value.length ?? 0);
     } catch (error) {
         ElMessage.error(`仪表盘加载失败: ${error.message}`);
     } finally {
