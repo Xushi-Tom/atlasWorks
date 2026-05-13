@@ -1467,10 +1467,6 @@ _PATH_DOCS = {
         "summary": "推荐切片配置",
         "description": "根据源文件大小和系统资源返回推荐切片配置。",
     },
-    "/api/cache/info": {
-        "summary": "缓存信息",
-        "description": "扫描瓦片输出目录，返回缓存目录、元数据和实际瓦片数量。",
-    },
     "/api/container/update": {
         "summary": "更新容器信息",
         "description": "更新容器时间、环境变量及基础系统状态。",
@@ -1683,7 +1679,7 @@ def _tag_for_path(path):
         return "发布管理"
     if normalized_path.startswith("/api/workspace") or normalized_path.startswith("/api/results") or normalized_path.startswith("/api/filedetails"):
         return "工作空间"
-    if normalized_path.startswith("/api/config") or normalized_path.startswith("/api/cache"):
+    if normalized_path.startswith("/api/config"):
         return "配置"
     if normalized_path.startswith("/api/docs") or normalized_path.startswith("/api/openapi") or normalized_path.startswith("/api/routes"):
         return "接口文档"
@@ -2459,7 +2455,7 @@ def _openapi_spec():
                         "sourceMode": {
                             "type": "string",
                             "enum": ["task", "manual", "artifact", "datasource"],
-                            "description": "发布来源模式。task/manual/artifact 用于已有产物；datasource 用于 TiTiler 动态影像发布。",
+                            "description": "发布来源模式。task/manual/artifact 用于已有产物；datasource 用于 GeoServer 数据源影像实时发布。",
                             "example": "task",
                         },
                         "publicationId": {
@@ -2489,7 +2485,7 @@ def _openapi_spec():
                         "sourcePaths": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "TiTiler 动态发布时可传多个 GeoTIFF/COG 相对路径；服务端会生成 MosaicJSON。",
+                            "description": "GeoServer 数据源影像发布时可传 GeoTIFF 文件或目录相对路径；服务端会发布为 WMS/WMTS/GWC 图层。",
                         },
                         "publishPath": {
                             "type": "string",
@@ -2509,7 +2505,7 @@ def _openapi_spec():
                         },
                         "publishMethod": {
                             "type": "string",
-                            "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "titiler-cog", "wms", "wfs", "static-download"],
+                            "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "geoserver-wmts", "geoserver-wms", "wms", "wfs", "static-download"],
                             "description": "发布方式，对应前端“发布方式”。",
                             "example": "wmts",
                         },
@@ -2558,7 +2554,7 @@ def _openapi_spec():
                 },
                 "PublicationPublishMethod": {
                     "type": "string",
-                    "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "titiler-cog", "wms", "wfs", "static-download"],
+                    "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "geoserver-wmts", "geoserver-wms", "wms", "wfs", "static-download"],
                 },
                 "PublicationVisibility": {
                     "type": "string",
@@ -2570,7 +2566,6 @@ def _openapi_spec():
                         "workspacePath": {"type": "string"},
                         "sourcePath": {"type": "string"},
                         "sourcePaths": {"type": "array", "items": {"type": "string"}},
-                        "mosaicJsonPath": {"type": "string"},
                         "taskId": {"type": "string"},
                         "sourceMode": {"$ref": "#/components/schemas/PublicationSourceMode"},
                         "publishMethod": {"$ref": "#/components/schemas/PublicationPublishMethod"},

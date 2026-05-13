@@ -94,6 +94,13 @@ class AtlasWorksApi {
         });
     }
 
+    async patch(url, data = {}) {
+        return this.request(url, {
+            method: 'PATCH',
+            body: JSON.stringify(data)
+        });
+    }
+
     async delete(url) {
         return this.request(url, { method: 'DELETE' });
     }
@@ -262,6 +269,45 @@ class AtlasWorksApi {
         return this.post('/api/tile/indexedTiles', params);
     }
 
+    async geoserverPublish(params) {
+        return this.post('/api/geoserver/publish', params);
+    }
+
+    async geoserverListLayers(params = {}) {
+        return this.get('/api/geoserver/layers', params);
+    }
+
+    async geoserverGetLayer(name, params = {}) {
+        return this.get(`/api/geoserver/layers/${encodeURIComponent(name)}`, params);
+    }
+
+    async geoserverDeleteLayer(name, params = {}) {
+        const target = new URL(`${this.baseURL}/api/geoserver/layers/${encodeURIComponent(name)}`);
+        Object.entries(params || {}).forEach(([key, value]) => {
+            if (value !== undefined && value !== null && value !== '') {
+                target.searchParams.append(key, value);
+            }
+        });
+        return this.request(target.toString(), { method: 'DELETE' });
+    }
+
+    async geoserverSeedLayer(name, params = {}) {
+        const workspace = params.workspace;
+        const payload = { ...params };
+        delete payload.workspace;
+        const target = new URL(`${this.baseURL}/api/geoserver/layers/${encodeURIComponent(name)}/seed`);
+        if (workspace) target.searchParams.append('workspace', workspace);
+        return this.request(target.toString(), {
+            method: 'POST',
+            body: JSON.stringify(payload),
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
+
+    async geoserverHealth() {
+        return this.get('/api/geoserver/health');
+    }
+
     async createTerrainTiles(params) {
         return this.post('/api/tile/terrain', params);
     }
@@ -346,24 +392,16 @@ class AtlasWorksApi {
         return this.put(`/api/publications/${encodeURIComponent(publicationId)}`, params);
     }
 
+    async togglePublicationEnabled(publicationId, enabled) {
+        return this.patch(`/api/publications/${encodeURIComponent(publicationId)}/enabled`, { enabled });
+    }
+
     async deletePublication(publicationId) {
         return this.delete(`/api/publications/${encodeURIComponent(publicationId)}`);
     }
 
-    async rebuildPublicationCache(publicationId) {
-        return this.post(`/api/publications/${encodeURIComponent(publicationId)}/cache`, {});
-    }
-
-    async clearPublicationCache(publicationId) {
-        return this.delete(`/api/publications/${encodeURIComponent(publicationId)}/cache`);
-    }
-
     async getRoutes(params = {}) {
         return this.get('/api/routes', params);
-    }
-
-    async getCacheInfo() {
-        return this.get('/api/cache/info');
     }
 
     async updateContainer(params = {}) {

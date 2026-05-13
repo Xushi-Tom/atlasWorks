@@ -1,16 +1,15 @@
-AtlasWorks x86 打包 / 导出 / 启动命令
+AtlasWorks 打包 / 导出 / 启动命令
 
 说明：
-1. 只打 amd64 / x86_64 单架构镜像，不使用 buildx。
+1. 单机本地构建，不额外处理多平台标签，不使用 buildx。
 2. 外部数据库版使用 docker-compose.external-db.yml。
 3. 内置 PostgreSQL 15 版使用 docker-compose.pg15.yml。
 4. 常规部署只需要改数据库连接、端口、数据目录、瓦片目录、CPU、内存。
 5. ATLASWORKS_WORKERS 是 API Web 进程数，不是切片 Worker 数量；切片并发按 worker 容器拆分，目前默认每种切片类型 1 个容器。
 
 
-首次准备 amd64 基础镜像：
-docker pull --platform linux/amd64 debian:bullseye
-docker tag debian:bullseye debian:bullseye-amd64
+首次准备基础镜像：
+docker pull debian:bullseye
 
 
 1. 前端打包

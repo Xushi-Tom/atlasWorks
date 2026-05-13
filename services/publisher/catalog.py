@@ -2,25 +2,23 @@
 # -*- coding: utf-8 -*-
 
 import json
+import math
 import os
-import shutil
 import socket
-import subprocess
-import threading
 import uuid
-import hashlib
 from datetime import datetime, timezone
 from urllib.parse import quote, unquote, urlsplit
-from urllib.request import urlopen
 import xml.etree.ElementTree as ET
 
 from flask import Response, jsonify, redirect, request, send_from_directory
 
 from config import config, taskLock, taskStatus
+from geoserverOps import deleteStore, publishGeoserverPayload
 from db import (
     appendJobEvent,
     countTableRows,
     deletePublicationRecord,
+    syncTaskSnapshot,
     fetchArtifactRecord,
     fetchPublicationRecord,
     fetchTaskSnapshot,
@@ -30,6 +28,7 @@ from db import (
     upsertPublicationRecord,
 )
 from pagination import paginate_items, parse_pagination_args
+from taskState import normalizeTaskRecord
 from utils import logMessage, normalizeProjection, validateDataSourcePath, validateWorkspacePath
 
 
@@ -40,12 +39,13 @@ WMTS_TOP_LEFT_CORNER = "-20037508.342789244 20037508.342789244"
 WMTS_INITIAL_SCALE_DENOMINATOR = 559082264.0287178
 WMTS_MIN_ZOOM = 0
 WMTS_MAX_ZOOM = 22
-TITILER_PUBLISH_METHODS = {"titiler-cog", "titiler", "cog"}
+GEOSERVER_PUBLISH_METHODS = {"geoserver-wms", "geoserver-wmts"}
+GEOSERVER_RASTER_EXTENSIONS = {".tif", ".tiff"}
 DATASOURCE_PUBLISH_TYPE = "imagery"
-DATASOURCE_PUBLISH_METHOD = "titiler-cog"
-_TITILER_HEALTH_CACHE = {"checkedAt": None, "status": "unknown", "ok": None, "detail": ""}
-_PUBLICATION_BUILD_THREADS = {}
-_PUBLICATION_BUILD_LOCK = threading.Lock()
+DATASOURCE_PUBLISH_METHOD = "geoserver-wmts"
+GEOSERVER_WMTS_GRIDSET = "EPSG:900913"
+WEB_MERCATOR_MAX = 20037508.342789244
+WEB_MERCATOR_MAX_LAT = 85.05112878
 
 
 def _mime_from_extension(extension):
@@ -490,51 +490,6 @@ def _external_backend_base_url(configured_url_key, public_port_key):
 def _nginx_public_base_url():
     return _external_backend_base_url("nginxPublicBaseUrl", "nginxPublicBasePort")
 
-def _titiler_public_base_url():
-    return _external_backend_base_url("titilerPublicBaseUrl", "titilerPublicBasePort")
-
-
-def _titiler_health_state(force_refresh=False):
-    cache = _TITILER_HEALTH_CACHE
-    now = datetime.now(timezone.utc)
-    checked_at = cache.get("checkedAt")
-    if (
-        not force_refresh
-        and isinstance(checked_at, datetime)
-        and (now - checked_at).total_seconds() < 15
-    ):
-        return {
-            "ok": cache.get("ok"),
-            "status": cache.get("status") or "unknown",
-            "detail": cache.get("detail") or "",
-            "checkedAt": checked_at.isoformat(),
-        }
-
-    health_url = f"{_titiler_public_base_url().rstrip('/')}/healthz"
-    ok = False
-    status = "unhealthy"
-    detail = ""
-    try:
-        with urlopen(health_url, timeout=5) as response:
-            ok = int(getattr(response, "status", 0) or 0) == 200
-            status = "healthy" if ok else "unhealthy"
-            detail = f"HTTP {getattr(response, 'status', 0)}"
-    except Exception as exc:
-        ok = False
-        status = "unhealthy"
-        detail = str(exc)
-
-    cache["checkedAt"] = now
-    cache["ok"] = ok
-    cache["status"] = status
-    cache["detail"] = detail
-    return {
-        "ok": ok,
-        "status": status,
-        "detail": detail,
-        "checkedAt": now.isoformat(),
-    }
-
 
 def _public_base_url():
     configured_base_url = str(config.get("publicBaseUrl") or "").strip().rstrip("/")
@@ -670,6 +625,162 @@ def _load_vector_tileset_metadata(full_path):
     }
 
 
+def _tile_metadata_wgs84_bounds(full_path):
+    metadata_path = os.path.join(full_path, "tile_metadata.json")
+    if not os.path.isfile(metadata_path):
+        return None
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as file_obj:
+            tile_metadata = json.load(file_obj)
+    except Exception as exc:
+        logMessage(f"读取 tile_metadata 范围失败: {metadata_path} - {exc}", "WARNING")
+        return None
+    bounds = _normalize_wgs84_bounds(tile_metadata.get("bounds"))
+    if bounds and (abs(bounds[2] - bounds[0]) > 20 or abs(bounds[3] - bounds[1]) > 12):
+        return None
+    if bounds:
+        return bounds
+    source_bounds = []
+    for tile_info in tile_metadata.get("tileIndex") or []:
+        for source_file in _safe_dict(tile_info).get("sourceFiles") or []:
+            source_bounds.append(_safe_dict(source_file).get("bounds"))
+    return _union_wgs84_bounds(source_bounds)
+
+
+def _normalize_wgs84_bounds(bounds):
+    if not (isinstance(bounds, list) and len(bounds) == 4):
+        return None
+    try:
+        west, south, east, north = [float(value) for value in bounds]
+    except (TypeError, ValueError):
+        return None
+    if west < -180 or east > 180 or south < -90 or north > 90:
+        return None
+    west = max(-180.0, min(180.0, west))
+    east = max(-180.0, min(180.0, east))
+    south = max(-WEB_MERCATOR_MAX_LAT, min(WEB_MERCATOR_MAX_LAT, south))
+    north = max(-WEB_MERCATOR_MAX_LAT, min(WEB_MERCATOR_MAX_LAT, north))
+    if west >= east or south >= north:
+        return None
+    return [west, south, east, north]
+
+
+def _web_mercator_to_wgs84_bounds(bounds):
+    try:
+        west, south, east, north = [float(value) for value in bounds]
+    except (TypeError, ValueError):
+        return None
+    if west >= east or south >= north:
+        return None
+    west = max(-WEB_MERCATOR_MAX, min(WEB_MERCATOR_MAX, west))
+    east = max(-WEB_MERCATOR_MAX, min(WEB_MERCATOR_MAX, east))
+    south = max(-WEB_MERCATOR_MAX, min(WEB_MERCATOR_MAX, south))
+    north = max(-WEB_MERCATOR_MAX, min(WEB_MERCATOR_MAX, north))
+
+    def mercator_x_to_lon(value):
+        return (value / WEB_MERCATOR_MAX) * 180.0
+
+    def mercator_y_to_lat(value):
+        return math.degrees(2.0 * math.atan(math.exp(value / 6378137.0)) - (math.pi / 2.0))
+
+    return _normalize_wgs84_bounds([
+        mercator_x_to_lon(west),
+        mercator_y_to_lat(south),
+        mercator_x_to_lon(east),
+        mercator_y_to_lat(north),
+    ])
+
+
+def _union_wgs84_bounds(bounds_list):
+    valid_bounds = [_normalize_wgs84_bounds(bounds) for bounds in bounds_list]
+    valid_bounds = [bounds for bounds in valid_bounds if bounds]
+    if not valid_bounds:
+        return None
+    return [
+        min(bounds[0] for bounds in valid_bounds),
+        min(bounds[1] for bounds in valid_bounds),
+        max(bounds[2] for bounds in valid_bounds),
+        max(bounds[3] for bounds in valid_bounds),
+    ]
+
+
+def _dataset_wgs84_bounds(full_path):
+    try:
+        from osgeo import gdal, osr
+    except Exception as exc:
+        logMessage(f"GDAL 不可用，无法读取数据源范围: {exc}", "WARNING")
+        return None
+
+    dataset = gdal.Open(full_path)
+    if dataset is None:
+        return None
+    try:
+        transform = dataset.GetGeoTransform(can_return_null=True)
+        if not transform:
+            return None
+        width = int(dataset.RasterXSize or 0)
+        height = int(dataset.RasterYSize or 0)
+        if width <= 0 or height <= 0:
+            return None
+
+        pixel_corners = ((0, 0), (width, 0), (0, height), (width, height))
+        points = [
+            (
+                transform[0] + px * transform[1] + py * transform[2],
+                transform[3] + px * transform[4] + py * transform[5],
+            )
+            for px, py in pixel_corners
+        ]
+
+        projection = dataset.GetProjection() or dataset.GetProjectionRef() or ""
+        if projection:
+            source_srs = osr.SpatialReference()
+            if source_srs.ImportFromWkt(projection) == 0:
+                target_srs = osr.SpatialReference()
+                target_srs.ImportFromEPSG(4326)
+                source_srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+                target_srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+                transform_to_wgs84 = osr.CoordinateTransformation(source_srs, target_srs)
+                points = [transform_to_wgs84.TransformPoint(x, y)[:2] for x, y in points]
+
+        bounds = [
+            min(point[0] for point in points),
+            min(point[1] for point in points),
+            max(point[0] for point in points),
+            max(point[1] for point in points),
+        ]
+        return _normalize_wgs84_bounds(bounds)
+    except Exception as exc:
+        logMessage(f"读取数据源范围失败: {full_path} - {exc}", "WARNING")
+        return None
+    finally:
+        dataset = None
+
+
+def _datasource_wgs84_bounds(source_paths):
+    bounds_list = []
+    for source_path in _normalize_data_source_paths(source_paths if isinstance(source_paths, list) else [source_paths]):
+        try:
+            _, full_path = _resolve_data_source_path(source_path)
+        except Exception as exc:
+            logMessage(f"数据源范围路径解析失败: {source_path} - {exc}", "WARNING")
+            continue
+        candidate_files = []
+        if os.path.isfile(full_path):
+            candidate_files = [full_path]
+        elif os.path.isdir(full_path):
+            candidate_files = [
+                os.path.join(full_path, name)
+                for name in sorted(os.listdir(full_path))
+                if os.path.splitext(name)[1].lower() in GEOSERVER_RASTER_EXTENSIONS
+            ]
+        for candidate in candidate_files:
+            bounds = _dataset_wgs84_bounds(candidate)
+            if bounds:
+                bounds_list.append(bounds)
+    return _union_wgs84_bounds(bounds_list)
+
+
 def _normalize_data_source_path(path_value):
     raw_path = unquote(str(path_value or "").strip())
     if not raw_path:
@@ -723,191 +834,8 @@ def _normalize_data_source_paths(source_paths):
     return normalized
 
 
-def _is_titiler_tiff_path(path_value):
-    return os.path.splitext(str(path_value or ""))[1].lower() in {".tif", ".tiff"}
-
-
-def _iter_titiler_directory_sources(path_value, full_path):
-    data_root = os.path.abspath(config["dataSourceDir"])
-    resolved = []
-    for root, _, filenames in os.walk(full_path):
-        for filename in sorted(filenames):
-            if not _is_titiler_tiff_path(filename):
-                continue
-            file_full_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_full_path, data_root).replace("\\", "/")
-            resolved.append({
-                "path": rel_path,
-                "fullPath": file_full_path,
-                "sourceEntry": path_value,
-            })
-    return resolved
-
-
-def _validate_titiler_source_paths(source_paths):
-    source_entries = _normalize_data_source_paths(source_paths)
-    if not source_entries:
-        raise ValueError("TiTiler 发布至少需要选择一个 GeoTIFF/COG 文件或目录")
-
-    resolved = []
-    seen = set()
-    for path_value in source_entries:
-        is_valid, full_path = validateDataSourcePath(path_value)
-        if not is_valid:
-            raise ValueError(str(full_path))
-        if os.path.isdir(full_path):
-            directory_sources = _iter_titiler_directory_sources(path_value, full_path)
-            if not directory_sources:
-                raise ValueError(f"目录中未找到 .tif/.tiff 文件: {path_value}")
-            for source in directory_sources:
-                normalized_file_path = source["path"]
-                if normalized_file_path in seen:
-                    continue
-                resolved.append(source)
-                seen.add(normalized_file_path)
-            continue
-        if not os.path.isfile(full_path):
-            raise ValueError(f"发布文件不存在: {path_value}")
-        if not _is_titiler_tiff_path(full_path):
-            raise ValueError("TiTiler 发布仅支持 .tif/.tiff 文件")
-        normalized_file_path = _normalize_data_source_path(path_value)
-        if normalized_file_path in seen:
-            continue
-        resolved.append({
-            "path": normalized_file_path,
-            "fullPath": full_path,
-            "sourceEntry": path_value,
-        })
-        seen.add(normalized_file_path)
-    if not resolved:
-        raise ValueError("TiTiler 发布至少需要一个有效的 GeoTIFF/COG 文件")
-    return {"sourceEntries": source_entries, "resolvedSources": resolved}
-
-
-def _titiler_cog_relative_path(publication_id, source_path):
-    digest = hashlib.sha1(str(source_path or "").encode("utf-8")).hexdigest()[:12]
-    stem = os.path.splitext(os.path.basename(str(source_path or "").strip()))[0] or "source"
-    return _publication_runtime_relative_path(publication_id, os.path.join("cogs", f"{stem}-{digest}.tif"))
-
-
-def _titiler_source_is_cog(full_path):
-    command = ["gdalinfo", full_path]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True)
-    except OSError as exc:
-        raise RuntimeError(f"GeoTIFF 检查失败: {exc}") from exc
-    if result.returncode != 0:
-        error_text = str(result.stderr or result.stdout or "").strip() or "未知错误"
-        raise RuntimeError(f"GeoTIFF 检查失败: {error_text}")
-    info_text = str(result.stdout or "")
-    return "LAYOUT=COG" in info_text
-
-
-def _ensure_titiler_cog_source(publication_id, source):
-    source_path = source.get("path")
-    full_path = source.get("fullPath")
-    if _titiler_source_is_cog(full_path):
-        return {
-            **source,
-            "publishPath": source_path,
-            "publishFullPath": full_path,
-            "optimized": False,
-        }
-
-    relative_target_path = _titiler_cog_relative_path(publication_id, source_path)
-    _, target_full_path = _resolve_tiles_path(relative_target_path)
-    os.makedirs(os.path.dirname(target_full_path), exist_ok=True)
-
-    if os.path.isfile(target_full_path):
-        source_stat = os.stat(full_path)
-        target_stat = os.stat(target_full_path)
-        if target_stat.st_size > 0 and target_stat.st_mtime >= source_stat.st_mtime:
-            return {
-                **source,
-                "publishPath": relative_target_path,
-                "publishFullPath": target_full_path,
-                "optimized": True,
-            }
-
-    command = [
-        "gdal_translate",
-        "-of",
-        "COG",
-        "-co",
-        "COMPRESS=LZW",
-        "-co",
-        "BIGTIFF=IF_SAFER",
-        "-co",
-        "BLOCKSIZE=512",
-        "-co",
-        "RESAMPLING=AVERAGE",
-        "-co",
-        "NUM_THREADS=ALL_CPUS",
-        full_path,
-        target_full_path,
-    ]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True)
-    except OSError as exc:
-        raise RuntimeError(f"COG 转换失败: {exc}") from exc
-    if result.returncode != 0:
-        error_text = str(result.stderr or result.stdout or "").strip() or "未知错误"
-        raise RuntimeError(f"COG 转换失败: {source_path}: {error_text}")
-
-    return {
-        **source,
-        "publishPath": relative_target_path,
-        "publishFullPath": target_full_path,
-        "optimized": True,
-    }
-
-
-def _prepare_titiler_sources(publication_id, resolved_sources):
-    prepared_sources = []
-    for source in resolved_sources:
-        prepared_sources.append(_ensure_titiler_cog_source(publication_id, source))
-    return prepared_sources
-
-
-def _build_mosaic_json(publication_id, resolved_sources):
-    publication_id = str(publication_id or "").strip() or "publication"
-    runtime_dir = _publication_runtime_dir(publication_id)
-    os.makedirs(runtime_dir, exist_ok=True)
-
-    sources_list_path = os.path.join(runtime_dir, "sources.txt")
-    mosaic_json_path = os.path.join(runtime_dir, "mosaic.json")
-    with open(sources_list_path, "w", encoding="utf-8") as file_obj:
-        for source in resolved_sources:
-            file_obj.write(f"{source.get('publishFullPath') or source['fullPath']}\n")
-
-    command = [
-        "cogeo-mosaic",
-        "create",
-        sources_list_path,
-        "-o",
-        mosaic_json_path,
-        "-q",
-    ]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True)
-    except OSError as exc:
-        raise RuntimeError(f"MosaicJSON 生成失败: {exc}") from exc
-    if result.returncode != 0:
-        error_text = str(result.stderr or result.stdout or "").strip() or "未知错误"
-        raise RuntimeError(f"MosaicJSON 生成失败: {error_text}")
-    if not os.path.isfile(mosaic_json_path):
-        raise RuntimeError("MosaicJSON 生成失败: 未找到输出文件")
-
-    return {
-        "relativePath": _publication_runtime_relative_path(publication_id, "mosaic.json"),
-        "fullPath": mosaic_json_path,
-        "sourcesListPath": _publication_runtime_relative_path(publication_id, "sources.txt"),
-        "sourceCount": len(resolved_sources),
-    }
-
-
-def _is_titiler_publish_method(publish_method):
-    return str(publish_method or "").strip().lower() in TITILER_PUBLISH_METHODS
+def _is_geoserver_publish_method(publish_method):
+    return str(publish_method or "").strip().lower() in GEOSERVER_PUBLISH_METHODS
 
 
 def _is_supported_publication_record(publication):
@@ -921,71 +849,164 @@ def _is_supported_publication_record(publication):
         or ""
     ).strip().lower()
     if source_mode == "datasource":
-        return _is_titiler_publish_method(publish_method)
+        return _is_geoserver_publish_method(publish_method)
     return True
 
 
-def _publication_runtime_cache_state(publication_id, metadata=None):
-    publication_token = str(publication_id or "").strip()
-    runtime_dir = _publication_runtime_dir(publication_token) if publication_token else ""
-    metadata = _safe_dict(metadata)
-    mosaic_relative_path = metadata.get("mosaicJsonPath")
-    build_state = _safe_dict(metadata.get("buildState"))
-    mosaic_exists = False
-    if mosaic_relative_path:
-        try:
-            _, mosaic_full_path = _resolve_tiles_path(mosaic_relative_path)
-            mosaic_exists = os.path.isfile(mosaic_full_path)
-        except Exception:
-            mosaic_exists = False
+def _record_geoserver_seed_task(publication_id, alias, publish_result_payload):
+    seed_payload = publish_result_payload.get("seed")
+    seed_error = str(publish_result_payload.get("seedError") or "").strip()
+    if not seed_payload and not seed_error:
+        return None
+
+    task_id = f"geoserver-seed-{publication_id}"
+    success = not seed_error
+    message = "GeoServer 预切片已提交" if success else f"GeoServer 预切片失败: {seed_error}"
+    status = "completed" if success else "failed"
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    task_payload = normalizeTaskRecord(task_id, {
+        "taskId": task_id,
+        "status": status,
+        "progress": 100 if success else 0,
+        "message": message,
+        "startTime": now_text,
+        "endTime": now_text,
+        "currentStage": "GeoServer 预切片",
+        "result": {
+            "method": "geoserver-seed",
+            "publicationId": publication_id,
+            "layerName": publish_result_payload.get("layerName"),
+            "workspace": publish_result_payload.get("workspace"),
+            "seed": seed_payload,
+            "seedError": seed_error or None,
+        },
+        "files": {"total": 1, "completed": 1 if success else 0, "failed": 0 if success else 1, "current": alias},
+        "stats": {"totalTiles": 0, "processedTiles": 0, "failedTiles": 0 if success else 1, "remainingTiles": 0},
+    })
+
+    with taskLock:
+        taskStatus[task_id] = task_payload
+    syncTaskSnapshot(task_id, task_payload)
+    return task_id
+
+
+def _geoserver_public_base_url():
+    explicit = str(config.get("geoserverPublicBaseUrl") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+
+    host = str(config.get("publicBaseHost") or "localhost").strip() or "localhost"
+    if "://" in host:
+        return host.rstrip("/")
+    scheme = str(config.get("publicBaseScheme") or "http").strip() or "http"
+    port = int(config.get("geoserverPublicBasePort") or 18083)
+    return f"{scheme}://{host}:{port}/geoserver"
+
+
+def _build_geoserver_urls(layer_name="", workspace=""):
+    normalized_layer = str(layer_name or "").strip()
+    normalized_workspace = str(workspace or config.get("geoserverWorkspace") or "atlasworks").strip()
+    layer_id = f"{normalized_workspace}:{normalized_layer}" if normalized_workspace else normalized_layer
+    encoded_layer = quote(layer_id, safe=":")
+    public_base = _geoserver_public_base_url()
+    wms_url = (
+        f"{public_base}/wms?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap"
+        f"&LAYERS={encoded_layer}&STYLES=&SRS=EPSG:3857"
+        "&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image/png&TRANSPARENT=true"
+    )
+    wmts_capabilities_url = f"{public_base}/gwc/service/wmts?SERVICE=WMTS&REQUEST=GetCapabilities"
+    wmts_template_url = (
+        f"{public_base}/gwc/service/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+        f"&LAYER={encoded_layer}&STYLE=raster&TILEMATRIXSET={GEOSERVER_WMTS_GRIDSET}"
+        f"&TILEMATRIX={GEOSERVER_WMTS_GRIDSET}:{{z}}&TILEROW={{y}}&TILECOL={{x}}&FORMAT=image/png"
+    )
+    wmts_sample_url = (
+        f"{public_base}/gwc/service/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+        f"&LAYER={encoded_layer}&STYLE=raster&TILEMATRIXSET={GEOSERVER_WMTS_GRIDSET}&TILEMATRIX={GEOSERVER_WMTS_GRIDSET}:0&TILEROW=0&TILECOL=0&FORMAT=image/png"
+    )
     return {
-        "runtimeDir": runtime_dir,
-        "runtimeDirExists": bool(runtime_dir and os.path.isdir(runtime_dir)),
-        "mosaicJsonPath": mosaic_relative_path,
-        "mosaicReady": mosaic_exists,
-        "buildState": build_state,
-        "titiler": _titiler_health_state() if _is_titiler_publish_method(metadata.get("publishMethod")) else None,
+        "browserUrl": wmts_sample_url,
+        "accessUrl": wmts_template_url,
+        "launchUrl": wmts_capabilities_url,
+        "sampleUrl": wmts_sample_url,
+        "backendBaseUrl": public_base,
+        "layerId": layer_id,
+        "wmsUrl": wms_url,
+        "wmtsCapabilitiesUrl": wmts_capabilities_url,
+        "wmtsTileUrl": wmts_template_url,
+        "wmtsTileMatrixSet": GEOSERVER_WMTS_GRIDSET,
     }
 
 
-def _build_titiler_urls(source_path="", mosaic_json_path=""):
-    encoded_url = ""
-    source_mode = "cog"
-    normalized_path = ""
-    full_path = ""
-    if mosaic_json_path:
-        try:
-            normalized_path, full_path = _resolve_tiles_path(mosaic_json_path)
-            if os.path.isfile(full_path):
-                encoded_url = quote(full_path.replace("\\", "/"), safe="")
-                source_mode = "mosaicjson"
-            else:
-                normalized_path = ""
-                full_path = ""
-        except Exception:
-            normalized_path = ""
-            full_path = ""
+def _build_geoserver_wms_url(layer_names=None, workspace=""):
+    names = [str(item or "").strip() for item in (layer_names or []) if str(item or "").strip()]
+    if not names:
+        return ""
+    normalized_workspace = str(workspace or config.get("geoserverWorkspace") or "atlasworks").strip()
+    layer_ids = ",".join(f"{normalized_workspace}:{name}" if normalized_workspace else name for name in names)
+    return (
+        f"{_geoserver_public_base_url()}/wms?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap"
+        f"&LAYERS={quote(layer_ids, safe=':,')}&STYLES=&SRS=EPSG:3857"
+        "&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image/png&TRANSPARENT=true"
+    )
 
-    if source_mode != "mosaicjson":
-        normalized_path, full_path = _resolve_data_source_path(source_path)
-        encoded_url = quote(full_path.replace("\\", "/"), safe="")
 
-    base_url = _titiler_public_base_url()
-    tile_matrix_set = str(config.get("titilerTileMatrixSet") or "WebMercatorQuad").strip() or "WebMercatorQuad"
-    route_prefix = "mosaicjson" if source_mode == "mosaicjson" else "cog"
-    map_url = f"{base_url}/{route_prefix}/{quote(tile_matrix_set, safe='')}/map.html?url={encoded_url}"
-    tilejson_url = f"{base_url}/{route_prefix}/{quote(tile_matrix_set, safe='')}/tilejson.json?url={encoded_url}"
-    tile_template_url = f"{base_url}/{route_prefix}/tiles/{quote(tile_matrix_set, safe='')}/{{z}}/{{x}}/{{y}}.png?url={encoded_url}"
-    preview_url = map_url if source_mode == "mosaicjson" else f"{base_url}/{route_prefix}/preview.png?url={encoded_url}"
-    return {
-        "normalizedPath": normalized_path,
-        "fullPath": full_path,
-        "sourceMode": source_mode,
-        "mapUrl": map_url,
-        "tileJsonUrl": tilejson_url,
-        "tileTemplateUrl": tile_template_url,
-        "previewUrl": preview_url,
-    }
+def _extract_geoserver_bounds(layer_info):
+    coverage = _safe_dict(_safe_dict(layer_info).get("coverage"))
+    for bbox_name in ("latLonBoundingBox", "latlonBoundingBox"):
+        lat_lon_bbox = _safe_dict(coverage.get(bbox_name))
+        west = _first_defined(lat_lon_bbox.get("minx"), lat_lon_bbox.get("minX"))
+        south = _first_defined(lat_lon_bbox.get("miny"), lat_lon_bbox.get("minY"))
+        east = _first_defined(lat_lon_bbox.get("maxx"), lat_lon_bbox.get("maxX"))
+        north = _first_defined(lat_lon_bbox.get("maxy"), lat_lon_bbox.get("maxY"))
+        bounds = _normalize_wgs84_bounds([west, south, east, north])
+        if bounds:
+            return bounds
+
+    native_bbox = _safe_dict(coverage.get("nativeBoundingBox"))
+    west = _first_defined(native_bbox.get("minx"), native_bbox.get("minX"))
+    south = _first_defined(native_bbox.get("miny"), native_bbox.get("minY"))
+    east = _first_defined(native_bbox.get("maxx"), native_bbox.get("maxX"))
+    north = _first_defined(native_bbox.get("maxy"), native_bbox.get("maxY"))
+    raw_native_bounds = [west, south, east, north]
+    native_crs = str(
+        _first_non_blank(
+            native_bbox.get("crs"),
+            coverage.get("nativeCRS"),
+            coverage.get("srs"),
+            coverage.get("nativeSRS"),
+        )
+        or ""
+    ).upper()
+    if "3857" in native_crs or "900913" in native_crs:
+        return _web_mercator_to_wgs84_bounds(raw_native_bounds)
+    bounds = _normalize_wgs84_bounds(raw_native_bounds)
+    if bounds:
+        return bounds
+    return None
+
+
+def _publication_bounds(payload=None, metadata=None):
+    candidates = (
+        _safe_dict(payload).get("bounds"),
+        _safe_dict(metadata).get("bounds"),
+        _safe_dict(_safe_dict(payload).get("customMetadata")).get("bounds"),
+        _safe_dict(_safe_dict(metadata).get("customMetadata")).get("bounds"),
+    )
+    for candidate in candidates:
+        bounds = _normalize_wgs84_bounds(candidate)
+        if bounds:
+            return bounds
+    return None
+
+
+def _filter_focus_bounds(bounds):
+    normalized = _normalize_wgs84_bounds(bounds)
+    if not normalized:
+        return None
+    if abs(normalized[2] - normalized[0]) > 20 or abs(normalized[3] - normalized[1]) > 12:
+        return None
+    return normalized
 
 
 def _build_publication_access_payload(publish_path, publish_method=None, publish_type=None, publication_id=None, metadata=None):
@@ -1009,23 +1030,42 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
     publish_method = str(publish_method or "").strip().lower()
     publish_type = str(publish_type or "").strip().lower()
 
-    if publish_method in TITILER_PUBLISH_METHODS:
-        titiler_urls = _build_titiler_urls(
-            source_path=_first_non_blank(
-                metadata.get("sourcePath"),
-                metadata.get("workspacePath"),
-                publish_path,
+    if publish_method in GEOSERVER_PUBLISH_METHODS:
+        metadata_layer_names = metadata.get("geoserverLayerNames") or _safe_dict(metadata.get("customMetadata")).get("geoserverLayerNames")
+        geoserver_urls = _build_geoserver_urls(
+            layer_name=_first_non_blank(
+                metadata.get("geoserverLayerName"),
+                metadata.get("layerName"),
+                publication_id,
+                normalized_path,
             ),
-            mosaic_json_path=metadata.get("mosaicJsonPath"),
+            workspace=_first_non_blank(
+                metadata.get("geoserverWorkspace"),
+                config.get("geoserverWorkspace"),
+                "atlasworks",
+            ),
         )
+        if isinstance(metadata_layer_names, list) and len(metadata_layer_names) > 1:
+            geoserver_urls["wmsUrl"] = _build_geoserver_wms_url(
+                metadata_layer_names,
+                _first_non_blank(
+                    metadata.get("geoserverWorkspace"),
+                    config.get("geoserverWorkspace"),
+                    "atlasworks",
+                ),
+            )
         return {
-            "browserUrl": titiler_urls["mapUrl"],
-            "accessUrl": titiler_urls["tileTemplateUrl"],
-            "launchUrl": titiler_urls["tileJsonUrl"],
-            "sampleUrl": titiler_urls["previewUrl"],
+            "browserUrl": geoserver_urls["browserUrl"],
+            "accessUrl": geoserver_urls["accessUrl"],
+            "launchUrl": geoserver_urls["launchUrl"],
+            "sampleUrl": geoserver_urls["sampleUrl"],
             "publicBaseUrl": public_base,
-            "backendBaseUrl": _titiler_public_base_url(),
-            "dynamicSourceMode": titiler_urls.get("sourceMode"),
+            "backendBaseUrl": geoserver_urls["backendBaseUrl"],
+            "layerId": geoserver_urls["layerId"],
+            "wmsUrl": geoserver_urls.get("wmsUrl"),
+            "wmtsCapabilitiesUrl": geoserver_urls.get("wmtsCapabilitiesUrl"),
+            "wmtsTileUrl": geoserver_urls.get("wmtsTileUrl"),
+            "wmtsTileMatrixSet": geoserver_urls.get("wmtsTileMatrixSet"),
         }
 
     _, full_path = _resolve_tiles_path(normalized_path)
@@ -1151,22 +1191,17 @@ def _augment_publication_response(payload, include_runtime_state=True, include_v
     response["enabled"] = bool(metadata.get("enabled", True))
     response["customMetadata"] = _safe_dict(response.get("customMetadata") or metadata.get("customMetadata"))
     response["publicationId"] = response.get("publicationId") or response.get("id")
-    if include_runtime_state:
-        cache_state = _publication_runtime_cache_state(response["publicationId"], metadata)
-        response["cache"] = cache_state
-    else:
-        response["cache"] = {
-            "runtimeDir": _publication_runtime_dir(response["publicationId"]),
-            "runtimeDirExists": False,
-            "mosaicJsonPath": metadata.get("mosaicJsonPath"),
-            "mosaicReady": False,
-            "buildState": _safe_dict(metadata.get("buildState")),
-            "titiler": None,
-        }
+    response["bounds"] = _filter_focus_bounds(_publication_bounds(response, metadata))
+    if not response["bounds"]:
+        try:
+            _, full_path = _resolve_tiles_path(publish_path)
+            response["bounds"] = _tile_metadata_wgs84_bounds(full_path)
+            if response["bounds"]:
+                metadata["bounds"] = response["bounds"]
+        except Exception as exc:
+            logMessage(f"补充瓦片发布范围失败: {publish_path} - {exc}", "WARNING")
     response["sourceEntryCount"] = int(metadata.get("sourceEntryCount") or 0)
     response["sourceFileCount"] = int(metadata.get("sourceFileCount") or 0)
-    response["optimizedSourceCount"] = int(metadata.get("optimizedSourceCount") or 0)
-    response["buildState"] = _safe_dict(metadata.get("buildState"))
 
     publish_method = str(response.get("publishMethod") or metadata.get("publishMethod") or "").strip().lower()
     publish_type = str(response.get("publishType") or "").strip().lower()
@@ -1209,87 +1244,6 @@ def _augment_publication_response(payload, include_runtime_state=True, include_v
 
 def _publication_descriptor_dir(alias):
     return os.path.join(config["tilesDir"], PUBLICATIONS_DIRNAME, str(alias or "").strip() or "publication")
-
-
-def _publication_runtime_dir(publication_id):
-    publication_token = str(publication_id or "").strip() or "publication"
-    return os.path.join(config["tilesDir"], PUBLICATIONS_DIRNAME, publication_token)
-
-
-def _publication_runtime_relative_path(publication_id, filename):
-    return _normalize_relative_path(os.path.join(PUBLICATIONS_DIRNAME, str(publication_id or "").strip() or "publication", filename))
-
-
-def _cleanup_publication_runtime_dir(publication_id):
-    runtime_dir = _publication_runtime_dir(publication_id)
-    if os.path.isdir(runtime_dir):
-        shutil.rmtree(runtime_dir, ignore_errors=True)
-
-
-def _is_async_titiler_publication(prepared):
-    if not isinstance(prepared, dict):
-        return False
-    descriptor = _safe_dict(prepared.get("descriptor"))
-    metadata = _safe_dict(descriptor.get("metadata"))
-    return (
-        str(metadata.get("sourceMode") or "").strip().lower() == "datasource"
-        and _is_titiler_publish_method(metadata.get("publishMethod"))
-    )
-
-
-def _titiler_publication_requires_rebuild(existing_publication, prepared):
-    if not _is_async_titiler_publication(prepared):
-        return False
-
-    existing_publication = existing_publication or {}
-    existing_metadata = _safe_dict(existing_publication.get("metadata"))
-    prepared_descriptor = _safe_dict(prepared.get("descriptor"))
-    prepared_metadata = _safe_dict(prepared_descriptor.get("metadata"))
-
-    existing_source_mode = str(existing_metadata.get("sourceMode") or "").strip().lower()
-    existing_publish_method = str(existing_metadata.get("publishMethod") or "").strip().lower()
-    prepared_source_mode = str(prepared_metadata.get("sourceMode") or "").strip().lower()
-    prepared_publish_method = str(prepared_metadata.get("publishMethod") or "").strip().lower()
-    if existing_source_mode != prepared_source_mode or existing_publish_method != prepared_publish_method:
-        return True
-
-    existing_paths = _normalize_data_source_paths(existing_metadata.get("sourcePaths"))
-    prepared_paths = _normalize_data_source_paths(prepared_metadata.get("sourcePaths"))
-    if existing_paths != prepared_paths:
-        return True
-
-    existing_source_path = _normalize_data_source_path(existing_metadata.get("sourcePath"))
-    prepared_source_path = _normalize_data_source_path(prepared_metadata.get("sourcePath"))
-    if existing_source_path != prepared_source_path:
-        return True
-
-    existing_publication_id = str(existing_publication.get("publicationId") or existing_publication.get("id") or "").strip()
-    prepared_publication_id = str(prepared.get("publicationId") or "").strip()
-    if existing_publication_id and prepared_publication_id and existing_publication_id != prepared_publication_id:
-        return True
-
-    return False
-
-
-def _mark_publication_build_state(metadata, state=None, progress=None, message=None, error=None):
-    metadata = _safe_dict(metadata)
-    build_state = _safe_dict(metadata.get("buildState"))
-    if state is not None:
-        build_state["state"] = str(state)
-    if progress is not None:
-        try:
-            build_state["progress"] = max(0, min(100, int(progress)))
-        except (TypeError, ValueError):
-            build_state["progress"] = 0
-    if message is not None:
-        build_state["message"] = str(message)
-    if error is not None:
-        build_state["error"] = str(error) if error else None
-    build_state["updatedAt"] = datetime.now(timezone.utc).isoformat()
-    metadata["buildState"] = build_state
-    return metadata
-
-
 def _persist_publication_record(prepared, metadata_override=None, status_override=None):
     descriptor = _safe_dict(prepared.get("descriptor"))
     metadata = metadata_override if isinstance(metadata_override, dict) else _safe_dict(descriptor.get("metadata"))
@@ -1321,81 +1275,116 @@ def _persist_publication_record(prepared, metadata_override=None, status_overrid
     return access_payload
 
 
-def _run_titiler_publication_build(prepared):
-    publication_id = prepared["publicationId"]
-    build_thread = None
-    mosaic_json_info = None
-    try:
-        descriptor = _safe_dict(prepared.get("descriptor"))
-        metadata = _safe_dict(descriptor.get("metadata"))
-        source_entries = _normalize_data_source_paths(metadata.get("sourcePaths"))
+def _publish_geoserver_publication(prepared, metadata):
+    metadata = _safe_dict(metadata)
+    custom_metadata = _safe_dict(metadata.get("customMetadata"))
+    alias = prepared.get("alias")
+    geoserver_payload = {
+        "workspace": _first_non_blank(
+            metadata.get("geoserverWorkspace"),
+            custom_metadata.get("geoserverWorkspace"),
+            config.get("geoserverWorkspace"),
+            "atlasworks",
+        ),
+        "alias": alias,
+        "sourcePath": metadata.get("sourcePath") or metadata.get("workspacePath") or prepared.get("workspacePath"),
+        "targetCrs": _first_non_blank(
+            metadata.get("sourceProjection"),
+            custom_metadata.get("sourceProjection"),
+            custom_metadata.get("targetCrs"),
+            "EPSG:3857",
+        ),
+        "minZoom": custom_metadata.get("minZoom", 0),
+        "maxZoom": custom_metadata.get("maxZoom", 16),
+        "seedEnabled": bool(custom_metadata.get("seedEnabled")),
+        "tileFormat": custom_metadata.get("tileFormat", "image/png"),
+        "styleName": custom_metadata.get("styleName", "raster"),
+        "nodataValue": custom_metadata.get("nodataValue"),
+        "overwrite": True,
+    }
+    publish_result_payload = publishGeoserverPayload(geoserver_payload)
+    datasource_bounds = _datasource_wgs84_bounds(
+        metadata.get("sourcePaths")
+        or custom_metadata.get("sourcePaths")
+        or [geoserver_payload.get("sourcePath")]
+    )
+    metadata["geoserverWorkspace"] = publish_result_payload.get("workspace")
+    metadata["geoserverLayerName"] = publish_result_payload.get("layerName")
+    metadata["geoserverLayerNames"] = publish_result_payload.get("layerNames")
+    metadata["geoserverStoreName"] = publish_result_payload.get("storeName")
+    metadata["geoserverStoreNames"] = publish_result_payload.get("storeNames")
+    metadata["geoserverMode"] = publish_result_payload.get("mode")
+    metadata["sourceProjection"] = geoserver_payload.get("targetCrs")
+    metadata["seed"] = publish_result_payload.get("seed")
+    metadata["seedError"] = publish_result_payload.get("seedError")
+    metadata["bounds"] = _extract_geoserver_bounds(publish_result_payload.get("layerInfo")) or datasource_bounds
+    custom_metadata["geoserverWorkspace"] = publish_result_payload.get("workspace")
+    custom_metadata["geoserverLayerName"] = publish_result_payload.get("layerName")
+    custom_metadata["geoserverLayerNames"] = publish_result_payload.get("layerNames")
+    custom_metadata["geoserverStoreName"] = publish_result_payload.get("storeName")
+    custom_metadata["geoserverStoreNames"] = publish_result_payload.get("storeNames")
+    custom_metadata["geoserverMode"] = publish_result_payload.get("mode")
+    custom_metadata["targetCrs"] = geoserver_payload.get("targetCrs")
+    custom_metadata["seed"] = publish_result_payload.get("seed")
+    custom_metadata["seedError"] = publish_result_payload.get("seedError")
+    custom_metadata["bounds"] = metadata.get("bounds")
+    metadata["customMetadata"] = custom_metadata
+    return metadata
 
-        metadata = _mark_publication_build_state(metadata, state="running", progress=5, message="正在检查数据源")
-        _persist_publication_record(prepared, metadata_override=metadata, status_override="draft")
 
-        titiler_source_info = _validate_titiler_source_paths(source_entries or [metadata.get("sourcePath") or prepared["workspacePath"]])
-        resolved_sources = titiler_source_info["resolvedSources"]
+def _augment_geoserver_bounds_from_source(publication):
+    if not isinstance(publication, dict):
+        return publication
+    metadata = _safe_dict(publication.get("metadata"))
+    if not _is_geoserver_publish_method(metadata.get("publishMethod")):
+        return publication
+    if _publication_bounds(publication, metadata):
+        return publication
+    custom_metadata = _safe_dict(metadata.get("customMetadata"))
+    source_paths = (
+        metadata.get("sourcePaths")
+        or custom_metadata.get("sourcePaths")
+        or [metadata.get("sourcePath") or publication.get("publishPath")]
+    )
+    bounds = _datasource_wgs84_bounds(source_paths)
+    if not bounds:
+        return publication
+    metadata["bounds"] = bounds
+    custom_metadata["bounds"] = bounds
+    metadata["customMetadata"] = custom_metadata
+    publication["metadata"] = metadata
+    publication["bounds"] = bounds
+    return publication
 
-        metadata = _mark_publication_build_state(
-            metadata,
-            state="running",
-            progress=25,
-            message=f"正在准备 {len(resolved_sources)} 个 GeoTIFF/COG",
-        )
-        _persist_publication_record(prepared, metadata_override=metadata, status_override="draft")
 
-        prepared_sources = _prepare_titiler_sources(publication_id, resolved_sources)
-        mosaic_json_info = _build_mosaic_json(publication_id, prepared_sources)
-
-        metadata["sourcePath"] = resolved_sources[0]["path"] if resolved_sources else metadata.get("sourcePath")
-        metadata["workspacePath"] = metadata.get("sourcePath") or metadata.get("workspacePath")
-        metadata["sourcePaths"] = source_entries
-        metadata["sourceEntryCount"] = len(source_entries)
-        metadata["sourceFileCount"] = len(resolved_sources)
-        metadata["optimizedSourceCount"] = sum(1 for item in prepared_sources if item.get("optimized"))
-        metadata["mosaicJsonPath"] = mosaic_json_info["relativePath"]
-        custom_metadata = _safe_dict(metadata.get("customMetadata"))
-        custom_metadata["sourceMode"] = "datasource"
-        custom_metadata["sourcePath"] = metadata["sourcePath"]
-        custom_metadata["sourcePaths"] = source_entries
-        custom_metadata["sourceEntryCount"] = len(source_entries)
-        custom_metadata["sourceFileCount"] = len(resolved_sources)
-        custom_metadata["optimizedSourceCount"] = metadata["optimizedSourceCount"]
-        custom_metadata["mosaicJsonPath"] = mosaic_json_info["relativePath"]
-        metadata["customMetadata"] = custom_metadata
-        metadata = _mark_publication_build_state(metadata, state="ready", progress=100, message="动态发布已就绪", error=None)
-        _persist_publication_record(prepared, metadata_override=metadata, status_override="enabled" if metadata.get("enabled", True) else "disabled")
-        logMessage(f"TiTiler 发布构建完成: {publication_id}", "INFO")
-    except Exception as exc:
-        publication = _get_publication_snapshot(publication_id)
-        metadata = _safe_dict(_safe_dict(publication).get("metadata") if publication else _safe_dict(prepared.get("descriptor", {}).get("metadata")))
-        metadata = _mark_publication_build_state(metadata, state="failed", progress=100, message="动态发布构建失败", error=str(exc))
+def _cleanup_geoserver_publication(publication):
+    metadata = _safe_dict((publication or {}).get("metadata"))
+    if not _is_geoserver_publish_method(metadata.get("publishMethod")):
+        return
+    workspace = _first_non_blank(
+        metadata.get("geoserverWorkspace"),
+        _safe_dict(metadata.get("customMetadata")).get("geoserverWorkspace"),
+        config.get("geoserverWorkspace"),
+        "atlasworks",
+    )
+    custom_metadata = _safe_dict(metadata.get("customMetadata"))
+    store_names = metadata.get("geoserverStoreNames") or custom_metadata.get("geoserverStoreNames")
+    if not isinstance(store_names, list):
+        store_names = []
+    fallback_store_name = _first_non_blank(
+        metadata.get("geoserverStoreName"),
+        custom_metadata.get("geoserverStoreName"),
+        metadata.get("geoserverLayerName"),
+    )
+    if fallback_store_name and fallback_store_name not in store_names:
+        store_names.append(fallback_store_name)
+    if not store_names:
+        return
+    for store_name in store_names:
         try:
-            _persist_publication_record(prepared, metadata_override=metadata, status_override="failed")
-        except Exception as persist_exc:
-            logMessage(f"写入 TiTiler 发布失败状态失败 {publication_id}: {persist_exc}", "ERROR")
-        logMessage(f"TiTiler 发布构建失败 {publication_id}: {exc}", "ERROR")
-    finally:
-        with _PUBLICATION_BUILD_LOCK:
-            build_thread = _PUBLICATION_BUILD_THREADS.pop(publication_id, None)
-        del build_thread
-
-
-def _start_titiler_publication_build(prepared):
-    publication_id = prepared["publicationId"]
-    with _PUBLICATION_BUILD_LOCK:
-        existing_thread = _PUBLICATION_BUILD_THREADS.get(publication_id)
-        if existing_thread and existing_thread.is_alive():
-            return False
-        build_thread = threading.Thread(
-            target=_run_titiler_publication_build,
-            args=(prepared,),
-            daemon=True,
-            name=f"titiler-publication-{publication_id}",
-        )
-        _PUBLICATION_BUILD_THREADS[publication_id] = build_thread
-        build_thread.start()
-    return True
+            deleteStore(workspace, store_name)
+        except Exception as exc:
+            logMessage(f"GeoServer 发布资源清理失败 {workspace}:{store_name}: {exc}", "WARNING")
 
 
 def _generate_publication_id():
@@ -1405,10 +1394,6 @@ def _generate_publication_id():
 def _cleanup_publication_descriptor(publication):
     if not isinstance(publication, dict):
         return
-
-    publication_id = str(publication.get("publicationId") or publication.get("id") or "").strip()
-    if publication_id:
-        _cleanup_publication_runtime_dir(publication_id)
 
     metadata = publication.get("metadata") or {}
     descriptor_path = metadata.get("descriptorPath") or publication.get("descriptorPath")
@@ -1449,8 +1434,9 @@ def _get_publication_snapshot(publication_id):
 def _get_publication_response(publication_id, include_runtime_state=True, include_vector_details=True):
     record = fetchPublicationRecord(publication_id)
     if record:
+        publication_record = _augment_geoserver_bounds_from_source(record)
         response = _publication_record_to_response(
-            record,
+            publication_record,
             include_runtime_state=include_runtime_state,
             include_vector_details=include_vector_details,
         )
@@ -1541,8 +1527,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         existing_custom_metadata.get("sourcePaths"),
     )
     source_entries = []
-    resolved_sources = []
-    if normalized_publish_method in TITILER_PUBLISH_METHODS:
+    if normalized_publish_method in GEOSERVER_PUBLISH_METHODS:
         source_entries = _normalize_data_source_paths(incoming_source_paths)
         if not source_entries and workspace_path:
             source_entries = _normalize_data_source_paths([workspace_path])
@@ -1558,7 +1543,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         existing_metadata.get("sourceMode"),
         existing_custom_metadata.get("sourceMode"),
     ).lower()
-    if normalized_publish_method in TITILER_PUBLISH_METHODS:
+    if normalized_publish_method in GEOSERVER_PUBLISH_METHODS:
         source_mode_input = "datasource"
     if source_mode_input not in {"task", "manual", "artifact", "datasource"}:
         if task_id:
@@ -1567,23 +1552,14 @@ def _prepare_publication_payload(data, existing_publication=None):
             source_mode_input = "artifact"
         else:
             source_mode_input = "manual"
-    if source_mode_input == "datasource" and normalized_publish_method not in TITILER_PUBLISH_METHODS:
-        return None, ("数据源文件发布目前仅支持 TiTiler 动态影像发布", 400)
     if source_mode_input == "datasource":
-        publish_method = DATASOURCE_PUBLISH_METHOD
-        normalized_publish_method = DATASOURCE_PUBLISH_METHOD
+        if not normalized_publish_method or normalized_publish_method not in GEOSERVER_PUBLISH_METHODS:
+            publish_method = DATASOURCE_PUBLISH_METHOD
+            normalized_publish_method = DATASOURCE_PUBLISH_METHOD
 
     if source_mode_input == "datasource":
-        if normalized_publish_method in TITILER_PUBLISH_METHODS:
-            try:
-                titiler_source_info = _validate_titiler_source_paths(source_entries or [workspace_path])
-                source_entries = titiler_source_info["sourceEntries"]
-                resolved_sources = titiler_source_info["resolvedSources"]
-            except ValueError as exc:
-                return None, (str(exc), 400)
-            workspace_path = resolved_sources[0]["path"]
-        else:
-            workspace_path = _normalize_data_source_path(workspace_path)
+        source_entries = _normalize_data_source_paths(source_entries or [workspace_path])
+        workspace_path = source_entries[0] if source_entries else _normalize_data_source_path(workspace_path)
     else:
         is_valid_workspace_path, full_workspace_path = validateWorkspacePath(workspace_path)
         if not is_valid_workspace_path:
@@ -1619,16 +1595,11 @@ def _prepare_publication_payload(data, existing_publication=None):
     publish_path = publish_path_input or default_publish_path
 
     if source_mode_input == "datasource":
-        if normalized_publish_method in TITILER_PUBLISH_METHODS:
-            is_valid_publish_path, full_publish_path = validateDataSourcePath(publish_path)
-            if not is_valid_publish_path:
-                return None, (full_publish_path, 400)
-        else:
-            is_valid_publish_path, full_publish_path = validateDataSourcePath(publish_path)
-            if not is_valid_publish_path:
-                return None, (full_publish_path, 400)
-            if not os.path.isfile(full_publish_path):
-                return None, ("发布文件不存在", 404)
+        is_valid_publish_path, full_publish_path = validateDataSourcePath(publish_path)
+        if not is_valid_publish_path:
+            return None, (full_publish_path, 400)
+        if not os.path.exists(full_publish_path):
+            return None, ("发布数据源不存在", 404)
     else:
         is_valid_publish_path, full_publish_path = validateWorkspacePath(publish_path)
         if not is_valid_publish_path:
@@ -1657,24 +1628,14 @@ def _prepare_publication_payload(data, existing_publication=None):
     custom_metadata["sourceMode"] = source_mode_input
     if source_mode_input == "datasource":
         custom_metadata["sourcePath"] = workspace_path
-        if normalized_publish_method in TITILER_PUBLISH_METHODS:
-            custom_metadata["sourcePaths"] = source_entries
-            custom_metadata["sourceEntryCount"] = len(source_entries)
-            custom_metadata["sourceFileCount"] = len(resolved_sources)
-            custom_metadata["optimizedSourceCount"] = 0
-            custom_metadata.pop("mosaicJsonPath", None)
-        else:
-            custom_metadata["sourcePaths"] = [workspace_path]
-            custom_metadata["sourceEntryCount"] = 1
-            custom_metadata["sourceFileCount"] = 1
-            custom_metadata["optimizedSourceCount"] = 0
+        custom_metadata["sourcePaths"] = source_entries
+        custom_metadata["sourceEntryCount"] = len(source_entries)
+        custom_metadata["sourceFileCount"] = len(source_entries)
     else:
         custom_metadata.pop("sourcePath", None)
         custom_metadata.pop("sourcePaths", None)
-        custom_metadata.pop("mosaicJsonPath", None)
         custom_metadata.pop("sourceEntryCount", None)
         custom_metadata.pop("sourceFileCount", None)
-        custom_metadata.pop("optimizedSourceCount", None)
 
     tile_profile = {} if source_mode_input == "datasource" else _resolve_tile_publish_profile(full_publish_path, metadata=existing_metadata, artifact=artifact)
     source_tile_scheme = _normalize_tile_scheme(
@@ -1709,26 +1670,6 @@ def _prepare_publication_payload(data, existing_publication=None):
         or datetime.now(timezone.utc).isoformat()
     )
     updated_at = datetime.now(timezone.utc).isoformat()
-    existing_build_state = _safe_dict(existing_metadata.get("buildState"))
-    default_build_state = {
-        "state": "pending" if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else "ready",
-        "progress": 0 if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else 100,
-        "message": "等待后台构建缓存" if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS else "已就绪",
-        "error": None,
-        "updatedAt": published_at,
-    }
-    build_state = default_build_state
-    if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS:
-        if existing_build_state:
-            build_state = existing_build_state
-        elif existing_metadata.get("mosaicJsonPath"):
-            build_state = {
-                "state": "ready",
-                "progress": 100,
-                "message": "已就绪",
-                "error": None,
-                "updatedAt": updated_at,
-            }
     descriptor = {
         "id": publication_id,
         "artifactId": artifact_id,
@@ -1746,19 +1687,7 @@ def _prepare_publication_payload(data, existing_publication=None):
             "sourcePath": workspace_path if source_mode_input == "datasource" else None,
             "sourcePaths": source_entries if source_mode_input == "datasource" else None,
             "sourceEntryCount": len(source_entries) if source_mode_input == "datasource" else None,
-            "sourceFileCount": (
-                len(resolved_sources) if normalized_publish_method in TITILER_PUBLISH_METHODS else len(source_entries)
-            ) if source_mode_input == "datasource" else None,
-            "optimizedSourceCount": (
-                existing_metadata.get("optimizedSourceCount", 0)
-                if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS
-                else None
-            ),
-            "mosaicJsonPath": (
-                existing_metadata.get("mosaicJsonPath")
-                if source_mode_input == "datasource" and normalized_publish_method in TITILER_PUBLISH_METHODS
-                else None
-            ),
+            "sourceFileCount": len(source_entries) if source_mode_input == "datasource" else None,
             "taskId": task_id or None,
             "sourceMode": source_mode_input,
             "publishMethod": publish_method,
@@ -1768,7 +1697,6 @@ def _prepare_publication_payload(data, existing_publication=None):
             "sourceTileScheme": source_tile_scheme,
             "sourceProjection": normalizeProjection(source_projection) if source_projection else None,
             "tileExtension": tile_extension,
-            "buildState": build_state,
             "customMetadata": custom_metadata,
         },
     }
@@ -1778,7 +1706,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         "artifactId": artifact_id,
         "workspacePath": workspace_path,
         "sourcePaths": source_entries,
-        "sourceFileCount": len(resolved_sources),
+        "sourceFileCount": len(source_entries),
         "publishType": publish_type,
         "alias": alias,
         "publicationId": publication_id,
@@ -1786,7 +1714,6 @@ def _prepare_publication_payload(data, existing_publication=None):
         "descriptor": descriptor,
         "publishedAt": published_at,
         "artifact": artifact,
-        "mosaicJsonInfo": mosaic_json_info,
     }, None
 
 
@@ -1947,6 +1874,69 @@ def _publication_record_to_response(record, include_runtime_state=True, include_
     return response
 
 
+def _normalize_publication_status(status, metadata=None):
+    metadata = _safe_dict(metadata)
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "published":
+        return "enabled" if metadata.get("enabled", True) else "disabled"
+    return normalized_status or str(status or "").strip()
+
+
+def _publication_record_to_list_item(record):
+    if not isinstance(record, dict):
+        return None
+
+    metadata = _safe_dict(record.get("metadata"))
+    return {
+        "publicationId": record.get("id"),
+        "artifactId": record.get("artifactId"),
+        "publishType": record.get("publishType"),
+        "publishPath": record.get("publishPath"),
+        "alias": record.get("alias"),
+        "status": _normalize_publication_status(record.get("status"), metadata),
+        "metadata": metadata,
+        "publishMethod": metadata.get("publishMethod"),
+        "visibility": metadata.get("visibility"),
+        "note": metadata.get("note"),
+        "enabled": bool(metadata.get("enabled", True)),
+        "customMetadata": _safe_dict(metadata.get("customMetadata")),
+        "sourceEntryCount": int(metadata.get("sourceEntryCount") or 0),
+        "sourceFileCount": int(metadata.get("sourceFileCount") or 0),
+        "bounds": _publication_bounds(record, metadata),
+        "publishedAt": record.get("publishedAt"),
+        "createdAt": record.get("createdAt"),
+        "updatedAt": record.get("updatedAt"),
+    }
+
+
+def _publication_descriptor_to_list_item(payload):
+    if not isinstance(payload, dict):
+        return None
+
+    metadata = _safe_dict(payload.get("metadata"))
+    publication_id = payload.get("publicationId") or payload.get("id")
+    return {
+        "publicationId": publication_id,
+        "artifactId": payload.get("artifactId"),
+        "publishType": payload.get("publishType"),
+        "publishPath": payload.get("publishPath"),
+        "alias": payload.get("alias"),
+        "status": _normalize_publication_status(payload.get("status"), metadata),
+        "metadata": metadata,
+        "publishMethod": metadata.get("publishMethod"),
+        "visibility": metadata.get("visibility"),
+        "note": metadata.get("note"),
+        "enabled": bool(metadata.get("enabled", True)),
+        "customMetadata": _safe_dict(metadata.get("customMetadata")),
+        "sourceEntryCount": int(metadata.get("sourceEntryCount") or 0),
+        "sourceFileCount": int(metadata.get("sourceFileCount") or 0),
+        "bounds": _publication_bounds(payload, metadata),
+        "publishedAt": payload.get("publishedAt"),
+        "createdAt": payload.get("createdAt"),
+        "updatedAt": payload.get("updatedAt"),
+    }
+
+
 def _find_manifest_for_artifact(artifact_id):
     for summary in _scan_manifest_files(limit=500):
         if summary.get("artifactId") == artifact_id:
@@ -2081,8 +2071,6 @@ def createPublication():
             "sourcePaths": descriptor["metadata"].get("sourcePaths"),
             "sourceEntryCount": descriptor["metadata"].get("sourceEntryCount"),
             "sourceFileCount": descriptor["metadata"].get("sourceFileCount"),
-            "optimizedSourceCount": descriptor["metadata"].get("optimizedSourceCount"),
-            "mosaicJsonPath": descriptor["metadata"].get("mosaicJsonPath"),
             "taskId": task_id or None,
             "sourceMode": descriptor["metadata"].get("sourceMode"),
             "publishMethod": descriptor["metadata"].get("publishMethod"),
@@ -2091,11 +2079,15 @@ def createPublication():
             "enabled": descriptor["metadata"].get("enabled", True),
             "sourceTileScheme": descriptor["metadata"].get("sourceTileScheme"),
             "tileExtension": descriptor["metadata"].get("tileExtension"),
-            "buildState": descriptor["metadata"].get("buildState"),
             "customMetadata": descriptor["metadata"].get("customMetadata", {}),
         }
         prepared["descriptor"]["metadata"] = metadata
-        initial_status = "draft" if _is_async_titiler_publication(prepared) else descriptor["status"]
+        initial_status = descriptor["status"]
+
+        if _is_geoserver_publish_method(metadata.get("publishMethod")):
+            metadata = _publish_geoserver_publication(prepared, metadata)
+            prepared["descriptor"]["metadata"] = metadata
+
         _persist_publication_record(prepared, metadata_override=metadata, status_override=initial_status)
 
         build_job_id = artifact.get("buildJobId") if artifact else None
@@ -2118,9 +2110,6 @@ def createPublication():
             "descriptorPath": descriptor_path,
             "publicationId": publication_id,
         }, include_runtime_state=False)
-
-        if _is_async_titiler_publication(prepared):
-            _start_titiler_publication_build(prepared)
 
         logMessage(f"发布记录已创建: {publication_id} -> {artifact_id or task_id or workspace_path}", "INFO")
         return jsonify({
@@ -2153,56 +2142,23 @@ def updatePublication(publication_id=None, publicationId=None):
             return jsonify({"error": message}), status_code
 
         descriptor = prepared["descriptor"]
-        if descriptor["metadata"].get("sourceMode") != "datasource":
-            _cleanup_publication_runtime_dir(prepared["publicationId"])
         descriptor_path = _write_publication_descriptor(descriptor, prepared["alias"], previous_publication=existing_publication)
         metadata = {
             **descriptor["metadata"],
             "descriptorPath": descriptor_path,
         }
         prepared["descriptor"]["metadata"] = metadata
-        needs_titiler_rebuild = _titiler_publication_requires_rebuild(existing_publication, prepared)
-        if needs_titiler_rebuild:
-            _cleanup_publication_runtime_dir(prepared["publicationId"])
-            metadata = _mark_publication_build_state(metadata, state="pending", progress=0, message="等待后台构建缓存", error=None)
-            metadata["mosaicJsonPath"] = None
-            metadata["optimizedSourceCount"] = 0
-            custom_metadata = _safe_dict(metadata.get("customMetadata"))
-            custom_metadata.pop("mosaicJsonPath", None)
-            custom_metadata["optimizedSourceCount"] = 0
-            metadata["customMetadata"] = custom_metadata
-            prepared["descriptor"]["metadata"] = metadata
-        elif _is_async_titiler_publication(prepared):
-            existing_metadata = _safe_dict(existing_publication.get("metadata"))
-            metadata["mosaicJsonPath"] = metadata.get("mosaicJsonPath") or existing_metadata.get("mosaicJsonPath")
-            if metadata.get("optimizedSourceCount") in (None, ""):
-                metadata["optimizedSourceCount"] = existing_metadata.get("optimizedSourceCount", 0)
-            existing_build_state = _safe_dict(existing_metadata.get("buildState"))
-            if existing_build_state:
-                metadata["buildState"] = existing_build_state
-            if metadata.get("mosaicJsonPath"):
-                metadata["buildState"] = {
-                    "state": "ready",
-                    "progress": 100,
-                    "message": "已就绪",
-                    "error": None,
-                    "updatedAt": datetime.now(timezone.utc).isoformat(),
-                }
-            custom_metadata = _safe_dict(metadata.get("customMetadata"))
-            if metadata.get("mosaicJsonPath"):
-                custom_metadata["mosaicJsonPath"] = metadata.get("mosaicJsonPath")
-            if metadata.get("optimizedSourceCount") is not None:
-                custom_metadata["optimizedSourceCount"] = metadata.get("optimizedSourceCount")
-            metadata["customMetadata"] = custom_metadata
+        if _is_geoserver_publish_method(metadata.get("publishMethod")):
+            _cleanup_geoserver_publication(existing_publication)
+            metadata = _publish_geoserver_publication(prepared, metadata)
             prepared["descriptor"]["metadata"] = metadata
         _persist_publication_record(
             prepared,
             metadata_override=prepared["descriptor"]["metadata"],
-            status_override="draft" if needs_titiler_rebuild else descriptor["status"],
+            status_override=descriptor["status"],
         )
 
         if publication_id != prepared["publicationId"]:
-            _cleanup_publication_runtime_dir(publication_id)
             deletePublicationRecord(publication_id)
 
         publication_response = _get_publication_response(prepared["publicationId"], include_runtime_state=False) or _augment_publication_response({
@@ -2210,9 +2166,6 @@ def updatePublication(publication_id=None, publicationId=None):
             "descriptorPath": descriptor_path,
             "publicationId": prepared["publicationId"],
         }, include_runtime_state=False)
-
-        if needs_titiler_rebuild:
-            _start_titiler_publication_build(prepared)
 
         logMessage(f"发布记录已更新: {publication_id} -> {prepared['publicationId']}", "INFO")
         return jsonify({
@@ -2230,10 +2183,15 @@ def listPublications():
         keyword = str(request.args.get("keyword", "")).strip().lower()
         publish_type = str(request.args.get("publishType", "")).strip().lower()
         status_filter = str(request.args.get("status", "")).strip().lower()
+        include_details = str(request.args.get("includeDetails", "")).strip().lower() in {"1", "true", "yes", "on"}
         publications = {}
 
         for record in listPublicationRecords(limit=1000):
-            response = _publication_record_to_response(record, include_runtime_state=False, include_vector_details=False)
+            response = (
+                _publication_record_to_response(record, include_runtime_state=False, include_vector_details=False)
+                if include_details
+                else _publication_record_to_list_item(record)
+            )
             if not response:
                 continue
             if not _is_supported_publication_record(response):
@@ -2247,18 +2205,34 @@ def listPublications():
                     continue
                 publications.setdefault(
                     publication_id,
-                    _augment_publication_response({
-                        "publicationId": record.get("id"),
-                        "artifactId": record.get("artifactId"),
-                        "publishType": record.get("publishType"),
-                        "publishPath": record.get("publishPath"),
-                        "alias": record.get("alias"),
-                        "status": record.get("status"),
-                        "metadata": record.get("metadata", {}),
-                        "publishedAt": record.get("publishedAt"),
-                        "createdAt": record.get("createdAt"),
-                        "descriptorPath": record.get("descriptorPath"),
-                    }, include_runtime_state=False, include_vector_details=False),
+                    (
+                        _augment_publication_response({
+                            "publicationId": record.get("id"),
+                            "artifactId": record.get("artifactId"),
+                            "publishType": record.get("publishType"),
+                            "publishPath": record.get("publishPath"),
+                            "alias": record.get("alias"),
+                            "status": record.get("status"),
+                            "metadata": record.get("metadata", {}),
+                            "publishedAt": record.get("publishedAt"),
+                            "createdAt": record.get("createdAt"),
+                            "updatedAt": record.get("updatedAt"),
+                            "descriptorPath": record.get("descriptorPath"),
+                        }, include_runtime_state=False, include_vector_details=False)
+                        if include_details
+                        else _publication_descriptor_to_list_item({
+                            "id": record.get("id"),
+                            "artifactId": record.get("artifactId"),
+                            "publishType": record.get("publishType"),
+                            "publishPath": record.get("publishPath"),
+                            "alias": record.get("alias"),
+                            "status": record.get("status"),
+                            "metadata": record.get("metadata", {}),
+                            "publishedAt": record.get("publishedAt"),
+                            "createdAt": record.get("createdAt"),
+                            "updatedAt": record.get("updatedAt"),
+                        })
+                    ),
                 )
                 if not _is_supported_publication_record(publications.get(publication_id)):
                     publications.pop(publication_id, None)
@@ -2277,8 +2251,8 @@ def listPublications():
                         item.get("publicationId"),
                         item.get("alias"),
                         item.get("publishPath"),
-                        item.get("accessUrl"),
                         (item.get("metadata") or {}).get("workspacePath"),
+                        (item.get("metadata") or {}).get("sourcePath"),
                         (item.get("metadata") or {}).get("taskId"),
                         (item.get("metadata") or {}).get("publishMethod"),
                         item.get("publishType"),
@@ -2301,14 +2275,16 @@ def listPublications():
 def getPublication(publication_id=None, publicationId=None):
     try:
         publication_id = publication_id or publicationId
-        record = fetchPublicationRecord(publication_id)
-        if record:
-            return jsonify({"success": True, "publication": _publication_record_to_response(record)})
+        response = _get_publication_response(publication_id)
+        if response:
+            return jsonify({"success": True, "publication": response})
 
         if not isDatabaseEnabled():
             for publication in _scan_publication_files(limit=500):
                 if publication.get("id") == publication_id:
-                    return jsonify({"success": True, "publication": _augment_publication_response(publication)})
+                    return jsonify({"success": True, "publication": _augment_publication_response(
+                        _augment_geoserver_bounds_from_source(publication)
+                    )})
 
         return jsonify({"error": "发布记录不存在"}), 404
     except Exception as exc:
@@ -2324,6 +2300,7 @@ def deletePublication(publication_id=None, publicationId=None):
             return jsonify({"error": "发布记录不存在"}), 404
 
         _cleanup_publication_descriptor(publication)
+        _cleanup_geoserver_publication(publication)
         deletePublicationRecord(publication_id)
 
         logMessage(f"发布记录已删除: {publication_id}", "INFO")
@@ -2338,7 +2315,7 @@ def deletePublication(publication_id=None, publicationId=None):
 
 def _build_publication_update_payload(publication):
     metadata = _safe_dict((publication or {}).get("metadata"))
-    source_mode = metadata.get("sourceMode") or ("datasource" if _is_titiler_publish_method(metadata.get("publishMethod")) else "manual")
+    source_mode = metadata.get("sourceMode") or ("datasource" if _is_geoserver_publish_method(metadata.get("publishMethod")) else "manual")
     payload = {
         "publicationId": publication.get("publicationId") or publication.get("id"),
         "sourceMode": source_mode,
@@ -2370,25 +2347,7 @@ def _build_publication_update_payload(publication):
     return payload
 
 
-def clearPublicationCache(publication_id=None, publicationId=None):
-    try:
-        publication_id = publication_id or publicationId
-        publication = _get_publication_snapshot(publication_id)
-        if not publication:
-            return jsonify({"error": "发布记录不存在"}), 404
-        metadata = _safe_dict(publication.get("metadata"))
-        if metadata.get("sourceMode") != "datasource" or not _is_titiler_publish_method(metadata.get("publishMethod")):
-            return jsonify({"error": "仅 TiTiler 数据源发布支持缓存清理"}), 400
-        _cleanup_publication_runtime_dir(publication_id)
-        response = _augment_publication_response(publication, include_runtime_state=False)
-        logMessage(f"发布缓存已清理: {publication_id}", "INFO")
-        return jsonify({"success": True, "publication": response, "action": "cache-cleared"})
-    except Exception as exc:
-        logMessage(f"清理发布缓存失败 {publication_id}: {exc}", "ERROR")
-        return jsonify({"success": False, "error": str(exc)}), 500
-
-
-def rebuildPublicationCache(publication_id=None, publicationId=None):
+def togglePublicationEnabled(publication_id=None, publicationId=None):
     try:
         db_ready, db_error = _ensure_publication_db_ready()
         if not db_ready:
@@ -2399,40 +2358,45 @@ def rebuildPublicationCache(publication_id=None, publicationId=None):
         publication = _get_publication_snapshot(publication_id)
         if not publication:
             return jsonify({"error": "发布记录不存在"}), 404
+
+        data = request.get_json(silent=True) or {}
+        if "enabled" not in data:
+            return jsonify({"error": "缺少参数: enabled"}), 400
+
+        enabled = str(data.get("enabled")).strip().lower() not in {"0", "false", "no", "off", "disabled"}
         metadata = _safe_dict(publication.get("metadata"))
-        if metadata.get("sourceMode") != "datasource" or not _is_titiler_publish_method(metadata.get("publishMethod")):
-            return jsonify({"error": "仅 TiTiler 数据源发布支持缓存重建"}), 400
-
-        payload = _build_publication_update_payload(publication)
-        _cleanup_publication_runtime_dir(publication_id)
-        prepared, error = _prepare_publication_payload(payload, existing_publication=publication)
-        if error:
-            message, status_code = error
-            return jsonify({"error": message}), status_code
-        descriptor = prepared["descriptor"]
-        metadata = {
-            **descriptor["metadata"],
-            "descriptorPath": publication.get("descriptorPath") or _safe_dict(publication.get("metadata")).get("descriptorPath"),
-        }
-        metadata = _mark_publication_build_state(metadata, state="pending", progress=0, message="等待后台重建缓存", error=None)
-        metadata["mosaicJsonPath"] = None
-        metadata["optimizedSourceCount"] = 0
         custom_metadata = _safe_dict(metadata.get("customMetadata"))
-        custom_metadata.pop("mosaicJsonPath", None)
-        custom_metadata["optimizedSourceCount"] = 0
+        metadata["enabled"] = enabled
         metadata["customMetadata"] = custom_metadata
-        prepared["descriptor"]["metadata"] = metadata
-        _persist_publication_record(prepared, metadata_override=metadata, status_override="draft")
-        _start_titiler_publication_build(prepared)
+        publication["metadata"] = metadata
+        publication["status"] = "enabled" if enabled else "disabled"
+        publication["updatedAt"] = datetime.now(timezone.utc).isoformat()
 
-        response = _get_publication_response(prepared["publicationId"], include_runtime_state=False) or _augment_publication_response({
-            **descriptor,
-            "publicationId": prepared["publicationId"],
-        }, include_runtime_state=False)
-        logMessage(f"发布缓存已进入后台重建: {publication_id}", "INFO")
-        return jsonify({"success": True, "publication": response, "action": "cache-rebuild-started"})
+        prepared = {
+            "publicationId": publication.get("publicationId") or publication.get("id") or publication_id,
+            "artifactId": publication.get("artifactId"),
+            "publishType": publication.get("publishType"),
+            "publishPath": publication.get("publishPath"),
+            "alias": publication.get("alias"),
+            "publishedAt": publication.get("publishedAt") or publication.get("createdAt") or publication["updatedAt"],
+            "descriptor": {
+                "id": publication.get("publicationId") or publication.get("id") or publication_id,
+                "artifactId": publication.get("artifactId"),
+                "publishType": publication.get("publishType"),
+                "publishPath": publication.get("publishPath"),
+                "alias": publication.get("alias"),
+                "status": publication["status"],
+                "publishedAt": publication.get("publishedAt"),
+                "createdAt": publication.get("createdAt"),
+                "updatedAt": publication["updatedAt"],
+                "metadata": metadata,
+            },
+        }
+        _persist_publication_record(prepared, metadata_override=metadata, status_override=publication["status"])
+        response = _get_publication_response(prepared["publicationId"], include_runtime_state=False) or _augment_publication_response(prepared["descriptor"], include_runtime_state=False)
+        return jsonify({"success": True, "publication": response})
     except Exception as exc:
-        logMessage(f"重建发布缓存失败 {publication_id}: {exc}", "ERROR")
+        logMessage(f"切换发布启停失败 {publication_id}: {exc}", "ERROR")
         return jsonify({"success": False, "error": str(exc)}), 500
 
 

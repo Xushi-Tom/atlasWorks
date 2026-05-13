@@ -11,6 +11,7 @@ backend/static/
 # Runtime artifacts
 runtime/
 storage/
+project-assets/
 *.zip
 *.tar
 *.tar.gz

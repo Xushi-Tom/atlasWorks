@@ -4,15 +4,16 @@
 from flask import request
 
 from apiDocs import getOpenApiSpec, getSwaggerUi
-from catalog import clearPublicationCache, createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, rebuildPublicationCache, servePublicationAsset, servePublishedPath, serveWmts, updatePublication
+from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, servePublicationAsset, servePublishedPath, serveWmts, togglePublicationEnabled, updatePublication
 from dataSourceOps import getDataSourceInfo, getDataSourceWorkspaceInfo, listDataSources, recommendConfig, resolveDataSourceFiles, serveDataSourceFile
 from fileSplitOps import splitLargeFile
+from geoserverOps import geoserverDeleteLayer, geoserverHealth, geoserverLayerDetail, geoserverListLayers, geoserverPublish, geoserverSeed
 from indexedTilesOps import createIndexedTiles, deleteNodataTiles, scanNodataTiles
 from preflight import runPreflightCheck
 from systemOps import healthCheck, listApiRoutes, systemInfo, updateContainerInfo
 from taskCenter import cleanupTasks, deleteTask, getTaskStatus, listTaskEventStream, listTasks, stopTask
 from terrainOps import createTerrainTiles, decompressTerrain, updateLayerJson
-from tileAdminOps import convertTileFormat, getCacheInfo
+from tileAdminOps import convertTileFormat
 from tiles3dOps import create3DTiles
 from uploadOps import extractArchiveFile, uploadFolderFiles, uploadSingleFile, uploadZipArchive
 from vectorTilesOps import createVectorTiles
@@ -33,10 +34,8 @@ def handlePublicationDetail(publicationId):
     return getPublication(publicationId=publicationId)
 
 
-def handlePublicationCache(publicationId):
-    if request.method == "DELETE":
-        return clearPublicationCache(publicationId=publicationId)
-    return rebuildPublicationCache(publicationId=publicationId)
+def handlePublicationToggle(publicationId):
+    return togglePublicationEnabled(publicationId=publicationId)
 
 
 def registerRoutes(app):
@@ -92,7 +91,13 @@ def registerRoutes(app):
 
     app.add_url_rule("/api/publications", endpoint="publications", view_func=handlePublications, methods=["GET", "POST"])
     app.add_url_rule("/api/publications/<publicationId>", endpoint="publication_detail", view_func=handlePublicationDetail, methods=["GET", "PUT", "DELETE"])
-    app.add_url_rule("/api/publications/<publicationId>/cache", endpoint="publication_cache", view_func=handlePublicationCache, methods=["POST", "DELETE"])
+    app.add_url_rule("/api/publications/<publicationId>/enabled", endpoint="publication_toggle", view_func=handlePublicationToggle, methods=["PATCH"])
+    app.add_url_rule("/api/geoserver/health", endpoint="geoserver_health", view_func=geoserverHealth, methods=["GET"])
+    app.add_url_rule("/api/geoserver/publish", endpoint="geoserver_publish", view_func=geoserverPublish, methods=["POST"])
+    app.add_url_rule("/api/geoserver/layers", endpoint="geoserver_layers", view_func=geoserverListLayers, methods=["GET"])
+    app.add_url_rule("/api/geoserver/layers/<name>", endpoint="geoserver_layer_detail", view_func=geoserverLayerDetail, methods=["GET"])
+    app.add_url_rule("/api/geoserver/layers/<name>", endpoint="geoserver_layer_delete", view_func=geoserverDeleteLayer, methods=["DELETE"])
+    app.add_url_rule("/api/geoserver/layers/<name>/seed", endpoint="geoserver_layer_seed", view_func=geoserverSeed, methods=["POST"])
     app.add_url_rule("/publication-assets/<publication_id>", endpoint="published_publication_root", view_func=servePublicationAsset, defaults={"relative_path": ""}, methods=["GET"])
     app.add_url_rule("/publication-assets/<publication_id>/<path:relative_path>", endpoint="published_publication_asset", view_func=servePublicationAsset, methods=["GET"])
     app.add_url_rule("/published", endpoint="published_root", view_func=servePublishedPath, defaults={"relative_path": ""}, methods=["GET"])
@@ -100,7 +105,6 @@ def registerRoutes(app):
     app.add_url_rule("/wmts", endpoint="wmts_service", view_func=serveWmts, methods=["GET", "OPTIONS"])
 
     app.add_url_rule("/api/config/recommend", endpoint="recommend_config", view_func=recommendConfig, methods=["POST"])
-    app.add_url_rule("/api/cache/info", endpoint="get_cache_info", view_func=getCacheInfo, methods=["GET"])
     app.add_url_rule("/api/system/info", endpoint="system_info", view_func=systemInfo, methods=["GET"])
     app.add_url_rule("/api/container/update", endpoint="update_container", view_func=updateContainerInfo, methods=["POST"])
     app.add_url_rule("/api/routes", endpoint="list_api_routes", view_func=listApiRoutes, methods=["GET"])

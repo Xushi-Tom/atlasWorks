@@ -8,7 +8,8 @@ const props = defineProps({
     minWidth: { type: Number, default: 420 },
     maxWidth: { type: Number, default: 1280 },
     destroyOnClose: { type: Boolean, default: false },
-    subtitle: { type: String, default: '' }
+    subtitle: { type: String, default: '' },
+    overlayClass: { type: String, default: '' }
 });
 
 const emit = defineEmits(['update:modelValue', 'closed']);
@@ -95,7 +96,7 @@ onBeforeUnmount(() => {
 
 <template>
     <Teleport to="body">
-        <div v-if="shouldRender" class="drawer-overlay" :class="{ 'is-open': animating }" @click.self="close">
+        <div v-if="shouldRender" class="drawer-overlay" :class="[overlayClass, { 'is-open': animating }]" @click.self="close">
             <aside class="drawer-shell" :class="{ 'is-open': animating }" :style="{ width: widthStyle }" @click.stop>
                 <div class="drawer-resize-handle" @mousedown.prevent="startDragging"></div>
                 <header class="drawer-header">

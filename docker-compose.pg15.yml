@@ -43,7 +43,7 @@ services:
       dockerfile: deploy/docker/Dockerfile
       args:
         # 基础镜像，默认只使用 amd64/x86_64
-        BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye-amd64}
+        BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye}
         # Debian 普通软件源，内网或离线环境可替换
         APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
         # Debian security 软件源，内网或离线环境可替换
@@ -95,12 +95,16 @@ services:
       - ATLASWORKS_NGINX_PUBLIC_BASE_URL=${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
       # Nginx 静态发布对外端口
       - ATLASWORKS_NGINX_PUBLIC_BASE_PORT=${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
-      # TiTiler 动态影像发布对外地址；为空时按发布主机和 18002 生成
-      - ATLASWORKS_TITILER_PUBLIC_BASE_URL=${ATLASWORKS_TITILER_PUBLIC_BASE_URL:-}
-      # TiTiler 动态影像发布对外端口
-      - ATLASWORKS_TITILER_PUBLIC_BASE_PORT=${ATLASWORKS_TITILER_PUBLIC_BASE_PORT:-18002}
-      # TiTiler 使用的瓦片矩阵集
-      - ATLASWORKS_TITILER_TILE_MATRIX_SET=${ATLASWORKS_TITILER_TILE_MATRIX_SET:-WebMercatorQuad}
+      # GeoServer REST 内网地址
+      - ATLASWORKS_GEOSERVER_BASE_URL=${ATLASWORKS_GEOSERVER_BASE_URL:-http://atlasworks-geoserver:8080/geoserver}
+      # GeoServer 对外访问地址
+      - ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL=${ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL:-}
+      # GeoServer 对外访问端口
+      - ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT=${ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT:-18083}
+      # GeoServer 账号密码
+      - ATLASWORKS_GEOSERVER_USERNAME=${ATLASWORKS_GEOSERVER_USERNAME:-admin}
+      - ATLASWORKS_GEOSERVER_PASSWORD=${ATLASWORKS_GEOSERVER_PASSWORD:-geoserver}
+      - ATLASWORKS_GEOSERVER_WORKSPACE=${ATLASWORKS_GEOSERVER_WORKSPACE:-atlasworks}
       # API 文档认证用户名（可为空）
       - ATLASWORKS_DOCS_USER=${ATLASWORKS_DOCS_USER:-}
       # API 文档认证密码
@@ -172,7 +176,7 @@ services:
       context: .
       dockerfile: deploy/docker/Dockerfile
       args:
-        BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye-amd64}
+        BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye}
         APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
         APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
     container_name: atlasworks-vector-worker
@@ -243,7 +247,6 @@ services:
     volumes:
       - "D:/TIF:/app/dataSource"
       - "D:/tiles:/app/tiles"
-      - atlasworks-publications-cache:/app/tiles/_publications
       - ./runtime/log:/app/log
 
   # 服务名：影像切片 Worker，执行 indexed/map 栅格切片队列任务
@@ -424,6 +427,8 @@ services:
     depends_on:
       atlasworks-api:
         condition: service_healthy
+      atlasworks-geoserver:
+        condition: service_healthy
     environment:
       # 容器时区
       - TZ=Asia/Shanghai
@@ -445,12 +450,15 @@ services:
       - ATLASWORKS_NGINX_PUBLIC_BASE_URL=${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
       # Nginx 静态发布对外端口
       - ATLASWORKS_NGINX_PUBLIC_BASE_PORT=${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
-      # TiTiler 动态影像发布对外地址；为空时按发布主机和 18002 生成
-      - ATLASWORKS_TITILER_PUBLIC_BASE_URL=${ATLASWORKS_TITILER_PUBLIC_BASE_URL:-}
-      # TiTiler 动态影像发布对外端口
-      - ATLASWORKS_TITILER_PUBLIC_BASE_PORT=${ATLASWORKS_TITILER_PUBLIC_BASE_PORT:-18002}
-      # TiTiler 使用的瓦片矩阵集
-      - ATLASWORKS_TITILER_TILE_MATRIX_SET=${ATLASWORKS_TITILER_TILE_MATRIX_SET:-WebMercatorQuad}
+      # GeoServer REST 内网地址
+      - ATLASWORKS_GEOSERVER_BASE_URL=${ATLASWORKS_GEOSERVER_BASE_URL:-http://atlasworks-geoserver:8080/geoserver}
+      # GeoServer 对外地址
+      - ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL=${ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL:-}
+      - ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT=${ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT:-18083}
+      - ATLASWORKS_GEOSERVER_USERNAME=${ATLASWORKS_GEOSERVER_USERNAME:-admin}
+      - ATLASWORKS_GEOSERVER_PASSWORD=${ATLASWORKS_GEOSERVER_PASSWORD:-geoserver}
+      - ATLASWORKS_GEOSERVER_WORKSPACE=${ATLASWORKS_GEOSERVER_WORKSPACE:-atlasworks}
+      - ATLASWORKS_GEOSERVER_DATA_SOURCE_DIR=${ATLASWORKS_GEOSERVER_DATA_SOURCE_DIR:-/opt/geoserver/data_dir/dataSource}
       # 容器内数据源目录，需与 volumes 的容器路径一致
       - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
       # 容器内瓦片输出目录，需与 volumes 的容器路径一致
@@ -513,33 +521,30 @@ services:
       # 只读挂载瓦片目录，由 Nginx 直接发布 /published/*
       - "D:/tiles:/srv/atlasworks/tiles:ro"
 
-  # 服务名：TiTiler 动态影像发布后端，负责 COG / GeoTIFF 按需出瓦片
-  atlasworks-titiler:
-    image: ghcr.io/developmentseed/titiler:latest
+  # 服务名：GeoServer 标准地图服务后端，负责 WMS/WMTS/ImageMosaic 发布
+  atlasworks-geoserver:
+    image: kartoza/geoserver:2.26.1
     platform: linux/amd64
-    container_name: atlasworks-titiler
+    container_name: atlasworks-geoserver
     restart: unless-stopped
-    command: ["uvicorn", "titiler.application.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
-    # TiTiler CPU 上限
-    cpus: ${ATLASWORKS_TITILER_CPUS:-4.0}
-    # TiTiler 最大内存
-    mem_limit: ${ATLASWORKS_TITILER_MEM_LIMIT:-8g}
+    environment:
+      - GEOSERVER_ADMIN_USER=${ATLASWORKS_GEOSERVER_USERNAME:-admin}
+      - GEOSERVER_ADMIN_PASSWORD=${ATLASWORKS_GEOSERVER_PASSWORD:-geoserver}
+      - ENABLE_JSONP=true
+      - CORS_ENABLED=true
+      - CORS_ALLOWED_ORIGINS=*
+      - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir
+      - INITIAL_MEMORY=1G
+      - MAXIMUM_MEMORY=4G
     ports:
-      # TiTiler 对外端口
-      - "${ATLASWORKS_TITILER_HOST_PORT:-18002}:8000"
+      - "${ATLASWORKS_GEOSERVER_HOST_PORT:-18083}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)\""]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/geoserver/web/ || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
     volumes:
-      # 只读挂载数据源目录，TiTiler 可直接读取 COG / GeoTIFF
-      - "D:/TIF:/app/dataSource:ro"
-      # 只读挂载瓦片目录，兼容后续从产物目录发布 COG
-      - "D:/tiles:/app/tiles:ro"
-      # 动态发布运行时缓存走 Docker volume，避免 Windows 挂载盘随机读拖慢 TiTiler
-      - atlasworks-publications-cache:/app/tiles/_publications:ro
-
-volumes:
-  atlasworks-publications-cache:
+      - ./runtime/geoserver:/opt/geoserver/data_dir
+      - "D:/TIF:/opt/geoserver/data_dir/dataSource"
+      - "D:/tiles:/opt/geoserver/data_dir/tiles"

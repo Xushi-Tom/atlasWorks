@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=debian:bullseye-amd64
+ARG BASE_IMAGE=debian:bullseye
 FROM ${BASE_IMAGE}
 
 LABEL maintainer="AtlasWorks Team"
@@ -67,7 +67,6 @@ RUN mkdir -p /etc/apt/keyrings \
 
 RUN python3 -m pip install --upgrade pip setuptools wheel \
     && python3 -m pip install \
-    cogeo-mosaic==8.2.0 \
     flask==2.2.5 \
     flask-cors==4.0.0 \
     laspy \

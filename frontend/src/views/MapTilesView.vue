@@ -16,30 +16,17 @@ const form = reactive({
     minZoom: 0,
     maxZoom: 16,
     tileSize: 256,
-    processes: 4,
-    threads: 4,
-    maxMemory: '8g',
-    resampling: 'near',
     projection: 'EPSG:3857',
-    dataFormat: 'xyz',
     imageFormat: 'png',
-    tileScheme: 'tms',
+    tileScheme: 'google',
+    wmsConcurrency: 4,
+    transparentBackground: true,
+    useSourceNodata: true,
+    nodataValue: '',
+    renderMode: 'auto',
     redBand: 1,
     greenBand: 2,
-    blueBand: 3,
-    nodataValue: '',
-    srcNodataValue: '',
-    dstNodataValue: '',
-    stretchType: 'percent',
-    stretchLowPercent: 2,
-    stretchHighPercent: 98,
-    jpegQuality: 90,
-    pngCompression: 6,
-    bandMismatchPolicy: 'auto',
-    transparencyThreshold: 0.1,
-    generateShpIndex: true,
-    enableIncrementalUpdate: false,
-    skipNodataTiles: true
+    blueBand: 3
 });
 
 const picker = reactive({
@@ -55,6 +42,7 @@ const picker = reactive({
 const recommendationVisible = ref(false);
 const recommendationSourceFile = ref('');
 const recommendationData = ref(null);
+const advancedVisible = ref(false);
 const apiDocsUrl = `${window.location.origin}/api/docs`;
 const bandHint = ref('支持自动读取：单个 tif 直接读取；多个 tif 按最小公共波段数。');
 const bandOptions = ref(Array.from({ length: 16 }, (_, index) => index + 1));
@@ -63,20 +51,14 @@ const projectionOptions = [
     { value: 'EPSG:4326', label: 'WGS84 经纬度 (EPSG:4326)' },
     { value: 'EPSG:4490', label: 'CGCS2000 (EPSG:4490)' }
 ];
-const memoryOptions = [
-    { value: '2g', label: '2 GB' },
-    { value: '4g', label: '4 GB' },
-    { value: '8g', label: '8 GB' },
-    { value: '12g', label: '12 GB' },
-    { value: '16g', label: '16 GB' },
-    { value: '24g', label: '24 GB' },
-    { value: '32g', label: '32 GB' },
-    { value: '48g', label: '48 GB' },
-    { value: '64g', label: '64 GB' }
+const tileSchemeOptions = [
+    { value: 'google', label: 'XYZ' },
+    { value: 'tms', label: 'TMS' }
 ];
-const dataFormatOptions = [
-    { value: 'xyz', label: 'XYZ 目录瓦片' },
-    { value: 'tms', label: 'TMS 目录瓦片' }
+const renderModeOptions = [
+    { value: 'auto', label: '自动渲染' },
+    { value: 'gray', label: '单波段灰度' },
+    { value: 'rgb', label: '指定 RGB 波段' }
 ];
 
 let bandRefreshTimer = null;
@@ -214,11 +196,8 @@ function applyRecommendation(recommendations) {
     if (recommendations.minZoom !== undefined) form.minZoom = recommendations.minZoom;
     if (recommendations.maxZoom !== undefined) form.maxZoom = recommendations.maxZoom;
     if (recommendations.processes !== undefined) {
-        form.processes = recommendations.processes;
-        form.threads = recommendations.processes;
+        form.wmsConcurrency = recommendations.processes;
     }
-    if (recommendations.maxMemory !== undefined) form.maxMemory = recommendations.maxMemory;
-    if (recommendations.resampling !== undefined) form.resampling = recommendations.resampling;
     if (recommendations.tileFormat !== undefined) {
         const format = String(recommendations.tileFormat).toLowerCase();
         if (format === 'png' || format === 'jpeg' || format === 'jpg') {
@@ -228,7 +207,12 @@ function applyRecommendation(recommendations) {
     pushToast('已应用智能推荐参数', 'success');
 }
 
+function syncTileSchemePayload() {
+    form.dataFormat = form.tileScheme === 'tms' ? 'tms' : 'xyz';
+}
+
 async function submit() {
+    const folderPaths = normalizeListInput(form.folderPaths);
     const filePatterns = normalizeListInput(form.filePatterns);
     if (!form.outputPath || !filePatterns.length) {
         pushToast('请填写输出目录，并提供文件模式、具体文件或网络地址', 'warning');
@@ -236,54 +220,43 @@ async function submit() {
     }
 
     try {
+        syncTileSchemePayload();
         const payload = {
-            folderPaths: normalizeListInput(form.folderPaths),
+            ...form,
+            folderPaths,
             filePatterns,
-            outputPath: form.outputPath,
             minZoom: Number(form.minZoom),
             maxZoom: Number(form.maxZoom),
             tileSize: Number(form.tileSize),
-            processes: Number(form.processes),
-            threads: Number(form.threads),
-            maxMemory: form.maxMemory,
-            resampling: form.resampling,
-            projection: form.projection,
-            dataFormat: form.dataFormat,
-            imageFormat: form.imageFormat,
-            tileScheme: form.tileScheme,
+            wmsConcurrency: Number(form.wmsConcurrency),
+            transparentBackground: Boolean(form.transparentBackground),
+            useSourceNodata: Boolean(form.useSourceNodata),
+            nodataValue: String(form.nodataValue || '').trim() || null,
+            renderMode: form.renderMode,
             redBand: Number(form.redBand),
             greenBand: Number(form.greenBand),
-            blueBand: Number(form.blueBand),
-            nodataValue: form.nodataValue === '' ? null : Number(form.nodataValue),
-            srcNodataValue: form.srcNodataValue === '' ? null : Number(form.srcNodataValue),
-            dstNodataValue: form.dstNodataValue === '' ? null : Number(form.dstNodataValue),
-            stretchType: form.stretchType,
-            stretchLowPercent: Number(form.stretchLowPercent),
-            stretchHighPercent: Number(form.stretchHighPercent),
-            jpegQuality: Number(form.jpegQuality),
-            pngCompression: Number(form.pngCompression),
-            bandMismatchPolicy: form.bandMismatchPolicy,
-            transparencyThreshold: Number(form.transparencyThreshold),
-            generateShpIndex: Boolean(form.generateShpIndex),
-            enableIncrementalUpdate: Boolean(form.enableIncrementalUpdate),
-            skipNodataTiles: Boolean(form.skipNodataTiles)
+            blueBand: Number(form.blueBand)
         };
 
         const result = await api.createIndexedTiles(payload);
         if (result?.success === false) {
-            pushToast(result.message || '地图切片参数校验失败', 'warning', 5000);
+            pushToast(result.message || '地图切片任务启动失败', 'warning', 5000);
         } else {
-            pushToast(`地图切片任务已启动: ${result?.data?.taskId}`, 'success');
+            pushToast(`地图切片任务已启动: ${result?.data?.taskId || result?.taskId || ''}`, 'success');
         }
         emit('navigate', { section: 'tasks' });
     } catch (error) {
-        pushToast(`地图切片失败: ${error.message}`, 'error', 5000);
+        pushToast(`地图切片任务启动失败: ${error.message}`, 'error', 5000);
     }
 }
 
 watch(() => `${form.folderPaths}|${form.filePatterns}`, () => {
     scheduleRefreshBandOptions();
 });
+
+watch(() => form.tileScheme, () => {
+    syncTileSchemePayload();
+}, { immediate: true });
 
 onBeforeUnmount(() => {
     if (bandRefreshTimer) {
@@ -299,7 +272,7 @@ onBeforeUnmount(() => {
                 <div class="tile-page-toolbar">
                     <div class="tile-page-toolbar__meta">
                         <div class="tile-page-toolbar__title">地图切片</div>
-                        <div class="tile-page-toolbar__desc">按输入、核心参数、波段和构建策略自上而下配置二维栅格切片。</div>
+                        <div class="tile-page-toolbar__desc">使用 GeoServer WMS 渲染影像，并落盘为 XYZ/TMS 栅格瓦片。</div>
                     </div>
                     <div class="tile-page-toolbar__actions">
                         <el-button @click="requestRecommendation">智能推荐</el-button>
@@ -331,7 +304,7 @@ onBeforeUnmount(() => {
                                 </div>
                             </div>
                             <div class="tile-help">
-                                可直接传网络地址，例如 <code>https://example.com/aoi.tif</code>；多个来源用逗号分隔。
+                                可直接传网络地址，系统会先下载到数据源缓存目录后再交给 GeoServer 渲染；多个来源用逗号分隔。
                                 <a :href="apiDocsUrl" target="_blank" rel="noreferrer">接口示例</a>
                             </div>
                         </el-form-item>
@@ -344,6 +317,7 @@ onBeforeUnmount(() => {
                                     <el-button @click="clearField('outputPath')">清空</el-button>
                                 </div>
                             </div>
+                            <div class="tile-help">用于地图切片任务的输出标识；影像瓦片由 GeoServer 渲染并写入该输出目录。</div>
                         </el-form-item>
                     </el-form>
                 </el-card>
@@ -355,36 +329,10 @@ onBeforeUnmount(() => {
                             <el-col :xs="24" :md="12"><el-form-item label="最小层级"><el-input-number v-model="form.minZoom" :min="0" :max="30" controls-position="right" /></el-form-item></el-col>
                             <el-col :xs="24" :md="12"><el-form-item label="最大层级"><el-input-number v-model="form.maxZoom" :min="0" :max="30" controls-position="right" /></el-form-item></el-col>
                             <el-col :xs="24" :md="12"><el-form-item label="瓦片尺寸"><el-input-number v-model="form.tileSize" :min="64" :step="64" controls-position="right" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="进程数"><el-input-number v-model="form.processes" :min="1" :max="128" controls-position="right" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="线程数"><el-input-number v-model="form.threads" :min="1" :max="64" controls-position="right" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12">
-                                <el-form-item label="最大内存">
-                                    <el-select v-model="form.maxMemory">
-                                        <el-option v-for="option in memoryOptions" :key="option.value" :label="option.label" :value="option.value" />
-                                    </el-select>
-                                </el-form-item>
-                            </el-col>
-                            <el-col :xs="24" :md="12">
-                                <el-form-item label="重采样">
-                                    <el-select v-model="form.resampling">
-                                        <el-option label="最近邻" value="near" />
-                                        <el-option label="双线性" value="bilinear" />
-                                        <el-option label="三次卷积" value="cubic" />
-                                        <el-option label="Lanczos" value="lanczos" />
-                                    </el-select>
-                                </el-form-item>
-                            </el-col>
                             <el-col :xs="24" :md="12">
                                 <el-form-item label="投影">
                                     <el-select v-model="form.projection">
                                         <el-option v-for="option in projectionOptions" :key="option.value" :label="option.label" :value="option.value" />
-                                    </el-select>
-                                </el-form-item>
-                            </el-col>
-                            <el-col :xs="24" :md="12">
-                                <el-form-item label="数据格式">
-                                    <el-select v-model="form.dataFormat">
-                                        <el-option v-for="option in dataFormatOptions" :key="option.value" :label="option.label" :value="option.value" />
                                     </el-select>
                                 </el-form-item>
                             </el-col>
@@ -397,19 +345,9 @@ onBeforeUnmount(() => {
                                 </el-form-item>
                             </el-col>
                             <el-col :xs="24" :md="12">
-                                <el-form-item label="瓦片坐标系">
+                                <el-form-item label="瓦片行号规则">
                                     <el-select v-model="form.tileScheme">
-                                        <el-option label="TMS 原点" value="tms" />
-                                        <el-option label="XYZ 原点" value="google" />
-                                    </el-select>
-                                </el-form-item>
-                            </el-col>
-                            <el-col :xs="24" :md="12">
-                                <el-form-item label="波段不匹配策略">
-                                    <el-select v-model="form.bandMismatchPolicy">
-                                        <el-option label="自动处理" value="auto" />
-                                        <el-option label="严格校验" value="strict" />
-                                        <el-option label="跳过异常文件" value="skip" />
+                                        <el-option v-for="option in tileSchemeOptions" :key="option.value" :label="option.label" :value="option.value" />
                                     </el-select>
                                 </el-form-item>
                             </el-col>
@@ -420,69 +358,74 @@ onBeforeUnmount(() => {
                 <el-card shadow="never" class="tile-module">
                     <template #header>
                         <div class="tile-module__head">
-                            <span class="tile-module__title">波段选择</span>
-                            <el-button @click="refreshBandOptions(true)">获取波段信息</el-button>
+                            <span class="tile-module__title">高级配置</span>
+                            <div class="tile-module__actions">
+                                <el-button v-if="advancedVisible" @click="refreshBandOptions(true)">获取波段信息</el-button>
+                                <el-button text type="primary" @click="advancedVisible = !advancedVisible">
+                                    {{ advancedVisible ? '收起' : '展开配置' }}
+                                </el-button>
+                            </div>
                         </div>
                     </template>
-                    <div class="band-hint">{{ bandHint }}</div>
-                    <el-form label-position="top" class="tile-form">
-                        <el-row :gutter="16">
-                            <el-col :xs="24" :md="8">
-                                <el-form-item label="红波段">
-                                    <el-select v-model="form.redBand">
-                                        <el-option v-for="band in bandOptions" :key="`red-${band}`" :label="`波段 ${band}`" :value="band" />
-                                    </el-select>
+                    <el-form v-show="advancedVisible" label-position="top" class="tile-form">
+                        <div class="advanced-config-grid">
+                            <section class="advanced-config-section">
+                                <div class="advanced-config-section__title">性能</div>
+                                <div class="advanced-config-section__desc">控制同时请求 GeoServer WMS 的瓦片数量，过高会增加 GeoServer 压力。</div>
+                                <el-form-item label="WMS 并发数">
+                                    <el-input-number v-model="form.wmsConcurrency" :min="1" :max="16" controls-position="right" />
                                 </el-form-item>
-                            </el-col>
-                            <el-col :xs="24" :md="8">
-                                <el-form-item label="绿波段">
-                                    <el-select v-model="form.greenBand">
-                                        <el-option v-for="band in bandOptions" :key="`green-${band}`" :label="`波段 ${band}`" :value="band" />
-                                    </el-select>
-                                </el-form-item>
-                            </el-col>
-                            <el-col :xs="24" :md="8">
-                                <el-form-item label="蓝波段">
-                                    <el-select v-model="form.blueBand">
-                                        <el-option v-for="band in bandOptions" :key="`blue-${band}`" :label="`波段 ${band}`" :value="band" />
-                                    </el-select>
-                                </el-form-item>
-                            </el-col>
-                        </el-row>
-                    </el-form>
-                </el-card>
+                            </section>
 
-                <el-card shadow="never" class="tile-module">
-                    <template #header><div class="tile-module__title">NoData 与拉伸</div></template>
-                    <el-form label-position="top" class="tile-form">
-                        <el-row :gutter="16">
-                            <el-col :xs="24" :md="12"><el-form-item label="NoData 值"><el-input v-model="form.nodataValue" placeholder="例如 0、255 或 -9999" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="源 NoData"><el-input v-model="form.srcNodataValue" placeholder="例如 0、255 或 -9999" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="目标 NoData"><el-input v-model="form.dstNodataValue" placeholder="例如 0、255 或 -9999" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12">
-                                <el-form-item label="拉伸类型">
-                                    <el-select v-model="form.stretchType">
-                                        <el-option label="不拉伸" value="none" />
-                                        <el-option label="百分位拉伸" value="percent" />
-                                    </el-select>
+                            <section class="advanced-config-section">
+                                <div class="advanced-config-section__title">输出与透明</div>
+                                <div class="advanced-config-section__desc">PNG 默认启用透明背景；NoData 留空时优先使用源文件元数据。</div>
+                                <div class="switch-row">
+                                    <el-form-item label="透明背景"><el-switch v-model="form.transparentBackground" /></el-form-item>
+                                    <el-form-item label="使用源 NoData"><el-switch v-model="form.useSourceNodata" /></el-form-item>
+                                </div>
+                                <el-form-item label="手动 NoData 值">
+                                    <el-input v-model="form.nodataValue" placeholder="留空则使用源文件自带 NoData" />
                                 </el-form-item>
-                            </el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="拉伸低百分位"><el-input-number v-model="form.stretchLowPercent" :step="0.1" controls-position="right" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="拉伸高百分位"><el-input-number v-model="form.stretchHighPercent" :step="0.1" controls-position="right" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="JPEG 质量"><el-input-number v-model="form.jpegQuality" :min="1" :max="100" controls-position="right" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="PNG 压缩"><el-input-number v-model="form.pngCompression" :min="0" :max="9" controls-position="right" /></el-form-item></el-col>
-                            <el-col :xs="24" :md="12"><el-form-item label="透明阈值"><el-input-number v-model="form.transparencyThreshold" :min="0" :max="1" :step="0.01" controls-position="right" /></el-form-item></el-col>
-                        </el-row>
-                    </el-form>
-                </el-card>
+                            </section>
 
-                <el-card shadow="never" class="tile-module">
-                    <template #header><div class="tile-module__title">构建策略</div></template>
-                    <div class="tile-check-grid">
-                        <el-checkbox v-model="form.generateShpIndex">生成网格文件</el-checkbox>
-                        <el-checkbox v-model="form.enableIncrementalUpdate">启用增量更新</el-checkbox>
-                        <el-checkbox v-model="form.skipNodataTiles">跳过透明瓦片</el-checkbox>
-                    </div>
+                            <section class="advanced-config-section advanced-config-section--wide">
+                                <div class="advanced-config-section__title">渲染与波段</div>
+                                <div class="advanced-config-section__desc">GeoServer 默认按源文件元数据渲染；多光谱或波段顺序特殊时，切换为指定 RGB 波段。</div>
+                                <el-row :gutter="16">
+                                    <el-col :xs="24" :md="8">
+                                        <el-form-item label="渲染模式">
+                                            <el-select v-model="form.renderMode">
+                                                <el-option v-for="option in renderModeOptions" :key="option.value" :label="option.label" :value="option.value" />
+                                            </el-select>
+                                        </el-form-item>
+                                    </el-col>
+                                    <el-col :xs="24" :md="8">
+                                        <el-form-item label="红波段">
+                                            <el-select v-model="form.redBand" :disabled="form.renderMode !== 'rgb'">
+                                                <el-option v-for="band in bandOptions" :key="`red-${band}`" :label="`波段 ${band}`" :value="band" />
+                                            </el-select>
+                                        </el-form-item>
+                                    </el-col>
+                                    <el-col :xs="24" :md="8">
+                                        <el-form-item label="绿波段">
+                                            <el-select v-model="form.greenBand" :disabled="form.renderMode !== 'rgb'">
+                                                <el-option v-for="band in bandOptions" :key="`green-${band}`" :label="`波段 ${band}`" :value="band" />
+                                            </el-select>
+                                        </el-form-item>
+                                    </el-col>
+                                    <el-col :xs="24" :md="8">
+                                        <el-form-item label="蓝波段">
+                                            <el-select v-model="form.blueBand" :disabled="form.renderMode !== 'rgb'">
+                                                <el-option v-for="band in bandOptions" :key="`blue-${band}`" :label="`波段 ${band}`" :value="band" />
+                                            </el-select>
+                                        </el-form-item>
+                                    </el-col>
+                                </el-row>
+                                <div class="band-hint">{{ bandHint }}</div>
+                            </section>
+                        </div>
+                    </el-form>
                 </el-card>
             </div>
         </div>
@@ -560,77 +503,107 @@ onBeforeUnmount(() => {
     gap: 12px;
 }
 
+.tile-module__actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .tile-module__title {
     color: var(--tf-text-primary);
     font-size: 15px;
+    font-weight: 700;
+}
+
+.tile-form :deep(.el-form-item__label) {
+    color: var(--tf-text-primary);
     font-weight: 600;
 }
 
 .tile-form :deep(.el-input),
-.tile-form :deep(.el-select),
-.tile-form :deep(.el-input-number) {
+.tile-form :deep(.el-input-number),
+.tile-form :deep(.el-select) {
     width: 100%;
+}
+
+.path-field {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
 }
 
 .path-field-inline {
     align-items: center;
 }
 
-.path-field-inline :deep(.el-input) {
-    flex: 1 1 auto;
-    min-width: 0;
+.path-field :deep(.el-input) {
+    flex: 1;
 }
 
-.path-field-inline .path-field-actions {
-    flex: 0 0 auto;
+.path-field-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
-.tile-help {
+.tile-help,
+.band-hint {
     margin-top: 8px;
     color: var(--tf-text-secondary);
-    font-size: 13px;
-    line-height: 1.7;
-}
-
-.tile-help code {
-    padding: 2px 6px;
-    border-radius: 6px;
-    background: var(--tf-surface-soft);
-    color: var(--tf-text-primary);
+    font-size: 12px;
+    line-height: 1.6;
 }
 
 .tile-help a {
-    margin-left: 8px;
-    color: var(--tf-accent);
-    text-decoration: none;
+    margin-left: 6px;
 }
 
-.band-hint {
-    margin-bottom: 16px;
-    padding: 10px 12px;
-    border-radius: 10px;
-    background: var(--tf-surface-soft);
-    color: var(--tf-text-secondary);
-    font-size: 13px;
-    line-height: 1.7;
-    border: 1px solid var(--tf-border);
-}
-
-.tile-check-grid {
+.advanced-config-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 12px 18px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.advanced-config-section {
+    padding: 16px;
+    border: 1px solid var(--tf-border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--tf-surface) 92%, var(--tf-primary) 8%);
+}
+
+.advanced-config-section--wide {
+    grid-column: 1 / -1;
+}
+
+.advanced-config-section__title {
+    color: var(--tf-text-primary);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.advanced-config-section__desc {
+    margin: 6px 0 14px;
+    color: var(--tf-text-secondary);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.switch-row {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+    align-items: center;
 }
 
 @media (max-width: 900px) {
     .tile-page-toolbar {
         flex-direction: column;
-        align-items: stretch;
     }
 
-    .path-field-inline {
-        flex-direction: column;
-        align-items: stretch;
+    .advanced-config-grid {
+        grid-template-columns: 1fr;
     }
 }
 </style>

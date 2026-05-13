@@ -239,7 +239,23 @@ def listTasks():
         parsed = _parse_datetime_value(task.get("startTime"))
         return parsed if parsed is not None else datetime.min
 
-    sorted_task_ids = sorted(merged_tasks.keys(), key=extract_start_time, reverse=True)
+    def task_sort_key(task_id):
+        task = merged_tasks.get(task_id, {})
+        normalized_status = str(task.get("status") or "").strip().lower()
+        running_rank = 0 if normalized_status == "running" else 1
+        start_time = extract_start_time(task_id)
+        if start_time == datetime.min:
+            start_rank = float("inf")
+        else:
+            start_rank = -(
+                start_time.toordinal() * 86400
+                + start_time.hour * 3600
+                + start_time.minute * 60
+                + start_time.second
+            )
+        return (running_rank, start_rank)
+
+    sorted_task_ids = sorted(merged_tasks.keys(), key=task_sort_key)
     filtered_tasks = [
         merged_tasks[task_id]
         for task_id in sorted_task_ids

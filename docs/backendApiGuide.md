@@ -92,9 +92,6 @@
 - `DELETE /api/workspace/file/<filePath>`
   删除指定文件。
 
-- `GET /api/cache/info`
-  返回缓存目录、元数据文件、索引文件和实际瓦片数量等信息。
-
 ## 任务中心
 
 - `GET /api/tasks`

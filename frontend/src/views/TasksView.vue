@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { ElMessageBox } from 'element-plus';
 
 import ResizableDrawer from '../components/ResizableDrawer.vue';
@@ -41,6 +41,24 @@ function normalizeTaskDate(value) {
     if (!value) return null;
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function compareTaskOrder(left, right) {
+    const leftStatus = String(left?.status || '').toLowerCase();
+    const rightStatus = String(right?.status || '').toLowerCase();
+    const leftRunningRank = leftStatus === 'running' ? 0 : 1;
+    const rightRunningRank = rightStatus === 'running' ? 0 : 1;
+    if (leftRunningRank !== rightRunningRank) {
+        return leftRunningRank - rightRunningRank;
+    }
+
+    const leftTime = normalizeTaskDate(left?.startTime)?.getTime() || 0;
+    const rightTime = normalizeTaskDate(right?.startTime)?.getTime() || 0;
+    if (leftTime !== rightTime) {
+        return rightTime - leftTime;
+    }
+
+    return String(right?.taskId || '').localeCompare(String(left?.taskId || ''));
 }
 
 function getStatusLabel(status) {
@@ -111,7 +129,7 @@ async function load() {
             dateTo: dateRange.value?.[1] || undefined
         });
         const data = taskResponse?.data || {};
-        tasks.value = Object.values(data.tasks || {});
+        tasks.value = Object.values(data.tasks || {}).sort(compareTaskOrder);
         totalTasks.value = Number(data.total || 0);
         currentPage.value = Number(data.page || currentPage.value);
         pageSize.value = Number(data.pageSize || pageSize.value);
@@ -184,7 +202,19 @@ async function removeTask(taskId) {
     }
 }
 
-onMounted(load);
+onMounted(async () => {
+    await load();
+    loadTimer = window.setInterval(() => {
+        load();
+    }, 15000);
+});
+
+onBeforeUnmount(() => {
+    if (loadTimer) {
+        window.clearInterval(loadTimer);
+        loadTimer = null;
+    }
+});
 </script>
 
 <template>

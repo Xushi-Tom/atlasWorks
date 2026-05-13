@@ -37,6 +37,9 @@ const form = reactive({
     alias: '',
     publishType: 'imagery',
     publishMethod: 'wmts',
+    seedEnabled: true,
+    seedMinZoom: 0,
+    seedMaxZoom: 16,
     enabled: true,
     visibility: 'public',
     note: ''
@@ -58,18 +61,19 @@ const editingPublicationId = ref('');
 const currentPage = ref(1);
 const pageSize = ref(10);
 const totalPublications = ref(0);
+const publicationDetails = ref({});
+let publicationRefreshTimer = null;
 
 const DATASOURCE_PUBLISH_TYPE = 'imagery';
-const DATASOURCE_PUBLISH_METHOD = 'titiler-cog';
+const DATASOURCE_PUBLISH_METHOD = 'geoserver-wmts';
 const DATASOURCE_PUBLISH_TYPE_LABEL = '地图';
-const DATASOURCE_PUBLISH_METHOD_LABEL = 'TiTiler COG 动态瓦片';
+const DATASOURCE_PUBLISH_METHOD_LABEL = '数据源影像发布';
 
 const publishMethodCatalog = {
     imagery: [
         { value: 'wmts', label: 'WMTS 服务' },
         { value: 'tms', label: 'TMS 服务' },
-        { value: 'xyz', label: 'XYZ 服务' },
-        { value: 'titiler-cog', label: 'TiTiler COG 动态瓦片' }
+        { value: 'xyz', label: 'XYZ 服务' }
     ],
     'electronic-map': [
         { value: 'wmts', label: 'WMTS 服务' },
@@ -120,7 +124,7 @@ const publicationStatusTagMap = {
 };
 const TILES_BASE_PATH = '/app/tiles';
 const DATASOURCE_BASE_PATH = '/app/dataSource';
-const TITILER_METHODS = ['titiler-cog', 'titiler', 'cog'];
+const GEOSERVER_METHODS = ['geoserver-wms', 'geoserver-wmts'];
 const VECTOR_MVT_METHODS = ['mvt', 'vector-tile', 'vector-tiles'];
 const VECTOR_GEOJSON_METHODS = ['geojson-tile', 'geojson-tiles'];
 
@@ -131,17 +135,14 @@ const publishMethodOptions = computed(() => {
     }
     return publishMethodCatalog[form.publishType] || [];
 });
-const isTitilerPublish = computed(() => TITILER_METHODS.includes(String(form.publishMethod || '').toLowerCase()));
-const isDatasourcePublish = computed(() => isTitilerPublish.value);
+const isGeoserverPublish = computed(() => GEOSERVER_METHODS.includes(String(form.publishMethod || '').toLowerCase()));
+const isDatasourcePublish = computed(() => isGeoserverPublish.value);
 const dataSourceAllowedExtensions = computed(() => {
-    if (isTitilerPublish.value) return ['.tif', '.tiff'];
+    if (isDatasourcePublish.value) return ['.tif', '.tiff'];
     return [];
 });
 const dataSourcePlaceholder = computed(() => {
-    if (isTitilerPublish.value) {
-        return '选择一个或多个 GeoTIFF / COG 文件，或选择包含 tif 的目录，多个项用逗号分隔';
-    }
-    return '选择数据源文件';
+    return '选择单个影像文件，或选择包含影像的目录';
 });
 
 const publishableTasks = computed(() => {
@@ -185,82 +186,61 @@ function toPreviewPublication(item) {
         browserUrl: resolveInteractiveUrl(item.browserUrl),
         launchUrl: resolveInteractiveUrl(item.launchUrl),
         accessUrl: resolveInteractiveUrl(item.accessUrl),
-        sampleUrl: resolveInteractiveUrl(item.sampleUrl)
+        sampleUrl: resolveInteractiveUrl(item.sampleUrl),
+        wmsUrl: resolveInteractiveUrl(item.wmsUrl),
+        wmtsCapabilitiesUrl: resolveInteractiveUrl(item.wmtsCapabilitiesUrl),
+        wmtsTileUrl: resolveInteractiveUrl(item.wmtsTileUrl)
     };
+}
+
+function getMergedPublication(item) {
+    if (!item) return null;
+    const publicationId = String(item?.publicationId || item?.id || '').trim();
+    const detail = publicationId ? publicationDetails.value[publicationId] : null;
+    return detail ? { ...item, ...detail } : item;
 }
 
 function isPublicationEnabled(item) {
     return Boolean(item?.metadata?.enabled ?? (item?.status === 'enabled' || item?.status === 'published'));
 }
 
-function isTitilerPublication(item) {
-    return TITILER_METHODS.includes(String(item?.metadata?.publishMethod || item?.publishMethod || '').toLowerCase());
-}
-
 function getPublicationSourceSummary(item) {
-    if (isTitilerPublication(item)) {
-        const entryCount = Number(item?.sourceEntryCount ?? item?.metadata?.sourceEntryCount ?? 0);
-        const fileCount = Number(item?.sourceFileCount ?? item?.metadata?.sourceFileCount ?? 0);
-        const optimizedCount = Number(item?.optimizedSourceCount ?? item?.metadata?.optimizedSourceCount ?? 0);
-        return `${entryCount || 0} 项 / ${fileCount || 0} tif / ${optimizedCount || 0} COG`;
-    }
     const entryCount = Number(item?.sourceEntryCount ?? item?.metadata?.sourceEntryCount ?? 0);
     return entryCount ? `${entryCount} 项` : '-';
 }
 
-function getPublicationCacheStatus(item) {
-    if (!isTitilerPublication(item)) return '-';
-    const buildState = item?.buildState || item?.cache?.buildState || item?.metadata?.buildState || {};
-    const state = String(buildState?.state || '').toLowerCase();
-    if (state === 'failed') return '失败';
-    if (state === 'running') return `构建中 ${Number(buildState?.progress || 0)}%`;
-    if (state === 'pending') return '排队中';
-    return item?.cache?.mosaicReady ? '已就绪' : '未生成';
-}
-
-function isPublicationBuilding(item) {
-    const buildState = item?.buildState || item?.cache?.buildState || item?.metadata?.buildState || {};
-    const state = String(buildState?.state || '').toLowerCase();
-    return state === 'pending' || state === 'running';
-}
-
 function getPrimaryPublicationUrl(item) {
     if (!item) return '';
-    if (isTitilerPublication(item)) {
-        return normalizeDisplayUrl(item?.browserUrl || item?.launchUrl || '');
+    const method = String(item?.metadata?.publishMethod || item?.publishMethod || '').toLowerCase();
+    if (method.includes('geoserver')) {
+        return normalizeDisplayUrl(item?.sampleUrl || item?.accessUrl || '');
     }
     return normalizeDisplayUrl(item?.accessUrl || item?.browserUrl || item?.launchUrl || '');
 }
 
 function getPrimaryPublicationHref(item) {
     if (!item) return '';
-    if (isTitilerPublication(item)) {
-        return resolveInteractiveUrl(item?.browserUrl || item?.launchUrl || '');
+    const method = String(item?.metadata?.publishMethod || item?.publishMethod || '').toLowerCase();
+    if (method.includes('geoserver')) {
+        return resolveInteractiveUrl(item?.sampleUrl || item?.accessUrl || '');
     }
     return resolveInteractiveUrl(item?.accessUrl || item?.browserUrl || item?.launchUrl || '');
 }
 
 function getPrimaryPublicationUrlLabel(item) {
     if (!item) return '访问地址';
-    if (isTitilerPublication(item)) {
-        return '浏览器预览';
+    const method = String(item?.metadata?.publishMethod || item?.publishMethod || '').toLowerCase();
+    if (method.includes('geoserver')) {
+        return '示例瓦片';
     }
     return '访问地址';
 }
 
 function getSecondaryPublicationUrl(item) {
-    if (!item) return '';
-    if (isTitilerPublication(item)) {
-        return normalizeDisplayUrl(item?.launchUrl || '');
-    }
     return '';
 }
 
 function getSecondaryPublicationHref(item) {
-    if (!item) return '';
-    if (isTitilerPublication(item)) {
-        return resolveInteractiveUrl(item?.launchUrl || '');
-    }
     return '';
 }
 
@@ -359,6 +339,9 @@ function getPublicationVisibilityBadgeLabel(item) {
 
 function getPublishMethodLabel(publishType, publishMethod) {
     const normalized = String(publishMethod || '').trim().toLowerCase();
+    if (GEOSERVER_METHODS.includes(normalized)) {
+        return '数据源影像发布';
+    }
     if (normalized === 'nginx-static') {
         if (publishType === 'terrain') return 'Quantized Mesh';
         if (publishType === '3dtiles') return '3D Tiles 服务';
@@ -386,17 +369,18 @@ function getPublicationPublishedTime(item) {
 
 function getPublicationTileSchemeLabel(item) {
     const method = String(item?.metadata?.publishMethod || item?.publishMethod || '').trim().toLowerCase();
-    if (method === 'wmts' || method === 'xyz' || method.includes('titiler')) return 'XYZ';
+    if (method === 'wmts' || method === 'xyz') return 'XYZ';
     if (method === 'tms') return 'TMS';
     return getSourceTileScheme(item);
 }
 
 function getPublicationCopyUrl(item) {
-    return getPrimaryPublicationUrl(item) || getSecondaryPublicationUrl(item) || '';
+    const merged = getMergedPublication(item);
+    return getPrimaryPublicationUrl(merged) || getSecondaryPublicationUrl(merged) || '';
 }
 
 function getDefaultPublishMethodForType(publishType) {
-    const options = (publishMethodCatalog[publishType] || []).filter(item => !TITILER_METHODS.includes(String(item.value || '').toLowerCase()));
+    const options = publishMethodCatalog[publishType] || [];
     return options[0]?.value || 'wmts';
 }
 
@@ -444,16 +428,6 @@ function handlePublicationMenu(command, item) {
         return;
     }
 
-    if (command === 'rebuild') {
-        rebuildPublicationCache(item);
-        return;
-    }
-
-    if (command === 'clear') {
-        clearPublicationCache(item);
-        return;
-    }
-
     if (command === 'delete') {
         removePublication(item);
     }
@@ -472,8 +446,12 @@ function closePublicationDetail() {
 }
 
 function openPublicationPreview(item) {
-    detailPublication.value = toPreviewPublication(item || detailPublication.value);
+    const merged = getMergedPublication(item || detailPublication.value);
+    detailPublication.value = toPreviewPublication(merged || item || detailPublication.value);
     previewVisible.value = true;
+    if (item?.publicationId && !(merged?.accessUrl || merged?.launchUrl || merged?.browserUrl)) {
+        loadPublicationDetail(item.publicationId);
+    }
 }
 
 async function loadPublicationDetail(publicationId) {
@@ -483,35 +461,13 @@ async function loadPublicationDetail(publicationId) {
     try {
         const response = await api.getPublication(normalizedId);
         const publication = response?.data?.publication || detailPublication.value;
-        if (
-            publication
-            && TITILER_METHODS.includes(String(publication?.publishMethod || publication?.metadata?.publishMethod || '').toLowerCase())
-            && publication?.launchUrl
-        ) {
-            const tileJsonUrl = resolveInteractiveUrl(publication.launchUrl);
-            let tileJsonSummary = null;
-            try {
-                const tileJsonResponse = await fetch(tileJsonUrl);
-                if (tileJsonResponse.ok) {
-                    const tileJsonPayload = await tileJsonResponse.json();
-                    tileJsonSummary = {
-                        minzoom: Number.isFinite(Number(tileJsonPayload?.minzoom)) ? Number(tileJsonPayload.minzoom) : null,
-                        maxzoom: Number.isFinite(Number(tileJsonPayload?.maxzoom)) ? Number(tileJsonPayload.maxzoom) : null,
-                        bounds: Array.isArray(tileJsonPayload?.bounds) && tileJsonPayload.bounds.length === 4 ? tileJsonPayload.bounds : null,
-                        center: Array.isArray(tileJsonPayload?.center) && tileJsonPayload.center.length >= 3 ? tileJsonPayload.center : null,
-                        scheme: String(tileJsonPayload?.scheme || '').trim().toLowerCase() || null
-                    };
-                }
-            } catch (tileJsonError) {
-                console.warn('Load TiTiler TileJSON failed:', tileJsonError);
-            }
-            detailPublication.value = {
-                ...publication,
-                tileJsonSummary
+        if (publication) {
+            publicationDetails.value = {
+                ...publicationDetails.value,
+                [normalizedId]: publication
             };
-        } else {
-            detailPublication.value = publication;
         }
+        detailPublication.value = publication;
     } catch (error) {
         pushToast(`发布详情加载失败: ${error.message}`, 'error', 4500);
     } finally {
@@ -572,9 +528,7 @@ function getPublicationGuide(item) {
             label: '浏览器预览',
             url: normalizeDisplayUrl(item.browserUrl),
             href: resolveInteractiveUrl(item.browserUrl),
-            description: publishMethod.includes('titiler')
-                ? '直接在浏览器打开，查看 TiTiler 自带调试预览页。'
-                : '直接在浏览器打开，用于查看已发布内容或入口文件。'
+            description: '直接在浏览器打开，用于查看已发布内容或入口文件。'
         });
     }
 
@@ -657,95 +611,41 @@ function getPublicationGuide(item) {
                 text: 'GeoJSON 瓦片可读性高，但体积和客户端生态都不如 MVT，更适合调试和小规模数据。'
             });
         }
-    } else if (publishMethod.includes('titiler')) {
-        const tileJsonSummary = item?.tileJsonSummary || {};
-        if (item.launchUrl) {
-            endpoints.push({
-                key: 'tilejson',
-                label: 'TileJSON',
-                url: normalizeDisplayUrl(item.launchUrl),
-                href: resolveInteractiveUrl(item.launchUrl),
-                description: '这是给前端程序读取的 JSON，里面包含范围、层级和瓦片模板地址。'
-            });
-        }
-        if (item.accessUrl) {
-            endpoints.push({
-                key: 'tiles',
-                label: '瓦片模板',
-                url: normalizeDisplayUrl(item.accessUrl),
-                href: resolveInteractiveUrl(item.accessUrl),
-                description: '这是动态瓦片模板地址，程序按 {z}/{x}/{y} 请求 PNG 瓦片。'
-            });
-        }
-        if (item.sampleUrl && item.sampleUrl !== item.browserUrl) {
-            endpoints.push({
-                key: 'sample',
-                label: '调试地址',
-                url: normalizeDisplayUrl(item.sampleUrl),
-                href: resolveInteractiveUrl(item.sampleUrl),
-                description: '用于直接验证服务是否返回影像。'
-            });
-        }
-
-        notes.push('浏览器想直接看效果，打开“浏览器预览”。');
-        notes.push('程序对接优先使用“TileJSON”，不要自己手写完整请求参数。');
-        notes.push('只有在前端明确支持 Z/X/Y 模板时，再直接使用“瓦片模板”。');
-        metadataRows.push({
-            key: 'imagery-scheme',
-            label: '行号规则',
-            value: getSourceTileScheme(item)
-        });
-        metadataRows.push({
-            key: 'imagery-zoom',
-            label: '层级范围',
-            value: tileJsonSummary.minzoom !== null && tileJsonSummary.maxzoom !== null
-                ? `${tileJsonSummary.minzoom} - ${tileJsonSummary.maxzoom}`
-                : '-'
-        });
-        metadataRows.push({
-            key: 'imagery-bounds',
-            label: '数据范围',
-            value: formatBounds(tileJsonSummary.bounds)
-        });
-        concepts.push({
-            title: 'TileJSON 是什么',
-            text: 'TileJSON 是一份描述瓦片图层的 JSON，里面通常会给出 minzoom、maxzoom、bounds 和 tiles 模板地址。'
-        });
-    } else if (publishMethod === 'wmts') {
+    } else if (publishMethod === 'wmts' || publishMethod.includes('geoserver')) {
         if (item.launchUrl) {
             endpoints.push({
                 key: 'capabilities',
                 label: 'Capabilities',
                 url: normalizeDisplayUrl(item.launchUrl),
                 href: resolveInteractiveUrl(item.launchUrl),
-                description: 'WMTS 元数据入口，GIS 客户端一般先读取这个地址。'
-            });
-        }
-        if (item.accessUrl) {
-            endpoints.push({
-                key: 'tiles',
-                label: 'GetTile 模板',
-                url: normalizeDisplayUrl(item.accessUrl),
-                href: resolveInteractiveUrl(item.accessUrl),
-                description: 'WMTS GetTile 请求模板。'
+                description: '地图服务元数据入口，GIS 客户端一般先读取这个地址。'
             });
         }
         if (item.sampleUrl) {
             endpoints.push({
-                key: 'sample',
-                label: '示例请求',
+                key: 'tiles',
+                label: '示例瓦片',
                 url: normalizeDisplayUrl(item.sampleUrl),
                 href: resolveInteractiveUrl(item.sampleUrl),
-                description: '可直接打开验证某一级某一块瓦片。'
+                description: '用于直接验证服务是否能稳定返回瓦片。'
+            });
+        }
+        if (item.accessUrl && item.accessUrl !== item.launchUrl) {
+            endpoints.push({
+                key: 'service',
+                label: '服务地址',
+                url: normalizeDisplayUrl(item.accessUrl),
+                href: resolveInteractiveUrl(item.accessUrl),
+                description: '服务访问入口。'
             });
         }
 
         notes.push('GIS 客户端优先加载 Capabilities。');
-        notes.push('浏览器直接验证时，可先打开“示例请求”。');
+        notes.push('浏览器直接验证时，可先打开“示例瓦片”。');
         metadataRows.push({
             key: 'wmts-scheme',
             label: '行号规则',
-            value: getSourceTileScheme(item)
+            value: 'XYZ / EPSG:3857'
         });
     } else {
         if (item.launchUrl && item.launchUrl !== item.browserUrl && item.launchUrl !== item.accessUrl) {
@@ -789,6 +689,9 @@ function resetForm() {
     form.alias = '';
     form.publishType = 'imagery';
     form.publishMethod = 'wmts';
+    form.seedEnabled = true;
+    form.seedMinZoom = 0;
+    form.seedMaxZoom = 16;
     form.enabled = true;
     form.visibility = 'public';
     form.note = '';
@@ -845,12 +748,15 @@ function editPublication(item) {
     form.alias = item.alias || '';
     form.publishType = item.publishType || 'imagery';
     form.publishMethod = item.metadata?.publishMethod || 'wmts';
+    form.seedEnabled = Boolean(item.metadata?.customMetadata?.seedEnabled ?? true);
+    form.seedMinZoom = Number(item.metadata?.customMetadata?.minZoom ?? 0);
+    form.seedMaxZoom = Number(item.metadata?.customMetadata?.maxZoom ?? 16);
     form.enabled = isPublicationEnabled(item);
     form.visibility = item.metadata?.visibility || 'private';
     form.note = item.metadata?.note || '';
     if (form.sourceMode === 'datasource') {
         form.publishType = DATASOURCE_PUBLISH_TYPE;
-        form.publishMethod = DATASOURCE_PUBLISH_METHOD;
+        form.publishMethod = item.metadata?.publishMethod || DATASOURCE_PUBLISH_METHOD;
     }
     createVisible.value = true;
     if (form.sourceMode === 'task') {
@@ -860,28 +766,8 @@ function editPublication(item) {
 
 async function togglePublicationStatus(item, explicitEnabled = null) {
     const nextEnabled = explicitEnabled === null ? !isPublicationEnabled(item) : Boolean(explicitEnabled);
-    const sourceMode = item.metadata?.sourceMode || (item.metadata?.taskId ? 'task' : 'manual');
-    const dataSourcePaths = sourceMode === 'datasource' ? getPublicationDataSourcePaths(item) : [];
-    const rawPath = item.metadata?.sourcePath || item.metadata?.workspacePath || item.publishPath;
-    const normalizedWorkspacePath = sourceMode === 'datasource'
-        ? (dataSourcePaths[0] || '')
-        : normalizeWorkspacePath(rawPath);
     try {
-        await api.updatePublication(item.publicationId, {
-            publicationId: item.publicationId,
-            sourceMode,
-            taskId: item.metadata?.taskId || undefined,
-            workspacePath: sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
-            sourcePath: sourceMode === 'datasource' ? normalizedWorkspacePath : undefined,
-            sourcePaths: sourceMode === 'datasource' ? dataSourcePaths : undefined,
-            publishPath: normalizedWorkspacePath,
-            alias: item.alias,
-            publishType: item.publishType,
-            publishMethod: item.metadata?.publishMethod,
-            enabled: nextEnabled,
-            visibility: item.metadata?.visibility,
-            note: item.metadata?.note
-        });
+        await api.togglePublicationEnabled(item.publicationId, nextEnabled);
         pushToast(nextEnabled ? '发布已启用' : '发布已停用', 'success');
         await loadPublications();
     } catch (error) {
@@ -902,28 +788,6 @@ async function removePublication(item) {
     }
 }
 
-async function rebuildPublicationCache(item) {
-    try {
-        await api.rebuildPublicationCache(item.publicationId);
-        pushToast('已进入后台重建', 'success');
-        await loadPublications();
-    } catch (error) {
-        pushToast(`重建发布缓存失败: ${error.message}`, 'error', 5000);
-    }
-}
-
-async function clearPublicationCache(item) {
-    const confirmed = window.confirm(`确认清理发布缓存「${item.alias || item.publicationId}」吗？清理后需要重建才能继续动态访问。`);
-    if (!confirmed) return;
-    try {
-        await api.clearPublicationCache(item.publicationId);
-        pushToast('发布缓存已清理', 'success');
-        await loadPublications();
-    } catch (error) {
-        pushToast(`清理发布缓存失败: ${error.message}`, 'error', 5000);
-    }
-}
-
 watch(() => form.publishType, value => {
     if (isDatasourceMode.value) {
         form.publishType = DATASOURCE_PUBLISH_TYPE;
@@ -939,14 +803,14 @@ watch(() => form.publishType, value => {
 watch(() => form.publishMethod, value => {
     const normalizedValue = String(value || '').toLowerCase();
     if (isDatasourceMode.value) {
-        if (!TITILER_METHODS.includes(normalizedValue)) {
+        if (!GEOSERVER_METHODS.includes(normalizedValue)) {
             form.publishMethod = DATASOURCE_PUBLISH_METHOD;
         }
         form.publishType = DATASOURCE_PUBLISH_TYPE;
         form.taskId = '';
         return;
     }
-    if (TITILER_METHODS.includes(normalizedValue)) {
+    if (GEOSERVER_METHODS.includes(normalizedValue)) {
         form.sourceMode = 'datasource';
         form.taskId = '';
     }
@@ -960,8 +824,10 @@ watch(() => form.sourceMode, value => {
     }
     if (value === 'datasource') {
         form.publishType = DATASOURCE_PUBLISH_TYPE;
-        form.publishMethod = DATASOURCE_PUBLISH_METHOD;
-    } else if (TITILER_METHODS.includes(String(form.publishMethod || '').toLowerCase())) {
+        if (!GEOSERVER_METHODS.includes(String(form.publishMethod || '').toLowerCase())) {
+            form.publishMethod = DATASOURCE_PUBLISH_METHOD;
+        }
+    } else if (GEOSERVER_METHODS.includes(String(form.publishMethod || '').toLowerCase())) {
         form.publishMethod = getDefaultPublishMethodForType(form.publishType);
     }
 });
@@ -989,6 +855,7 @@ async function loadPublications() {
         const response = await api.listPublications({
             page: currentPage.value,
             pageSize: pageSize.value,
+            includeDetails: false,
             keyword: String(keyword.value || '').trim() || undefined,
             status: String(statusFilter.value || '').trim() || undefined,
             publishType: String(publishTypeFilter.value || '').trim() || undefined
@@ -1028,7 +895,7 @@ async function submitPublication() {
     const normalizedWorkspacePath = getNormalizedSourcePath();
     const normalizedDataSourcePaths = form.sourceMode === 'datasource' ? getNormalizedDataSourcePaths() : [];
     if (form.sourceMode === 'datasource' && !normalizedDataSourcePaths.length) {
-        pushToast(isTitilerPublish.value ? '请至少选择一个有效的 GeoTIFF 文件或目录' : '请至少选择一个有效的数据源文件', 'warning');
+        pushToast('请至少选择一个有效的 GeoTIFF 文件或目录', 'warning');
         return;
     }
     const payload = {
@@ -1040,10 +907,17 @@ async function submitPublication() {
         publishPath: form.sourceMode === 'manual' ? normalizedWorkspacePath : undefined,
         alias: form.alias || undefined,
         publishType: form.sourceMode === 'datasource' ? DATASOURCE_PUBLISH_TYPE : form.publishType,
-        publishMethod: form.sourceMode === 'datasource' ? DATASOURCE_PUBLISH_METHOD : (form.publishMethod || undefined),
+        publishMethod: form.sourceMode === 'datasource' ? (form.publishMethod || DATASOURCE_PUBLISH_METHOD) : (form.publishMethod || undefined),
         enabled: form.enabled,
         visibility: form.visibility,
-        note: form.note || undefined
+        note: form.note || undefined,
+        customMetadata: form.sourceMode === 'datasource'
+            ? {
+                seedEnabled: Boolean(form.seedEnabled),
+                minZoom: Number(form.seedMinZoom || 0),
+                maxZoom: Number(form.seedMaxZoom || 16)
+            }
+            : undefined
     };
 
     try {
@@ -1052,6 +926,7 @@ async function submitPublication() {
             pushToast('发布记录已更新', 'success');
         } else {
             await api.createPublication(payload);
+            currentPage.value = 1;
             pushToast(form.sourceMode === 'datasource' ? '发布记录已创建，后台正在构建缓存' : '发布记录已创建', 'success');
         }
 
@@ -1065,6 +940,16 @@ async function submitPublication() {
 
 onMounted(async () => {
     await loadPublications();
+    publicationRefreshTimer = window.setInterval(() => {
+        loadPublications();
+    }, 15000);
+});
+
+onBeforeUnmount(() => {
+    if (publicationRefreshTimer) {
+        window.clearInterval(publicationRefreshTimer);
+        publicationRefreshTimer = null;
+    }
 });
 
 function handlePageChange(page) {
@@ -1154,22 +1039,6 @@ function applyFilters() {
                                             <el-icon><EditPen /></el-icon>
                                             <span>编辑</span>
                                         </el-dropdown-item>
-                                        <el-dropdown-item
-                                            v-if="isTitilerPublication(row)"
-                                            command="rebuild"
-                                            :disabled="isPublicationBuilding(row)"
-                                        >
-                                            <el-icon><Refresh /></el-icon>
-                                            <span>重建缓存</span>
-                                        </el-dropdown-item>
-                                        <el-dropdown-item
-                                            v-if="isTitilerPublication(row)"
-                                            command="clear"
-                                            :disabled="isPublicationBuilding(row)"
-                                        >
-                                            <el-icon><Delete /></el-icon>
-                                            <span>清理缓存</span>
-                                        </el-dropdown-item>
                                         <el-dropdown-item command="delete" class="is-danger">
                                             <el-icon><Delete /></el-icon>
                                             <span>删除</span>
@@ -1257,15 +1126,15 @@ function applyFilters() {
                     <div class="path-field">
                         <el-input v-model="form.workspacePath" :placeholder="dataSourcePlaceholder" />
                         <div class="path-field-actions">
-                            <el-button @click="openPicker({ title: isTitilerPublish ? '选择 GeoTIFF 文件' : '选择数据源文件', source: 'datasource', selectionMode: 'file', multiple: isTitilerPublish, field: 'workspacePath', allowedExtensions: dataSourceAllowedExtensions })">选择文件</el-button>
-                            <el-button v-if="isTitilerPublish" @click="openPicker({ title: '选择包含 GeoTIFF 的目录', source: 'datasource', selectionMode: 'folder', multiple: true, field: 'workspacePath', allowedExtensions: [] })">选择目录</el-button>
+                            <el-button @click="openPicker({ title: '选择影像文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'workspacePath', allowedExtensions: dataSourceAllowedExtensions })">选择文件</el-button>
+                            <el-button @click="openPicker({ title: '选择影像目录', source: 'datasource', selectionMode: 'folder', multiple: false, field: 'workspacePath', allowedExtensions: [] })">选择目录</el-button>
                             <el-button @click="form.workspacePath = ''">清空</el-button>
                         </div>
                     </div>
                     <div class="publish-source-preview">
                         <span>已选项数：{{ getNormalizedDataSourcePaths().length }}</span>
-                        <span>发布模式：MosaicJSON + TiTiler</span>
-                        <span>目录会自动展开为 tif，普通 GeoTIFF 会先转换为 COG</span>
+                        <span>发布模式：数据源影像发布</span>
+                        <span>支持单文件或整个目录，发布细节由系统自动处理。</span>
                     </div>
                 </el-form-item>
 
@@ -1291,11 +1160,23 @@ function applyFilters() {
                 </el-form-item>
 
                 <el-form-item label="发布方式">
-                    <div v-if="isDatasourceMode" class="publish-fixed-field">{{ DATASOURCE_PUBLISH_METHOD_LABEL }}</div>
-                    <el-select v-else v-model="form.publishMethod" :teleported="false">
+                    <el-select v-model="form.publishMethod" :teleported="false">
                         <el-option v-for="option in publishMethodOptions" :key="option.value" :label="option.label" :value="option.value" />
                     </el-select>
                 </el-form-item>
+
+                <template v-if="isDatasourceMode">
+                    <el-form-item label="发布后预热">
+                        <el-switch v-model="form.seedEnabled" active-text="启动 GWC Seed" inactive-text="仅发布服务" />
+                    </el-form-item>
+                    <el-form-item label="Seed 层级">
+                        <div class="publish-seed-range">
+                            <el-input-number v-model="form.seedMinZoom" :min="0" :max="24" />
+                            <span class="publish-seed-range-separator">至</span>
+                            <el-input-number v-model="form.seedMaxZoom" :min="0" :max="24" />
+                        </div>
+                    </el-form-item>
+                </template>
 
                 <el-form-item label="可见性">
                     <div class="publish-fixed-field">公开</div>
@@ -1344,7 +1225,7 @@ function applyFilters() {
                     </div>
                     <div class="detail-field">
                         <span class="detail-field-label">数据源</span>
-                        <span class="detail-field-value">{{ isTitilerPublication(detailPublication) ? getPublicationSourceSummary(detailPublication) : (detailPublication.publishPath || '-') }}</span>
+                        <span class="detail-field-value">{{ getPublicationSourceSummary(detailPublication) || (detailPublication.publishPath || '-') }}</span>
                     </div>
                     <div v-if="(detailPublication?.metadata?.sourceMode || 'manual') === 'manual'" class="detail-field">
                         <span class="detail-field-label">手动目录路径</span>

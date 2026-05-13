@@ -22,11 +22,11 @@ body.tf-app.tf-theme-light {
 }
 
 body.tf-app.tf-theme-dark {
-    --tf-shell-bg: #0b1220;
-    --tf-sidebar-bg: #111827;
-    --tf-surface: #111827;
-    --tf-surface-soft: #182131;
-    --tf-surface-muted: #1d2738;
+    --tf-shell-bg: #000000;
+    --tf-sidebar-bg: #0a0a0a;
+    --tf-surface: #0a0a0a;
+    --tf-surface-soft: #111111;
+    --tf-surface-muted: #1a1a1a;
     --tf-border: #2a3648;
     --tf-border-strong: #354155;
     --tf-text-primary: #e5e7eb;
