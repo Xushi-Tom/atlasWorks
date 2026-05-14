@@ -8,37 +8,57 @@ from flask import jsonify, request
 
 from config import taskLock, taskProcesses, taskStatus
 from db import countTableRows, deleteTaskSnapshot, syncTaskSnapshot
-from db import fetchTaskSnapshot, listTaskEvents, listTaskSnapshots, pruneTaskSnapshots
+from db import fetchTaskSnapshot, listTaskEvents, listTaskSnapshots
 from pagination import paginate_items, parse_pagination_args
 from taskState import normalizeTaskRecord
 from utils import logMessage, stopTaskProcess
 
 
+ACTIVE_TASK_STATUSES = {"queued", "running"}
+
+
+def _normalize_status(task_info):
+    if not isinstance(task_info, dict):
+        return "unknown"
+    return str(task_info.get("status") or "unknown").strip().lower() or "unknown"
+
+
+def _is_active_task(task_info):
+    return _normalize_status(task_info) in ACTIVE_TASK_STATUSES
+
+
 def cleanupTasksByCount(maxTasks=100):
-    """按数量清理任务，删除最旧的任务以控制内存使用。"""
+    """清理内存中的非运行任务，历史记录以数据库为准。"""
     try:
         deleted_count = 0
+        snapshots_to_sync = []
         with taskLock:
-            task_ids = list(taskStatus.keys())
-            if len(task_ids) > maxTasks:
-                task_ids.sort(key=lambda tid: taskStatus[tid].get("startTime", ""))
-                to_delete = task_ids[:-maxTasks]
+            inactive_task_ids = [
+                task_id
+                for task_id, task_info in taskStatus.items()
+                if not _is_active_task(task_info)
+            ]
 
-                for task_id in to_delete:
-                    if task_id in taskProcesses:
-                        try:
-                            taskProcesses[task_id].terminate()
-                            del taskProcesses[task_id]
-                        except Exception:
-                            pass
+            for task_id in inactive_task_ids:
+                snapshots_to_sync.append((task_id, normalizeTaskRecord(task_id, taskStatus.get(task_id, {}))))
 
-                    if task_id in taskStatus:
-                        del taskStatus[task_id]
+                if task_id in taskProcesses:
+                    try:
+                        taskProcesses[task_id].terminate()
+                        del taskProcesses[task_id]
+                    except Exception:
+                        pass
 
-                deleted_count = len(to_delete)
-                logMessage(f"清理了 {deleted_count} 个旧任务", "INFO")
+                if task_id in taskStatus:
+                    del taskStatus[task_id]
 
-        pruneTaskSnapshots(maxTasks)
+            deleted_count = len(inactive_task_ids)
+            if deleted_count:
+                logMessage(f"清理了 {deleted_count} 个非运行内存任务", "INFO")
+
+        for task_id, task_info in snapshots_to_sync:
+            syncTaskSnapshot(task_id, task_info)
+
         return deleted_count
     except Exception as exc:
         logMessage(f"清理任务失败: {exc}", "ERROR")
@@ -143,22 +163,23 @@ def _matches_task_filters(task, keyword="", date_from=None, date_to=None, status
 def getTaskStatus(taskId):
     try:
         logMessage(f"收到任务状态查询请求: {taskId}", "INFO")
+        with taskLock:
+            if taskId in taskStatus:
+                task_info = normalizeTaskRecord(taskId, taskStatus[taskId])
+                if _is_active_task(task_info):
+                    logMessage(f"任务状态查询命中运行内存: {taskId}, 状态: {task_info.get('status', 'unknown')}", "INFO")
+                    return jsonify(task_info)
+
         persisted_task = fetchTaskSnapshot(taskId)
         if persisted_task:
-            persisted_status = str(persisted_task.get("status") or "").lower()
-            if persisted_status not in {"queued", ""}:
-                logMessage(f"任务状态查询命中数据库快照: {taskId}", "INFO")
-                return jsonify(normalizeTaskRecord(taskId, persisted_task))
+            logMessage(f"任务状态查询命中数据库快照: {taskId}", "INFO")
+            return jsonify(normalizeTaskRecord(taskId, persisted_task))
 
         with taskLock:
             if taskId in taskStatus:
                 task_info = normalizeTaskRecord(taskId, taskStatus[taskId])
-                logMessage(f"任务状态查询成功: {taskId}, 状态: {task_info.get('status', 'unknown')}", "INFO")
+                logMessage(f"任务状态查询命中内存回退: {taskId}, 状态: {task_info.get('status', 'unknown')}", "INFO")
                 return jsonify(task_info)
-
-        if persisted_task:
-            logMessage(f"任务状态查询命中数据库快照: {taskId}", "INFO")
-            return jsonify(normalizeTaskRecord(taskId, persisted_task))
 
         logMessage(f"任务状态查询失败: 任务不存在 {taskId}", "WARNING")
         return jsonify({"error": "任务不存在"}), 404
@@ -219,9 +240,10 @@ def listTasks():
     date_to = _parse_datetime_value(request.args.get("dateTo"), end_of_day=True)
 
     with taskLock:
-        in_memory_tasks = {
+        active_memory_tasks = {
             task_id: buildSimplifiedTaskInfo(task_id, task_info)
             for task_id, task_info in taskStatus.items()
+            if _is_active_task(task_info)
         }
 
     persisted_tasks = {}
@@ -232,7 +254,7 @@ def listTasks():
             persisted_tasks[task_id] = buildSimplifiedTaskInfo(task_id, task_info)
 
     merged_tasks = dict(persisted_tasks)
-    merged_tasks.update(in_memory_tasks)
+    merged_tasks.update(active_memory_tasks)
 
     def extract_start_time(task_id):
         task = merged_tasks.get(task_id, {})
@@ -298,6 +320,9 @@ def cleanupTasks():
                 "success": True,
                 "message": "任务清理完成",
                 "remainingTasks": len(taskStatus),
+                "activeInMemoryTasks": len([
+                    task_info for task_info in taskStatus.values() if _is_active_task(task_info)
+                ]),
             })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500

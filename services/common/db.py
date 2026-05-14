@@ -22,6 +22,7 @@ except ImportError:
 _BOOTSTRAP_LOCK = threading.Lock()
 _TASK_SYNC_LOCK = threading.Lock()
 _TASK_SYNC_THREAD = None
+_ACTIVE_TASK_STATUSES = {"queued", "running"}
 
 
 SCHEMA_STATEMENTS = [
@@ -142,6 +143,12 @@ def _databaseSettings():
 
 def _taskSyncSettings():
     return config.get("taskSync", {})
+
+
+def _isActiveTaskPayload(task_data):
+    if not isinstance(task_data, dict):
+        return False
+    return str(task_data.get("status") or "").strip().lower() in _ACTIVE_TASK_STATUSES
 
 
 def _json_safe(value):
@@ -611,6 +618,61 @@ def listTaskSnapshots(limit=50):
             conn.rollback()
         _log_db_message(f"列出任务快照失败: {exc}", "WARNING")
         return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def getTaskSnapshotStats():
+    stats = {
+        "total": 0,
+        "running": 0,
+        "queued": 0,
+        "completed": 0,
+        "failed": 0,
+        "stopped": 0,
+        "interrupted": 0,
+        "unknown": 0,
+        "byStatus": {},
+    }
+
+    if not isDatabaseEnabled():
+        return stats
+
+    conn = None
+    try:
+        conn = _get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COALESCE(NULLIF(TRIM(LOWER(status)), ''), 'unknown') AS normalized_status,
+                       COUNT(*)
+                FROM tf_build_jobs
+                GROUP BY normalized_status
+                """
+            )
+            rows = cursor.fetchall()
+        conn.commit()
+
+        by_status = {}
+        total = 0
+        for status, count in rows:
+            normalized_status = str(status or "unknown").strip().lower() or "unknown"
+            item_count = int(count or 0)
+            by_status[normalized_status] = item_count
+            total += item_count
+
+        stats["total"] = total
+        stats["byStatus"] = by_status
+        for status, count in by_status.items():
+            if status in stats:
+                stats[status] = count
+        return stats
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        _log_db_message(f"统计任务快照失败: {exc}", "WARNING")
+        return stats
     finally:
         if conn:
             conn.close()
@@ -1225,8 +1287,18 @@ def _syncLoop(task_status, task_lock, interval_seconds):
                     except Exception:
                         snapshot_items.append((task_id, dict(task_data)))
 
+            synced_inactive_task_ids = []
             for task_id, task_data in snapshot_items:
-                syncTaskSnapshot(task_id, normalizeTaskRecord(task_id, task_data))
+                normalized_task = normalizeTaskRecord(task_id, task_data)
+                if syncTaskSnapshot(task_id, normalized_task) and not _isActiveTaskPayload(normalized_task):
+                    synced_inactive_task_ids.append(task_id)
+
+            if synced_inactive_task_ids:
+                with task_lock:
+                    for task_id in synced_inactive_task_ids:
+                        current_task = task_status.get(task_id)
+                        if current_task is not None and not _isActiveTaskPayload(current_task):
+                            del task_status[task_id]
         except Exception as exc:
             _log_db_message(f"任务同步线程异常: {exc}", "WARNING")
 

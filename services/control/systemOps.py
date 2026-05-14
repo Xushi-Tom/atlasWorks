@@ -8,10 +8,37 @@ from datetime import datetime
 from flask import jsonify, request
 
 from config import config, taskLock, taskStatus
-from db import checkDatabaseHealth, countTableRows
+from db import checkDatabaseHealth, countTableRows, getTaskSnapshotStats
 from pagination import paginate_items, parse_pagination_args
 from utils import logMessage
 from version import APP_VERSION
+
+
+ACTIVE_TASK_STATUSES = {"queued", "running"}
+
+
+def _activeMemoryTaskStats():
+    with taskLock:
+        active_tasks = [
+            task_info
+            for task_info in taskStatus.values()
+            if str(task_info.get("status") or "").strip().lower() in ACTIVE_TASK_STATUSES
+        ]
+        running_tasks = len([
+            task_info
+            for task_info in active_tasks
+            if str(task_info.get("status") or "").strip().lower() == "running"
+        ])
+        queued_tasks = len([
+            task_info
+            for task_info in active_tasks
+            if str(task_info.get("status") or "").strip().lower() == "queued"
+        ])
+        return {
+            "activeInMemory": len(active_tasks),
+            "runningInMemory": running_tasks,
+            "queuedInMemory": queued_tasks,
+        }
 
 
 def healthCheck():
@@ -20,9 +47,8 @@ def healthCheck():
     if database_health.get("enabled") and database_health.get("status") not in {"healthy", "disabled"}:
         service_status = "degraded"
 
-    with taskLock:
-        running_tasks = len([t for t in taskStatus.values() if t.get("status") == "running"])
-        queued_tasks = len([t for t in taskStatus.values() if t.get("status") == "queued"])
+    task_stats = getTaskSnapshotStats()
+    active_memory_stats = _activeMemoryTaskStats()
 
     response = {
         "status": service_status,
@@ -30,9 +56,8 @@ def healthCheck():
         "version": APP_VERSION,
         "database": database_health,
         "tasks": {
-            "inMemoryTotal": len(taskStatus),
-            "running": running_tasks,
-            "queued": queued_tasks,
+            **task_stats,
+            **active_memory_stats,
         },
         "catalog": {
             "artifacts": countTableRows("tf_artifacts") if database_health.get("enabled") else 0,
@@ -89,13 +114,10 @@ def systemInfo():
                 "diskFree": 53687091200,
             }
 
-        with taskLock:
-            system_info["tasks"] = {
-                "total": len(taskStatus),
-                "running": len([t for t in taskStatus.values() if t.get("status") == "running"]),
-                "completed": len([t for t in taskStatus.values() if t.get("status") == "completed"]),
-                "failed": len([t for t in taskStatus.values() if t.get("status") == "failed"]),
-            }
+        system_info["tasks"] = {
+            **getTaskSnapshotStats(),
+            **_activeMemoryTaskStats(),
+        }
 
         database_health = checkDatabaseHealth()
         system_info["database"] = database_health
