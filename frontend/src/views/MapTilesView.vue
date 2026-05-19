@@ -1,11 +1,12 @@
 <script setup>
-import { onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
 import PathPickerModal from '../components/PathPickerModal.vue';
 import RecommendationModal from '../components/RecommendationModal.vue';
 import { api } from '../services/api';
 import { normalizeListInput } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
+import { addNavigationIntentListener, consumeNavigationIntent } from '../utils/navigationIntent';
 
 const emit = defineEmits(['navigate']);
 
@@ -62,6 +63,7 @@ const renderModeOptions = [
 ];
 
 let bandRefreshTimer = null;
+let removeNavigationIntentListener = null;
 
 function openPicker(config) {
     Object.assign(picker, config, { visible: true });
@@ -250,6 +252,20 @@ async function submit() {
     }
 }
 
+function applyIntent(intent = {}) {
+    if (!intent || intent.section !== 'map-tiles') return;
+    const sourcePath = String(intent.sourcePath || '').trim();
+    if (!sourcePath) return;
+    form.folderPaths = '';
+    form.filePatterns = sourcePath;
+    const fileName = sourcePath.split('/').filter(Boolean).pop() || 'map-task';
+    const stem = fileName.replace(/\.[^.]+$/, '');
+    if (!String(form.outputPath || '').trim()) {
+        form.outputPath = `map/${stem}`;
+    }
+    scheduleRefreshBandOptions();
+}
+
 watch(() => `${form.folderPaths}|${form.filePatterns}`, () => {
     scheduleRefreshBandOptions();
 });
@@ -262,6 +278,20 @@ onBeforeUnmount(() => {
     if (bandRefreshTimer) {
         window.clearTimeout(bandRefreshTimer);
     }
+    removeNavigationIntentListener?.();
+    removeNavigationIntentListener = null;
+});
+
+onMounted(() => {
+    const initialIntent = consumeNavigationIntent('map-tiles');
+    if (initialIntent) {
+        applyIntent(initialIntent);
+    }
+    removeNavigationIntentListener = addNavigationIntentListener(intent => {
+        if (intent?.section === 'map-tiles') {
+            applyIntent(intent);
+        }
+    });
 });
 </script>
 

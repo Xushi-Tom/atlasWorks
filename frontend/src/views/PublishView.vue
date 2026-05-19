@@ -1,6 +1,7 @@
 <script setup>
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import {
+    Check,
     Clock,
     CopyDocument,
     Delete,
@@ -17,6 +18,7 @@ import ResizableDrawer from '../components/ResizableDrawer.vue';
 import { api } from '../services/api';
 import { formatDateTime, normalizeListInput } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
+import { addNavigationIntentListener, consumeNavigationIntent } from '../utils/navigationIntent';
 
 const PublicationPreviewModal = defineAsyncComponent(() => import('../components/PublicationPreviewModal.vue'));
 
@@ -62,7 +64,16 @@ const currentPage = ref(1);
 const pageSize = ref(10);
 const totalPublications = ref(0);
 const publicationDetails = ref({});
+const selectedPublicationIds = ref([]);
+const detailSeedStatus = ref(null);
+const detailSeedLoading = ref(false);
+const detailCacheInfo = ref(null);
+const detailCacheLoading = ref(false);
+const detailTab = ref('core');
+const applyingIntent = ref(false);
 let publicationRefreshTimer = null;
+let detailSeedRefreshTimer = null;
+let removeNavigationIntentListener = null;
 
 const DATASOURCE_PUBLISH_TYPE = 'imagery';
 const DATASOURCE_PUBLISH_METHOD = 'geoserver-wmts';
@@ -153,6 +164,10 @@ const publishableTasks = computed(() => {
 
 const selectedTask = computed(() => publishableTasks.value.find(task => task.taskId === form.taskId) || null);
 const modalTitle = computed(() => editingPublicationId.value ? '编辑发布' : '创建发布');
+const selectedPublicationSet = computed(() => new Set(selectedPublicationIds.value));
+const allPublicationIds = computed(() => publications.value.map(item => String(item?.publicationId || '').trim()).filter(Boolean));
+const allSelected = computed(() => Boolean(allPublicationIds.value.length) && allPublicationIds.value.every(id => selectedPublicationSet.value.has(id)));
+const selectedPublicationCount = computed(() => selectedPublicationIds.value.length);
 
 function normalizeDisplayUrl(url) {
     const value = String(url || '').trim();
@@ -200,13 +215,55 @@ function getMergedPublication(item) {
     return detail ? { ...item, ...detail } : item;
 }
 
+function normalizeSeedTaskState(statusText = '') {
+    const text = String(statusText || '').trim();
+    if (!text) return 'idle';
+    const lowered = text.toLowerCase();
+    if (text === '当前没有运行中的预热任务' || lowered.includes('no running') || lowered.includes('idle')) return 'idle';
+    if (lowered.includes('running') || lowered.includes('pending') || lowered.includes('seeding') || lowered.includes('truncate')) return 'running';
+    if (lowered.includes('error') || lowered.includes('failed')) return 'failed';
+    return 'submitted';
+}
+
+function getSeedStatusTone(state = '') {
+    const normalized = String(state || '').trim().toLowerCase();
+    if (normalized === 'failed') return 'is-danger';
+    if (normalized === 'running') return 'is-warning';
+    if (normalized === 'submitted' || normalized === 'completed') return 'is-success';
+    return 'is-muted';
+}
+
+function getSeedStatusLabel(status = null) {
+    if (!status) return '暂无状态';
+    if (status.running) return '预热进行中';
+    if (status.state === 'completed') return '预热已完成';
+    if (status.statusText === '当前没有运行中的预热任务') return '当前空闲';
+    if (status.state === 'submitted') return '预热已提交';
+    if (status.state === 'failed') return '状态读取失败';
+    return '当前空闲';
+}
+
+function getSeedStatusDescription(status = null) {
+    if (!status) return '当前没有预热任务。';
+    const text = String(status.statusText || status.status || '').trim();
+    if (text) return text;
+    if (status.running) return 'GeoServer 正在执行预热任务。';
+    return '当前没有运行中的预热任务。';
+}
+
 function isPublicationEnabled(item) {
     return Boolean(item?.metadata?.enabled ?? (item?.status === 'enabled' || item?.status === 'published'));
 }
 
 function getPublicationSourceSummary(item) {
+    const sourceMode = item?.metadata?.sourceMode || (item?.metadata?.taskId ? 'task' : 'manual');
+    if (sourceMode === 'task' && item?.metadata?.taskId) return `任务 ${item.metadata.taskId}`;
+    if (sourceMode === 'datasource') {
+        const count = getPublicationDataSourcePaths(item).length;
+        return count ? `数据源 ${count} 项` : '数据源发布';
+    }
     const entryCount = Number(item?.sourceEntryCount ?? item?.metadata?.sourceEntryCount ?? 0);
-    return entryCount ? `${entryCount} 项` : '-';
+    return entryCount ? `${entryCount} 项` : (normalizeWorkspacePath(item?.publishPath || '') || '-');
 }
 
 function getPrimaryPublicationUrl(item) {
@@ -300,6 +357,70 @@ function getPublicationSourceTarget(item) {
     return normalizeWorkspacePath(item?.metadata?.workspacePath || item?.publishPath || '') || '-';
 }
 
+function getPublicationSeedConfig(item) {
+    const customMetadata = item?.metadata?.customMetadata || item?.customMetadata || {};
+    return {
+        enabled: Boolean(customMetadata?.seedEnabled),
+        minZoom: Number(customMetadata?.minZoom ?? 0),
+        maxZoom: Number(customMetadata?.maxZoom ?? 16)
+    };
+}
+
+function getPublicationSeedSummary(item) {
+    const metadata = item?.metadata || {};
+    const customMetadata = metadata?.customMetadata || item?.customMetadata || {};
+    if (!GEOSERVER_METHODS.includes(String(metadata?.publishMethod || item?.publishMethod || '').toLowerCase())) {
+        return '非 GeoServer 服务';
+    }
+    const configured = getPublicationSeedConfig(item);
+    const seedError = String(metadata?.seedError || customMetadata?.seedError || '').trim();
+    const cachedSeedStatus = metadata?.seedStatus || customMetadata?.seedStatus || null;
+    if (seedError) return '预热失败';
+    if (detailPublication.value && getPublicationId(item) === getPublicationId(detailPublication.value) && detailSeedStatus.value?.running) {
+        return '预热进行中';
+    }
+    if (cachedSeedStatus?.running) return '预热进行中';
+    if (cachedSeedStatus?.state === 'completed') return '预热已完成';
+    if (cachedSeedStatus?.statusText && cachedSeedStatus?.state === 'submitted') return '预热已提交';
+    if (cachedSeedStatus?.state === 'idle') return '当前空闲';
+    if (configured.enabled) return `预热层级 ${configured.minZoom}-${configured.maxZoom}`;
+    return '未启用预热';
+}
+
+function getPublicationSeedClass(item) {
+    const summary = getPublicationSeedSummary(item);
+    if (summary.includes('失败')) return 'is-danger';
+    if (summary.includes('进行中')) return 'is-warning';
+    if (summary.includes('提交') || summary.startsWith('预热层级')) return 'is-success';
+    return 'is-muted';
+}
+
+function getGeoserverWorkspace(item) {
+    return String(item?.metadata?.geoserverWorkspace || item?.metadata?.customMetadata?.geoserverWorkspace || '').trim();
+}
+
+function getGeoserverLayerNames(item) {
+    const metadata = item?.metadata || {};
+    const customMetadata = metadata?.customMetadata || {};
+    const raw = metadata?.geoserverLayerNames || customMetadata?.geoserverLayerNames || [];
+    if (Array.isArray(raw) && raw.length) return raw.filter(Boolean);
+    const single = metadata?.geoserverLayerName || customMetadata?.geoserverLayerName || '';
+    return single ? [single] : [];
+}
+
+function getGeoserverStoreNames(item) {
+    const metadata = item?.metadata || {};
+    const customMetadata = metadata?.customMetadata || {};
+    const raw = metadata?.geoserverStoreNames || customMetadata?.geoserverStoreNames || [];
+    if (Array.isArray(raw) && raw.length) return raw.filter(Boolean);
+    const single = metadata?.geoserverStoreName || customMetadata?.geoserverStoreName || '';
+    return single ? [single] : [];
+}
+
+function getPublicationCachePath(item) {
+    return normalizeWorkspacePath(item?.publishPath || item?.metadata?.workspacePath || '');
+}
+
 function getTaskResultPath(task) {
     const rawPath = task?.result?.mergedOutputPath || task?.result?.outputPath || '';
     const normalizedPath = normalizeWorkspacePath(rawPath);
@@ -379,6 +500,32 @@ function getPublicationCopyUrl(item) {
     return getPrimaryPublicationUrl(merged) || getSecondaryPublicationUrl(merged) || '';
 }
 
+function getPublicationId(item) {
+    return String(item?.publicationId || item?.id || '').trim();
+}
+
+function isPublicationSelected(item) {
+    return selectedPublicationSet.value.has(getPublicationId(item));
+}
+
+function togglePublicationSelection(item, checked) {
+    const publicationId = getPublicationId(item);
+    if (!publicationId) return;
+    if (checked) {
+        selectedPublicationIds.value = Array.from(new Set([...selectedPublicationIds.value, publicationId]));
+        return;
+    }
+    selectedPublicationIds.value = selectedPublicationIds.value.filter(id => id !== publicationId);
+}
+
+function toggleSelectAll(checked) {
+    selectedPublicationIds.value = checked ? [...allPublicationIds.value] : [];
+}
+
+function clearPublicationSelection() {
+    selectedPublicationIds.value = [];
+}
+
 function getDefaultPublishMethodForType(publishType) {
     const options = publishMethodCatalog[publishType] || [];
     return options[0]?.value || 'wmts';
@@ -436,13 +583,23 @@ function handlePublicationMenu(command, item) {
 function openPublicationDetail(item) {
     detailPublication.value = item || null;
     detailVisible.value = true;
+    detailTab.value = 'core';
     loadPublicationDetail(item?.publicationId);
 }
 
 function closePublicationDetail() {
+    if (detailSeedRefreshTimer) {
+        window.clearInterval(detailSeedRefreshTimer);
+        detailSeedRefreshTimer = null;
+    }
     detailVisible.value = false;
     detailPublication.value = null;
     detailLoading.value = false;
+    detailSeedStatus.value = null;
+    detailCacheInfo.value = null;
+    detailSeedLoading.value = false;
+    detailCacheLoading.value = false;
+    detailTab.value = 'core';
 }
 
 function openPublicationPreview(item) {
@@ -457,6 +614,10 @@ function openPublicationPreview(item) {
 async function loadPublicationDetail(publicationId) {
     const normalizedId = String(publicationId || '').trim();
     if (!normalizedId) return;
+    if (detailSeedRefreshTimer) {
+        window.clearInterval(detailSeedRefreshTimer);
+        detailSeedRefreshTimer = null;
+    }
     detailLoading.value = true;
     try {
         const response = await api.getPublication(normalizedId);
@@ -468,10 +629,115 @@ async function loadPublicationDetail(publicationId) {
             };
         }
         detailPublication.value = publication;
+        await Promise.all([
+            loadPublicationSeedStatus(publication),
+            loadPublicationCacheDetail(publication)
+        ]);
+        detailSeedRefreshTimer = window.setInterval(() => {
+            if (!detailVisible.value || !detailPublication.value || detailSeedLoading.value) return;
+            loadPublicationSeedStatus(detailPublication.value);
+        }, 5000);
     } catch (error) {
         pushToast(`发布详情加载失败: ${error.message}`, 'error', 4500);
     } finally {
         detailLoading.value = false;
+    }
+}
+
+async function loadPublicationSeedStatus(publication = detailPublication.value) {
+    const publicationId = getPublicationId(publication);
+    if (!publicationId || !GEOSERVER_METHODS.includes(String(publication?.metadata?.publishMethod || publication?.publishMethod || '').toLowerCase())) {
+        detailSeedStatus.value = null;
+        return;
+    }
+    detailSeedLoading.value = true;
+    try {
+        const response = await api.getPublicationSeedStatus(publicationId);
+        const payload = response?.data || response || {};
+        detailSeedStatus.value = {
+            ...payload,
+            state: payload?.state || normalizeSeedTaskState(payload?.statusText || payload?.status),
+            statusText: payload?.statusText || payload?.status || '暂无状态',
+        };
+        mergePublicationSeedStatus(publicationId, detailSeedStatus.value);
+    } catch (error) {
+        detailSeedStatus.value = {
+            running: false,
+            state: 'failed',
+            status: error.message,
+            statusText: `状态读取失败：${error.message}`
+        };
+        mergePublicationSeedStatus(publicationId, detailSeedStatus.value);
+    } finally {
+        detailSeedLoading.value = false;
+    }
+}
+
+function mergePublicationSeedStatus(publicationId, seedStatus) {
+    const normalizedId = String(publicationId || '').trim();
+    if (!normalizedId || !seedStatus) return;
+    const normalizedStatus = {
+        ...seedStatus,
+        running: Boolean(seedStatus?.running),
+        state: seedStatus?.state || normalizeSeedTaskState(seedStatus?.statusText || seedStatus?.status),
+        statusText: seedStatus?.statusText || seedStatus?.status || '暂无状态',
+        taskCount: Number(seedStatus?.taskCount || 0)
+    };
+    publicationDetails.value = {
+        ...publicationDetails.value,
+        [normalizedId]: {
+            ...(publicationDetails.value[normalizedId] || publications.value.find(item => getPublicationId(item) === normalizedId) || {}),
+            metadata: {
+                ...((publicationDetails.value[normalizedId] || publications.value.find(item => getPublicationId(item) === normalizedId) || {}).metadata || {}),
+                seedStatus: normalizedStatus
+            }
+        }
+    };
+    publications.value = publications.value.map(item => {
+        if (getPublicationId(item) !== normalizedId) return item;
+        return {
+            ...item,
+            metadata: {
+                ...(item.metadata || {}),
+                seedStatus: normalizedStatus
+            }
+        };
+    });
+}
+
+async function refreshPublicationSeedStatuses(items = publications.value) {
+    const targets = (Array.isArray(items) ? items : []).filter(item => {
+        const publicationId = getPublicationId(item);
+        const method = String(item?.metadata?.publishMethod || item?.publishMethod || '').toLowerCase();
+        return publicationId && GEOSERVER_METHODS.includes(method);
+    });
+    if (!targets.length) return;
+    await Promise.all(targets.map(async item => {
+        try {
+            const response = await api.getPublicationSeedStatus(getPublicationId(item));
+            const payload = response?.data || response || {};
+            mergePublicationSeedStatus(getPublicationId(item), payload);
+        } catch {
+            return null;
+        }
+        return null;
+    }));
+}
+
+async function loadPublicationCacheDetail(publication = detailPublication.value) {
+    const cachePath = getPublicationCachePath(publication);
+    if (!cachePath) {
+        detailCacheInfo.value = null;
+        return;
+    }
+    detailCacheLoading.value = true;
+    try {
+        const response = await api.getTileCacheDetail(cachePath);
+        detailCacheInfo.value = response?.data || response || null;
+    } catch {
+        detailCacheInfo.value = null;
+    } finally {
+        detailCacheLoading.value = false;
     }
 }
 
@@ -504,6 +770,17 @@ function getSourceTileScheme(item) {
 function formatBounds(bounds) {
     if (!Array.isArray(bounds) || bounds.length !== 4) return '-';
     return bounds.map(value => Number(value).toFixed(6)).join(', ');
+}
+
+function dedupeGuideEndpoints(items = []) {
+    const seen = new Set();
+    return items.filter(item => {
+        const url = String(item?.url || '').trim();
+        if (!url) return false;
+        if (seen.has(url)) return false;
+        seen.add(url);
+        return true;
+    });
 }
 
 function getPublicationGuide(item) {
@@ -647,6 +924,18 @@ function getPublicationGuide(item) {
             label: '行号规则',
             value: 'XYZ / EPSG:3857'
         });
+        const workspace = getGeoserverWorkspace(item);
+        const layers = getGeoserverLayerNames(item);
+        const stores = getGeoserverStoreNames(item);
+        if (workspace) metadataRows.push({ key: 'gs-workspace', label: 'Workspace', value: workspace });
+        if (stores.length) metadataRows.push({ key: 'gs-store', label: 'Store', value: stores.join(', ') });
+        if (layers.length) metadataRows.push({ key: 'gs-layer', label: 'Layer', value: layers.join(', ') });
+        const seedConfig = getPublicationSeedConfig(item);
+        metadataRows.push({
+            key: 'gs-seed',
+            label: '预热配置',
+            value: seedConfig.enabled ? `层级 ${seedConfig.minZoom} - ${seedConfig.maxZoom}` : '未启用'
+        });
     } else {
         if (item.launchUrl && item.launchUrl !== item.browserUrl && item.launchUrl !== item.accessUrl) {
             endpoints.push({
@@ -677,7 +966,12 @@ function getPublicationGuide(item) {
         }
     }
 
-    return { endpoints, notes, concepts, metadataRows };
+    return {
+        endpoints: dedupeGuideEndpoints(endpoints),
+        notes,
+        concepts,
+        metadataRows
+    };
 }
 
 const detailGuide = computed(() => getPublicationGuide(detailPublication.value));
@@ -695,6 +989,32 @@ function resetForm() {
     form.enabled = true;
     form.visibility = 'public';
     form.note = '';
+}
+
+function applyIntentToForm(intent = {}) {
+    if (!intent || intent.section !== 'publish') return;
+    applyingIntent.value = true;
+    editingPublicationId.value = '';
+    resetForm();
+    if (intent.sourceMode) form.sourceMode = intent.sourceMode;
+    if (intent.taskId) form.taskId = intent.taskId;
+    if (intent.workspacePath) form.workspacePath = intent.workspacePath;
+    if (intent.alias) form.alias = intent.alias;
+    if (intent.publishType && publishMethodCatalog[intent.publishType]) form.publishType = intent.publishType;
+    if (intent.publishMethod) form.publishMethod = intent.publishMethod;
+    if (intent.sourceMode === 'manual' && intent.workspacePath) {
+        form.workspacePath = normalizeWorkspacePath(intent.workspacePath);
+    }
+    if (intent.sourceMode === 'datasource' && intent.workspacePath) {
+        form.workspacePath = normalizeDataSourcePath(intent.workspacePath);
+    }
+    createVisible.value = true;
+    if (form.sourceMode === 'task') {
+        ensureTasksLoaded();
+    }
+    queueMicrotask(() => {
+        applyingIntent.value = false;
+    });
 }
 
 async function ensureTasksLoaded(force = false) {
@@ -782,10 +1102,134 @@ async function removePublication(item) {
     try {
         await api.deletePublication(item.publicationId);
         pushToast('发布记录已删除', 'success');
+        selectedPublicationIds.value = selectedPublicationIds.value.filter(id => id !== getPublicationId(item));
         await loadPublications();
     } catch (error) {
         pushToast(`删除发布记录失败: ${error.message}`, 'error', 5000);
     }
+}
+
+async function reseedPublication(item = detailPublication.value) {
+    const publication = getMergedPublication(item);
+    const layers = getGeoserverLayerNames(publication);
+    const workspace = getGeoserverWorkspace(publication);
+    const seedConfig = getPublicationSeedConfig(publication);
+    if (!layers.length || !workspace) {
+        pushToast('当前发布不存在可用的 GeoServer 图层', 'warning');
+        return;
+    }
+    try {
+        await api.geoserverSeedLayer(layers[0], {
+            workspace,
+            minZoom: seedConfig.minZoom,
+            maxZoom: seedConfig.maxZoom,
+            format: 'image/png',
+            threadCount: 1
+        });
+        pushToast('预热任务已重新提交', 'success');
+        await loadPublicationSeedStatus(publication);
+    } catch (error) {
+        pushToast(`预热提交失败: ${error.message}`, 'error', 5000);
+    }
+}
+
+async function cancelPublicationSeed(item = detailPublication.value) {
+    const publication = getMergedPublication(item);
+    const layers = getGeoserverLayerNames(publication);
+    const workspace = getGeoserverWorkspace(publication);
+    if (!layers.length || !workspace) {
+        pushToast('当前发布不存在可用的 GeoServer 图层', 'warning');
+        return;
+    }
+    try {
+        await api.geoserverCancelSeed(layers[0], { workspace });
+        pushToast('预热取消指令已发送', 'success');
+        await loadPublicationSeedStatus(publication);
+    } catch (error) {
+        pushToast(`取消预热失败: ${error.message}`, 'error', 5000);
+    }
+}
+
+async function clearPublicationCache(item = detailPublication.value) {
+    const publication = getMergedPublication(item);
+    const cachePath = getPublicationCachePath(publication);
+    if (!cachePath) {
+        pushToast('当前发布没有可清理的缓存目录', 'warning');
+        return;
+    }
+    const confirmed = window.confirm(`确认清理缓存目录「${cachePath}」吗？`);
+    if (!confirmed) return;
+    try {
+        await api.deleteTileCache(cachePath);
+        pushToast('缓存目录已清理', 'success');
+        await Promise.all([loadPublicationCacheDetail(publication), loadPublications()]);
+    } catch (error) {
+        pushToast(`清理缓存失败: ${error.message}`, 'error', 5000);
+    }
+}
+
+async function clearPublicationCacheZoom(zoom) {
+    const publication = getMergedPublication(detailPublication.value);
+    const cachePath = getPublicationCachePath(publication);
+    if (!cachePath) {
+        pushToast('当前发布没有可清理的缓存目录', 'warning');
+        return;
+    }
+    try {
+        await api.deleteTileCacheZoomLevels(cachePath, [zoom]);
+        pushToast(`Z${zoom} 缓存已清理`, 'success');
+        await Promise.all([loadPublicationCacheDetail(publication), loadPublications()]);
+    } catch (error) {
+        pushToast(`清理层级缓存失败: ${error.message}`, 'error', 5000);
+    }
+}
+
+async function batchTogglePublications(enabled) {
+    const targetIds = [...selectedPublicationIds.value];
+    if (!targetIds.length) {
+        pushToast('请先选择发布记录', 'warning');
+        return;
+    }
+    const failures = [];
+    for (const publicationId of targetIds) {
+        try {
+            await api.togglePublicationEnabled(publicationId, enabled);
+        } catch (error) {
+            failures.push(`${publicationId}: ${error.message}`);
+        }
+    }
+    if (failures.length) {
+        pushToast(`批量操作完成，失败 ${failures.length} 项`, 'warning', 5000);
+    } else {
+        pushToast(enabled ? '批量启用完成' : '批量停用完成', 'success');
+    }
+    clearPublicationSelection();
+    await loadPublications();
+}
+
+async function batchDeletePublications() {
+    const targetIds = [...selectedPublicationIds.value];
+    if (!targetIds.length) {
+        pushToast('请先选择发布记录', 'warning');
+        return;
+    }
+    const confirmed = window.confirm(`确认删除已选择的 ${targetIds.length} 个发布记录吗？`);
+    if (!confirmed) return;
+    const failures = [];
+    for (const publicationId of targetIds) {
+        try {
+            await api.deletePublication(publicationId);
+        } catch (error) {
+            failures.push(`${publicationId}: ${error.message}`);
+        }
+    }
+    if (failures.length) {
+        pushToast(`批量删除完成，失败 ${failures.length} 项`, 'warning', 5000);
+    } else {
+        pushToast('批量删除完成', 'success');
+    }
+    clearPublicationSelection();
+    await loadPublications();
 }
 
 watch(() => form.publishType, value => {
@@ -817,6 +1261,7 @@ watch(() => form.publishMethod, value => {
 });
 
 watch(() => form.sourceMode, value => {
+    if (applyingIntent.value) return;
     if (value === 'task') {
         form.workspacePath = '';
     } else {
@@ -866,9 +1311,11 @@ async function loadPublications() {
             const right = String(b?.publishedAt || b?.createdAt || '');
             return right.localeCompare(left);
         });
+        selectedPublicationIds.value = selectedPublicationIds.value.filter(id => publications.value.some(item => getPublicationId(item) === id));
         totalPublications.value = Number(data.total || 0);
         currentPage.value = Number(data.page || currentPage.value);
         pageSize.value = Number(data.pageSize || pageSize.value);
+        await refreshPublicationSeedStatuses(publications.value);
     } catch (error) {
         pushToast(`发布记录加载失败: ${error.message}`, 'error', 4500);
     }
@@ -940,6 +1387,15 @@ async function submitPublication() {
 
 onMounted(async () => {
     await loadPublications();
+    const initialIntent = consumeNavigationIntent('publish');
+    if (initialIntent) {
+        applyIntentToForm(initialIntent);
+    }
+    removeNavigationIntentListener = addNavigationIntentListener(intent => {
+        if (intent?.section === 'publish') {
+            applyIntentToForm(intent);
+        }
+    });
     publicationRefreshTimer = window.setInterval(() => {
         loadPublications();
     }, 15000);
@@ -950,6 +1406,12 @@ onBeforeUnmount(() => {
         window.clearInterval(publicationRefreshTimer);
         publicationRefreshTimer = null;
     }
+    if (detailSeedRefreshTimer) {
+        window.clearInterval(detailSeedRefreshTimer);
+        detailSeedRefreshTimer = null;
+    }
+    removeNavigationIntentListener?.();
+    removeNavigationIntentListener = null;
 });
 
 function handlePageChange(page) {
@@ -1016,6 +1478,15 @@ function applyFilters() {
                         </div>
                         <el-button type="primary" native-type="submit">搜索</el-button>
                     </el-form>
+                    <div class="publish-batch-toolbar">
+                        <el-checkbox :model-value="allSelected" :disabled="!publications.length" @change="toggleSelectAll">全选当前页</el-checkbox>
+                        <span class="publish-batch-count">已选 {{ selectedPublicationCount }} 项</span>
+                        <div class="publish-batch-actions">
+                            <el-button size="small" :icon="Check" :disabled="!selectedPublicationCount" @click="batchTogglePublications(true)">批量启用</el-button>
+                            <el-button size="small" :disabled="!selectedPublicationCount" @click="batchTogglePublications(false)">批量停用</el-button>
+                            <el-button size="small" type="danger" plain :disabled="!selectedPublicationCount" @click="batchDeletePublications">批量删除</el-button>
+                        </div>
+                    </div>
                 </div>
 
                 <div v-if="publications.length" class="publication-card-grid">
@@ -1025,6 +1496,9 @@ function applyFilters() {
                         class="publication-card"
                         shadow="never"
                     >
+                        <div class="publication-card-select">
+                            <el-checkbox :model-value="isPublicationSelected(row)" @change="value => togglePublicationSelection(row, value)" />
+                        </div>
                         <div class="publication-card-header">
                             <button class="publication-card-title-button" type="button" @click="openPublicationDetail(row)">
                                 <div class="publication-card-title">{{ row.alias || '-' }}</div>
@@ -1067,6 +1541,11 @@ function applyFilters() {
                             </span>
                         </div>
 
+                        <div class="publication-card-extra">
+                            <span class="publication-extra-label">预热</span>
+                            <span class="publication-inline-text" :class="getPublicationSeedClass(row)">{{ getPublicationSeedSummary(row) }}</span>
+                        </div>
+
                         <div class="publication-card-toolbar">
                             <el-button size="default" class="publication-action-button" :icon="View" @click="openPublicationPreview(row)">
                                 预览
@@ -1101,95 +1580,120 @@ function applyFilters() {
             </el-card>
         </div>
 
-        <ResizableDrawer v-model="createVisible" :title="modalTitle" :width="860" :min-width="520" :max-width="1200" destroy-on-close>
-            <el-form class="publish-editor-form" label-width="110px">
-                <el-form-item label="发布来源">
-                    <el-radio-group v-model="form.sourceMode">
-                        <el-radio-button label="task">按任务发布</el-radio-button>
-                        <el-radio-button label="manual">手动目录</el-radio-button>
-                        <el-radio-button label="datasource">数据源文件</el-radio-button>
-                    </el-radio-group>
-                </el-form-item>
+        <ResizableDrawer v-model="createVisible" :title="modalTitle" :width="980" :min-width="640" :max-width="1320" destroy-on-close>
+            <div class="publish-editor-shell">
+                <div class="publish-source-tabs">
+                    <button type="button" class="publish-source-tab" :class="{ 'is-active': form.sourceMode === 'task' }" @click="form.sourceMode = 'task'">按任务发布</button>
+                    <button type="button" class="publish-source-tab" :class="{ 'is-active': form.sourceMode === 'manual' }" @click="form.sourceMode = 'manual'">手动目录</button>
+                    <button type="button" class="publish-source-tab" :class="{ 'is-active': form.sourceMode === 'datasource' }" @click="form.sourceMode = 'datasource'">数据源文件</button>
+                </div>
 
-                <el-form-item v-if="form.sourceMode === 'task'" label="任务结果">
-                    <el-select v-model="form.taskId" filterable placeholder="请选择已完成任务" :loading="tasksLoading" :teleported="false">
-                        <el-option v-for="task in publishableTasks" :key="task.taskId" :label="`${task.taskId} / ${getTaskResultPath(task)}`" :value="task.taskId" />
-                    </el-select>
-                    <div v-if="selectedTask" class="publish-source-preview">
-                        <span>结果目录：{{ getTaskResultPath(selectedTask) }}</span>
-                        <span>产物 ID：{{ selectedTask.result?.artifactId || '-' }}</span>
-                        <span>开始时间：{{ formatDateTime(selectedTask.startTime) }}</span>
-                    </div>
-                </el-form-item>
+                <el-form class="publish-editor-form" label-position="top">
+                    <div class="publish-editor-grid">
+                        <div class="publish-editor-section publish-editor-section-source">
+                            <div class="publish-section-title">发布来源</div>
 
-                <el-form-item v-else-if="form.sourceMode === 'datasource'" label="数据源">
-                    <div class="path-field">
-                        <el-input v-model="form.workspacePath" :placeholder="dataSourcePlaceholder" />
-                        <div class="path-field-actions">
-                            <el-button @click="openPicker({ title: '选择影像文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'workspacePath', allowedExtensions: dataSourceAllowedExtensions })">选择文件</el-button>
-                            <el-button @click="openPicker({ title: '选择影像目录', source: 'datasource', selectionMode: 'folder', multiple: false, field: 'workspacePath', allowedExtensions: [] })">选择目录</el-button>
-                            <el-button @click="form.workspacePath = ''">清空</el-button>
+                            <el-form-item v-if="form.sourceMode === 'task'" label="任务结果">
+                                <el-select v-model="form.taskId" filterable placeholder="请选择已完成任务" :loading="tasksLoading" :teleported="false">
+                                    <el-option v-for="task in publishableTasks" :key="task.taskId" :label="`${task.taskId} / ${getTaskResultPath(task)}`" :value="task.taskId" />
+                                </el-select>
+                                <div v-if="selectedTask" class="publish-source-preview">
+                                    <span>结果目录：{{ getTaskResultPath(selectedTask) }}</span>
+                                    <span>产物 ID：{{ selectedTask.result?.artifactId || '-' }}</span>
+                                    <span>开始时间：{{ formatDateTime(selectedTask.startTime) }}</span>
+                                </div>
+                            </el-form-item>
+
+                            <el-form-item v-else-if="form.sourceMode === 'datasource'" label="数据源">
+                                <div class="path-field">
+                                    <el-input v-model="form.workspacePath" :placeholder="dataSourcePlaceholder" />
+                                    <div class="path-field-actions">
+                                        <el-button @click="openPicker({ title: '选择影像文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'workspacePath', allowedExtensions: dataSourceAllowedExtensions })">选择文件</el-button>
+                                        <el-button @click="openPicker({ title: '选择影像目录', source: 'datasource', selectionMode: 'folder', multiple: false, field: 'workspacePath', allowedExtensions: [] })">选择目录</el-button>
+                                        <el-button @click="form.workspacePath = ''">清空</el-button>
+                                    </div>
+                                </div>
+                                <div class="publish-source-preview">
+                                    <span>已选项数：{{ getNormalizedDataSourcePaths().length }}</span>
+                                    <span>发布模式：数据源影像发布</span>
+                                    <span>支持单文件或整个目录，发布细节由系统自动处理。</span>
+                                </div>
+                            </el-form-item>
+
+                            <el-form-item v-else label="工作空间目录">
+                                <div class="path-field">
+                                    <el-input v-model="form.workspacePath" placeholder="选择需要发布的工作空间目录" />
+                                    <div class="path-field-actions">
+                                        <el-button @click="openPicker({ title: '选择工作空间目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'workspacePath', allowedExtensions: [] })">选择目录</el-button>
+                                        <el-button @click="form.workspacePath = ''">清空</el-button>
+                                    </div>
+                                </div>
+                            </el-form-item>
+                        </div>
+
+                        <div class="publish-editor-section publish-editor-section-full">
+                            <div class="publish-section-title">基础信息</div>
+
+                            <el-form-item label="发布别名">
+                                <el-input v-model="form.alias" placeholder="例如 imagery-release-v1" />
+                            </el-form-item>
+
+                            <el-form-item label="发布类型">
+                                <div v-if="isDatasourceMode" class="publish-fixed-field">{{ DATASOURCE_PUBLISH_TYPE_LABEL }}</div>
+                                <el-select v-else v-model="form.publishType" :teleported="false">
+                                    <el-option label="地图" value="imagery" />
+                                    <el-option label="地形" value="terrain" />
+                                    <el-option label="3DTiles" value="3dtiles" />
+                                    <el-option label="二维矢量" value="vector" />
+                                </el-select>
+                            </el-form-item>
+
+                            <el-form-item label="发布方式">
+                                <el-select v-model="form.publishMethod" :teleported="false">
+                                    <el-option v-for="option in publishMethodOptions" :key="option.value" :label="option.label" :value="option.value" />
+                                </el-select>
+                            </el-form-item>
+                        </div>
+
+                        <div class="publish-editor-section publish-editor-section-full">
+                            <div class="publish-section-title">发布配置</div>
+
+                            <template v-if="isDatasourceMode">
+                                <el-form-item label="发布后预热">
+                                    <el-switch v-model="form.seedEnabled" active-text="启动预热" inactive-text="仅发布服务" />
+                                </el-form-item>
+
+                                <el-form-item label="预热层级">
+                                    <div class="publish-seed-range">
+                                        <el-input-number v-model="form.seedMinZoom" :min="0" :max="24" />
+                                        <span class="publish-seed-range-separator">至</span>
+                                        <el-input-number v-model="form.seedMaxZoom" :min="0" :max="24" />
+                                    </div>
+                                </el-form-item>
+                            </template>
+
+                            <el-form-item label="可见性">
+                                <el-select v-model="form.visibility" :teleported="false">
+                                    <el-option label="公开" value="public" />
+                                    <el-option label="内部" value="internal" />
+                                    <el-option label="私有" value="private" />
+                                </el-select>
+                            </el-form-item>
+
+                            <el-form-item label="启用状态">
+                                <el-switch v-model="form.enabled" active-text="启用" inactive-text="停用" />
+                            </el-form-item>
+                        </div>
+
+                        <div class="publish-editor-section publish-editor-section-full">
+                            <div class="publish-section-title">发布说明</div>
+                            <el-form-item label="说明备注">
+                                <el-input v-model="form.note" type="textarea" :rows="5" placeholder="记录来源、用途和版本说明" />
+                            </el-form-item>
                         </div>
                     </div>
-                    <div class="publish-source-preview">
-                        <span>已选项数：{{ getNormalizedDataSourcePaths().length }}</span>
-                        <span>发布模式：数据源影像发布</span>
-                        <span>支持单文件或整个目录，发布细节由系统自动处理。</span>
-                    </div>
-                </el-form-item>
-
-                <el-form-item v-else label="工作空间目录">
-                    <div class="path-field">
-                        <el-input v-model="form.workspacePath" placeholder="选择需要发布的工作空间目录" />
-                        <el-button @click="openPicker({ title: '选择工作空间目录', source: 'workspace', selectionMode: 'folder', multiple: false, field: 'workspacePath', allowedExtensions: [] })">选择目录</el-button>
-                    </div>
-                </el-form-item>
-
-                <el-form-item label="发布别名">
-                    <el-input v-model="form.alias" placeholder="例如 imagery-release-v1" />
-                </el-form-item>
-
-                <el-form-item label="发布类型">
-                    <div v-if="isDatasourceMode" class="publish-fixed-field">{{ DATASOURCE_PUBLISH_TYPE_LABEL }}</div>
-                    <el-select v-else v-model="form.publishType" :teleported="false">
-                        <el-option label="地图" value="imagery" />
-                        <el-option label="地形" value="terrain" />
-                        <el-option label="3DTiles" value="3dtiles" />
-                        <el-option label="二维矢量" value="vector" />
-                    </el-select>
-                </el-form-item>
-
-                <el-form-item label="发布方式">
-                    <el-select v-model="form.publishMethod" :teleported="false">
-                        <el-option v-for="option in publishMethodOptions" :key="option.value" :label="option.label" :value="option.value" />
-                    </el-select>
-                </el-form-item>
-
-                <template v-if="isDatasourceMode">
-                    <el-form-item label="发布后预热">
-                        <el-switch v-model="form.seedEnabled" active-text="启动 GWC Seed" inactive-text="仅发布服务" />
-                    </el-form-item>
-                    <el-form-item label="Seed 层级">
-                        <div class="publish-seed-range">
-                            <el-input-number v-model="form.seedMinZoom" :min="0" :max="24" />
-                            <span class="publish-seed-range-separator">至</span>
-                            <el-input-number v-model="form.seedMaxZoom" :min="0" :max="24" />
-                        </div>
-                    </el-form-item>
-                </template>
-
-                <el-form-item label="可见性">
-                    <div class="publish-fixed-field">公开</div>
-                </el-form-item>
-
-                <el-form-item label="启用状态">
-                    <el-switch v-model="form.enabled" active-text="启用" inactive-text="停用" />
-                </el-form-item>
-
-                <el-form-item label="发布说明">
-                    <el-input v-model="form.note" type="textarea" :rows="4" placeholder="记录来源、用途和版本说明" />
-                </el-form-item>
-            </el-form>
+                </el-form>
+            </div>
 
             <template #footer>
                 <el-button @click="createVisible = false">取消</el-button>
@@ -1207,67 +1711,164 @@ function applyFilters() {
             @closed="closePublicationDetail"
         >
             <div v-if="detailPublication" class="detail-content">
-                <div class="detail-field-list">
-                    <div class="detail-field">
-                        <span class="detail-field-label">发布名称</span>
-                        <span class="detail-field-value">{{ detailPublication.alias || '-' }}</span>
-                    </div>
-                    <div class="detail-field">
-                        <span class="detail-field-label">发布类型</span>
-                        <span class="detail-field-value">{{ getPublishTypeLabel(detailPublication.publishType) }} / {{ getPublishMethodLabel(detailPublication.publishType, detailPublication.metadata?.publishMethod) }}</span>
-                    </div>
-                    <div class="detail-field">
-                        <span class="detail-field-label">状态</span>
-                        <span class="detail-field-value">
-                            <span class="detail-status-dot" :class="getPublicationStatusBadgeClass(detailPublication)"></span>
-                            {{ getPublicationStatusLabel(detailPublication.status) }}
-                        </span>
-                    </div>
-                    <div class="detail-field">
-                        <span class="detail-field-label">数据源</span>
-                        <span class="detail-field-value">{{ getPublicationSourceSummary(detailPublication) || (detailPublication.publishPath || '-') }}</span>
-                    </div>
-                    <div v-if="(detailPublication?.metadata?.sourceMode || 'manual') === 'manual'" class="detail-field">
-                        <span class="detail-field-label">手动目录路径</span>
-                        <span class="detail-field-value detail-field-value-mono">{{ normalizeWorkspacePath(detailPublication?.metadata?.workspacePath || detailPublication?.publishPath || '') || '-' }}</span>
-                    </div>
-                    <div class="detail-field">
-                        <span class="detail-field-label">切片文件/文件夹</span>
-                        <span class="detail-field-value detail-field-value-mono">{{ getPublicationSourceTarget(detailPublication) }}</span>
-                    </div>
+                <div class="detail-tabs">
+                    <button type="button" class="detail-tab-button" :class="{ 'is-active': detailTab === 'core' }" @click="detailTab = 'core'">核心信息</button>
+                    <button type="button" class="detail-tab-button" :class="{ 'is-active': detailTab === 'process' }" @click="detailTab = 'process'">过程信息</button>
                 </div>
 
-                <div v-if="detailGuide.metadataRows.length" class="detail-section">
-                    <div class="detail-section-title">接入参数</div>
+                <div v-if="detailTab === 'core'" class="detail-tab-panel">
+                    <div class="detail-section">
+                        <div class="detail-section-head">
+                            <div class="detail-section-title">核心信息</div>
+                            <div class="detail-inline-actions">
+                                <el-button size="small" type="primary" plain @click="openPublicationPreview(detailPublication)">预览</el-button>
+                                <el-button size="small" plain @click="editPublication(detailPublication)">编辑</el-button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="detail-field-list">
-                        <div
-                            v-for="row in detailGuide.metadataRows"
-                            :key="row.key"
-                            class="detail-field"
-                        >
-                            <span class="detail-field-label">{{ row.label }}</span>
-                            <span class="detail-field-value">{{ row.value || '-' }}</span>
+                        <div class="detail-field">
+                            <span class="detail-field-label">发布名称</span>
+                            <span class="detail-field-value">{{ detailPublication.alias || '-' }}</span>
+                        </div>
+                        <div class="detail-field">
+                            <span class="detail-field-label">发布类型</span>
+                            <span class="detail-field-value">{{ getPublishTypeLabel(detailPublication.publishType) }} / {{ getPublishMethodLabel(detailPublication.publishType, detailPublication.metadata?.publishMethod) }}</span>
+                        </div>
+                        <div class="detail-field">
+                            <span class="detail-field-label">状态</span>
+                            <span class="detail-field-value">
+                                <span class="detail-status-chip" :class="getPublicationStatusBadgeClass(detailPublication)">
+                                    <span class="detail-status-dot" :class="getPublicationStatusBadgeClass(detailPublication)"></span>
+                                    {{ getPublicationStatusLabel(detailPublication.status) }}
+                                </span>
+                            </span>
+                        </div>
+                        <div class="detail-field">
+                            <span class="detail-field-label">数据源</span>
+                            <span class="detail-field-value">{{ getPublicationSourceSummary(detailPublication) || (detailPublication.publishPath || '-') }}</span>
+                        </div>
+                        <div v-if="(detailPublication?.metadata?.sourceMode || 'manual') === 'manual'" class="detail-field">
+                            <span class="detail-field-label">手动目录路径</span>
+                            <span class="detail-field-value detail-field-value-mono">{{ normalizeWorkspacePath(detailPublication?.metadata?.workspacePath || detailPublication?.publishPath || '') || '-' }}</span>
+                        </div>
+                        <div v-if="(detailPublication?.metadata?.sourceMode || '') === 'datasource'" class="detail-field">
+                            <span class="detail-field-label">数据源路径</span>
+                            <span class="detail-field-value detail-field-value-mono">{{ detailPublication?.metadata?.sourcePath || detailPublication?.metadata?.workspacePath || '-' }}</span>
+                        </div>
+                        <div class="detail-field">
+                            <span class="detail-field-label">切片文件/文件夹</span>
+                            <span class="detail-field-value detail-field-value-mono">{{ getPublicationSourceTarget(detailPublication) }}</span>
+                        </div>
+                        <div v-if="detailPublication.metadata?.taskId" class="detail-field">
+                            <span class="detail-field-label">来源任务</span>
+                            <span class="detail-field-value">{{ detailPublication.metadata?.taskId }}</span>
+                        </div>
+                        <div v-if="detailPublication.artifactId" class="detail-field">
+                            <span class="detail-field-label">产物 ID</span>
+                            <span class="detail-field-value">{{ detailPublication.artifactId }}</span>
+                        </div>
+                        <div v-if="detailPublication.bounds?.length === 4" class="detail-field">
+                            <span class="detail-field-label">范围</span>
+                            <span class="detail-field-value">{{ formatBounds(detailPublication.bounds) }}</span>
+                        </div>
+                    </div>
+
+                    <div v-if="detailGuide.metadataRows.length" class="detail-section">
+                        <div class="detail-section-title">接入参数</div>
+                        <div class="detail-field-list">
+                            <div
+                                v-for="row in detailGuide.metadataRows"
+                                :key="row.key"
+                                class="detail-field"
+                            >
+                                <span class="detail-field-label">{{ row.label }}</span>
+                                <span class="detail-field-value">{{ row.value || '-' }}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="detail-section">
+                        <div class="detail-section-head">
+                            <div class="detail-section-title">地址</div>
+                        </div>
+                        <div class="detail-endpoint-list">
+                            <div
+                                v-for="endpoint in detailGuide.endpoints"
+                                :key="endpoint.key"
+                                class="detail-endpoint"
+                            >
+                                <div class="detail-endpoint-head">
+                                    <span class="detail-endpoint-label">{{ endpoint.label }}</span>
+                                    <el-button size="small" text @click="copyPublicationUrl(endpoint.url)">复制</el-button>
+                                </div>
+                                <a class="detail-endpoint-url" :href="endpoint.href || endpoint.url" target="_blank" rel="noreferrer">{{ endpoint.url }}</a>
+                                <p class="detail-endpoint-desc">{{ endpoint.description }}</p>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="detail-section">
-                    <div class="detail-section-head">
-                        <div class="detail-section-title">地址</div>
-                        <el-button size="small" type="primary" plain @click="openPublicationPreview(detailPublication)">预览</el-button>
-                    </div>
-                    <div class="detail-endpoint-list">
-                        <div
-                            v-for="endpoint in detailGuide.endpoints"
-                            :key="endpoint.key"
-                            class="detail-endpoint"
-                        >
-                            <div class="detail-endpoint-head">
-                                <span class="detail-endpoint-label">{{ endpoint.label }}</span>
-                                <el-button size="small" text @click="copyPublicationUrl(endpoint.url)">复制</el-button>
+                <div v-else class="detail-tab-panel">
+                    <div v-if="GEOSERVER_METHODS.includes(String(detailPublication?.metadata?.publishMethod || detailPublication?.publishMethod || '').toLowerCase())" class="detail-section">
+                        <div class="detail-section-head">
+                            <div class="detail-section-title">预热管理</div>
+                            <div class="detail-inline-actions">
+                                <el-button size="small" plain :loading="detailSeedLoading" @click="loadPublicationSeedStatus(detailPublication)">刷新状态</el-button>
+                                <el-button size="small" type="primary" plain @click="reseedPublication(detailPublication)">重新预热</el-button>
+                                <el-button size="small" type="danger" plain @click="cancelPublicationSeed(detailPublication)">取消预热</el-button>
                             </div>
-                            <a class="detail-endpoint-url" :href="endpoint.href || endpoint.url" target="_blank" rel="noreferrer">{{ endpoint.url }}</a>
-                            <p class="detail-endpoint-desc">{{ endpoint.description }}</p>
+                        </div>
+                        <div class="detail-field-list">
+                            <div class="detail-field">
+                                <span class="detail-field-label">状态</span>
+                                <span class="detail-field-value">
+                                    <span class="detail-status-chip" :class="getSeedStatusTone(detailSeedStatus?.state)">
+                                        <span class="detail-status-dot" :class="getSeedStatusTone(detailSeedStatus?.state)"></span>
+                                        {{ getSeedStatusLabel(detailSeedStatus) }}
+                                    </span>
+                                </span>
+                            </div>
+                            <div class="detail-field">
+                                <span class="detail-field-label">过程信息</span>
+                                <span class="detail-field-value">{{ getSeedStatusDescription(detailSeedStatus) }}</span>
+                            </div>
+                            <div class="detail-field">
+                                <span class="detail-field-label">运行中</span>
+                                <span class="detail-field-value">{{ detailSeedStatus?.running ? '是' : '否' }}</span>
+                            </div>
+                            <div v-if="detailSeedStatus?.taskCount" class="detail-field">
+                                <span class="detail-field-label">运行队列</span>
+                                <span class="detail-field-value">GeoServer 返回 {{ detailSeedStatus.taskCount }} 组队列</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="detail-section">
+                        <div class="detail-section-head">
+                            <div class="detail-section-title">缓存运维</div>
+                            <div class="detail-inline-actions">
+                                <el-button size="small" plain :loading="detailCacheLoading" @click="loadPublicationCacheDetail(detailPublication)">刷新缓存</el-button>
+                                <el-button size="small" type="danger" plain @click="clearPublicationCache(detailPublication)">清理全部缓存</el-button>
+                            </div>
+                        </div>
+                        <div class="detail-field-list">
+                            <div class="detail-field">
+                                <span class="detail-field-label">缓存目录</span>
+                                <span class="detail-field-value detail-field-value-mono">{{ getPublicationCachePath(detailPublication) || '-' }}</span>
+                            </div>
+                            <div class="detail-field">
+                                <span class="detail-field-label">缓存大小</span>
+                                <span class="detail-field-value">{{ detailCacheInfo?.sizeBytes !== undefined ? `${(Number(detailCacheInfo.sizeBytes || 0) / 1024 / 1024).toFixed(2)} MB` : '-' }}</span>
+                            </div>
+                        </div>
+                        <div v-if="detailCacheInfo?.zoomLevels?.length" class="detail-cache-zoom-list">
+                            <div v-for="zoomItem in detailCacheInfo.zoomLevels" :key="zoomItem.zoom" class="detail-cache-zoom-item">
+                                <span>Z{{ zoomItem.zoom }}</span>
+                                <span>{{ zoomItem.tileFiles }} 个文件</span>
+                                <el-button size="small" text type="danger" @click="clearPublicationCacheZoom(zoomItem.zoom)">清理该层</el-button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1332,6 +1933,9 @@ function applyFilters() {
 
 .publish-toolbar {
     margin-bottom: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .publish-filter-form {
@@ -1402,6 +2006,60 @@ function applyFilters() {
     margin-top: 24px;
 }
 
+.publish-batch-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border: 1px solid var(--tf-border);
+    border-radius: 16px;
+    background: var(--tf-surface-soft);
+}
+
+.publish-batch-toolbar :deep(.el-checkbox__label) {
+    color: var(--tf-text-primary);
+    font-weight: 600;
+}
+
+.publish-batch-toolbar :deep(.el-checkbox) {
+    margin-right: 2px;
+}
+
+.publish-batch-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.publish-batch-toolbar :deep(.el-button) {
+    min-width: 108px;
+    height: 38px;
+    border-radius: 12px;
+    font-weight: 700;
+}
+
+.publish-batch-count {
+    color: var(--tf-text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    margin-left: auto;
+}
+
+.publish-batch-toolbar :deep(.el-button--danger.is-plain) {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.36);
+    background: rgba(248, 113, 113, 0.1);
+}
+
+.publish-batch-toolbar :deep(.el-button--danger.is-plain:hover) {
+    color: #fff;
+    border-color: #ef4444;
+    background: #ef4444;
+}
+
 .publication-card-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1409,6 +2067,7 @@ function applyFilters() {
 }
 
 .publication-card {
+    position: relative;
     height: 100%;
     border-radius: 18px;
     border: 1px solid var(--tf-border);
@@ -1417,6 +2076,23 @@ function applyFilters() {
         border-color 0.2s ease,
         box-shadow 0.2s ease,
         transform 0.2s ease;
+}
+
+.publication-card-select {
+    position: absolute;
+    top: 18px;
+    right: 74px;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--tf-surface);
+    border: 1px solid var(--tf-border);
+    box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
 }
 
 .publication-card:hover {
@@ -1544,6 +2220,19 @@ function applyFilters() {
     display: flex;
     align-items: center;
     min-height: 28px;
+}
+
+.publication-card-extra {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 24px;
+}
+
+.publication-extra-label {
+    color: var(--tf-text-muted);
+    font-size: 13px;
+    white-space: nowrap;
 }
 
 .publication-card-meta-item {
@@ -1691,13 +2380,13 @@ function applyFilters() {
 
 .publish-fixed-field {
     width: 100%;
-    min-height: 40px;
+    min-height: 44px;
     display: flex;
     align-items: center;
-    padding: 0 12px;
+    padding: 0 14px;
     border: 1px solid var(--tf-border-strong);
-    border-radius: 10px;
-    background: var(--tf-surface);
+    border-radius: 14px;
+    background: var(--tf-surface-soft);
     color: var(--tf-text-primary);
 }
 
@@ -1706,6 +2395,13 @@ function applyFilters() {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.path-field-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
 }
 
 .standard-table-actions {
@@ -1717,17 +2413,134 @@ function applyFilters() {
 
 .publish-source-preview {
     margin-top: 10px;
-    padding: 10px 12px;
-    border-radius: 8px;
+    padding: 14px 16px;
+    border-radius: 14px;
     border: 1px solid var(--tf-border);
     background: var(--tf-surface-soft);
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
     color: var(--tf-text-secondary);
+    line-height: 1.6;
+}
+
+.publish-editor-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.publish-source-tabs {
+    display: flex;
+    gap: 0;
+    flex-wrap: wrap;
+    border: 1px solid var(--tf-border);
+    border-radius: 16px;
+    overflow: hidden;
+    align-self: flex-start;
+    background: var(--tf-surface-soft);
+}
+
+.publish-source-tab {
+    min-width: 132px;
+    height: 48px;
+    padding: 0 22px;
+    border: 0;
+    border-right: 1px solid var(--tf-border);
+    background: transparent;
+    color: var(--tf-text-secondary);
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.publish-source-tab:last-child {
+    border-right: 0;
+}
+
+.publish-source-tab.is-active {
+    background: var(--tf-accent);
+    color: #ffffff;
+}
+
+.publish-editor-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+}
+
+.publish-editor-section {
+    padding: 18px;
+    border: 1px solid var(--tf-border);
+    border-radius: 18px;
+    background: var(--tf-surface);
+}
+
+.publish-editor-section-source,
+.publish-editor-section-full {
+    grid-column: 1 / -1;
+}
+
+.publish-section-title {
+    margin-bottom: 16px;
+    color: var(--tf-text-primary);
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.publish-seed-range {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.publish-seed-range :deep(.el-input-number) {
+    width: 164px;
 }
 
 .detail-content {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.detail-tabs {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--tf-border);
+}
+
+.detail-tab-button {
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--tf-text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 11px 16px;
+    border-radius: 12px 12px 0 0;
+    cursor: pointer;
+    transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.detail-tab-button:hover {
+    color: var(--tf-text-primary);
+    background: var(--tf-surface-soft);
+}
+
+.detail-tab-button.is-active {
+    color: var(--tf-text-primary);
+    background: var(--tf-surface);
+    border-color: var(--tf-border);
+    border-bottom-color: var(--tf-surface);
+}
+
+.detail-tab-panel {
     display: flex;
     flex-direction: column;
     gap: 24px;
@@ -1774,6 +2587,43 @@ function applyFilters() {
     gap: 8px;
 }
 
+.detail-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.detail-status-chip.is-success {
+    color: #95de64;
+    background: rgba(103, 194, 58, 0.16);
+    border-color: rgba(103, 194, 58, 0.3);
+}
+
+.detail-status-chip.is-warning {
+    color: #ffd166;
+    background: rgba(217, 145, 26, 0.18);
+    border-color: rgba(217, 145, 26, 0.34);
+}
+
+.detail-status-chip.is-danger {
+    color: #ffb3b3;
+    background: rgba(227, 77, 89, 0.18);
+    border-color: rgba(227, 77, 89, 0.34);
+}
+
+.detail-status-chip.is-muted {
+    color: var(--tf-text-secondary);
+    background: rgba(138, 148, 166, 0.14);
+    border-color: rgba(138, 148, 166, 0.22);
+}
+
 .detail-field-value-mono {
     font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
     font-size: 13px;
@@ -1815,6 +2665,12 @@ function applyFilters() {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+}
+
+.detail-inline-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .detail-section-title {
@@ -1876,6 +2732,22 @@ function applyFilters() {
     line-height: 1.6;
 }
 
+.detail-cache-zoom-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.detail-cache-zoom-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border: 1px solid var(--tf-border);
+    border-radius: 10px;
+    background: var(--tf-surface-soft);
+}
+
 .publish-address-cell {
     min-width: 0;
     display: flex;
@@ -1922,7 +2794,10 @@ function applyFilters() {
 .publish-editor-form :deep(.el-input__wrapper),
 .publish-editor-form :deep(.el-textarea__inner),
 .publish-editor-form :deep(.el-select__wrapper) {
-    background: var(--tf-surface);
+    min-height: 46px;
+    border-radius: 14px;
+    background: var(--tf-surface-soft);
+    box-shadow: 0 0 0 1px var(--tf-border-strong) inset;
 }
 
 .publish-editor-form :deep(.el-select) {
@@ -1934,8 +2809,39 @@ function applyFilters() {
 }
 
 :deep(.el-textarea__inner) {
-    background: var(--tf-surface);
+    min-height: 136px;
+    border-radius: 16px;
+    background: var(--tf-surface-soft);
     color: var(--tf-text-primary);
+}
+
+.publish-editor-form :deep(.el-form-item) {
+    margin-bottom: 0;
+}
+
+.publish-editor-form :deep(.el-form-item__label) {
+    padding-bottom: 8px;
+    color: var(--tf-text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.publish-editor-form :deep(.el-switch) {
+    --el-switch-on-color: #409eff;
+    --el-switch-off-color: var(--tf-border-strong);
+}
+
+.publish-editor-form :deep(.el-switch__label) {
+    color: var(--tf-text-primary) !important;
+}
+
+.publish-editor-form :deep(.el-switch__label.is-active) {
+    color: var(--tf-text-primary) !important;
+}
+
+.publish-editor-form :deep(.el-button) {
+    min-height: 42px;
+    border-radius: 12px;
 }
 
 @media (max-width: 768px) {
@@ -1953,23 +2859,32 @@ function applyFilters() {
     }
 }
 
-:deep(.publish-editor-dialog .el-form-item) {
-    margin-bottom: 18px;
-}
-
-:deep(.publish-editor-dialog .el-switch) {
-    --el-switch-on-color: #409eff;
-    --el-switch-off-color: var(--tf-border-strong);
-}
-
 @media (max-width: 960px) {
+    .publish-editor-grid {
+        grid-template-columns: 1fr;
+    }
+
     .path-field {
         flex-direction: column;
         align-items: stretch;
     }
+
+    .path-field-actions {
+        width: 100%;
+    }
 }
 
 @media (max-width: 760px) {
+    .publish-source-tabs {
+        width: 100%;
+    }
+
+    .publish-source-tab {
+        flex: 1 1 33.33%;
+        min-width: 0;
+        padding: 0 10px;
+    }
+
     .publication-card-summary {
         flex-wrap: wrap;
         white-space: normal;
@@ -1986,6 +2901,11 @@ function applyFilters() {
         border-left: 0;
         border-top: 1px solid var(--tf-border);
         padding-top: 12px;
+    }
+
+    .publication-card-select {
+        position: static;
+        margin-bottom: -6px;
     }
 }
 </style>

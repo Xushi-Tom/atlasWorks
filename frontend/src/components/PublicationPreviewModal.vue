@@ -656,7 +656,6 @@ onBeforeUnmount(() => {
                     >
                         飞到区域
                     </el-button>
-                    <el-tag v-if="previewConfig.supported" type="success">可预览</el-tag>
                     <el-tag v-else type="info">暂不支持</el-tag>
                 </div>
             </div>

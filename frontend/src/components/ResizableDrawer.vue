@@ -126,7 +126,7 @@ onBeforeUnmount(() => {
     position: fixed;
     inset: 0;
     z-index: 3000;
-    background: var(--tf-overlay, rgba(15, 23, 42, 0.18));
+    background: var(--tf-drawer-overlay, rgba(0, 0, 0, 0.72));
     display: flex;
     justify-content: flex-end;
     opacity: 0;
@@ -143,7 +143,7 @@ onBeforeUnmount(() => {
     max-width: calc(100vw - 32px);
     display: flex;
     flex-direction: column;
-    background: var(--tf-surface);
+    background: var(--tf-drawer-bg, #0a0a0a);
     border-left: 1px solid var(--tf-border);
     box-shadow: -12px 0 32px rgba(15, 23, 42, 0.14);
     transform: translateX(32px);
@@ -175,6 +175,7 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 16px;
     border-bottom: 1px solid var(--tf-border);
+    background: var(--tf-drawer-bg, #0a0a0a);
 }
 
 .drawer-header-copy {
@@ -202,7 +203,7 @@ onBeforeUnmount(() => {
     height: 32px;
     border: 1px solid var(--tf-border-strong);
     border-radius: 8px;
-    background: var(--tf-surface);
+    background: var(--tf-drawer-bg-soft, #111111);
     color: var(--tf-text-secondary);
     font-size: 18px;
     line-height: 1;
@@ -220,6 +221,7 @@ onBeforeUnmount(() => {
     min-height: 0;
     padding: 18px 20px;
     overflow: auto;
+    background: var(--tf-drawer-bg, #0a0a0a);
 }
 
 .drawer-footer {
@@ -228,5 +230,6 @@ onBeforeUnmount(() => {
     display: flex;
     justify-content: flex-end;
     gap: 10px;
+    background: var(--tf-drawer-bg, #0a0a0a);
 }
 </style>

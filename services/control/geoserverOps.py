@@ -6,6 +6,7 @@ import os
 import time
 from urllib.parse import quote
 from xml.sax.saxutils import escape
+from xml.etree import ElementTree as ET
 
 import requests
 from flask import jsonify, request
@@ -506,22 +507,56 @@ def getSeedStatus(workspace, layerName):
         expected_statuses={200, 404},
     )
     text = response.text.strip() if response.status_code == 200 else ""
+    status_text = "当前没有运行中的预热任务"
+    task_count = 0
+    raw_arrays = []
+    running = False
+    if text:
+        try:
+            root = ET.fromstring(text)
+            array_nodes = root.findall(".//long-array")
+            for array_node in array_nodes:
+                values = []
+                for long_node in array_node.findall("./long"):
+                    try:
+                        values.append(int((long_node.text or "").strip()))
+                    except Exception:
+                        continue
+                if values:
+                    raw_arrays.append(values)
+            task_count = len(raw_arrays)
+            if task_count > 0:
+                running = True
+                status_text = f"预热执行中，GeoServer 返回 {task_count} 组运行队列"
+            else:
+                plain_text = "".join(root.itertext()).strip()
+                if plain_text:
+                    status_text = plain_text
+        except Exception:
+            if "<long-array" in text:
+                task_count = max(1, text.count("<long-array>"))
+                running = True
+                status_text = f"预热执行中，GeoServer 返回 {task_count} 组运行队列"
+            else:
+                status_text = text
     return {
         "success": True,
         "workspace": workspace,
         "layerName": _safe_name(layerName),
-        "running": bool(text),
+        "running": running,
         "status": text,
+        "statusText": status_text,
+        "taskCount": task_count,
+        "taskQueues": raw_arrays,
     }
 
 
 def cancelSeed(workspace, layerName):
-    layer_id, payload = _seed_request_payload(workspace, layerName, "kill_all")
+    layer_id = f"{workspace}:{_safe_name(layerName)}"
     response = _geoserver_request(
         "POST",
-        f"/gwc/rest/seed/{quote(layer_id, safe=':')}.xml",
-        data=payload,
-        headers={"Content-Type": "text/xml"},
+        f"/gwc/rest/seed/{quote(layer_id, safe=':')}",
+        params={"kill_all": "all"},
         expected_statuses={200, 201, 202},
     )
     return {"success": True, "workspace": workspace, "layerName": _safe_name(layerName), "message": response.text.strip() or "seed cancel accepted"}

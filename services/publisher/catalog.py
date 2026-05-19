@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 from flask import Response, jsonify, redirect, request, send_from_directory
 
 from config import config, taskLock, taskStatus
-from geoserverOps import deleteStore, publishGeoserverPayload
+from geoserverOps import deleteStore, getSeedStatus, publishGeoserverPayload
 from db import (
     appendJobEvent,
     countTableRows,
@@ -1244,7 +1244,7 @@ def _augment_publication_response(payload, include_runtime_state=True, include_v
 
 def _publication_descriptor_dir(alias):
     return os.path.join(config["tilesDir"], PUBLICATIONS_DIRNAME, str(alias or "").strip() or "publication")
-def _persist_publication_record(prepared, metadata_override=None, status_override=None):
+def _persist_publication_record(prepared, metadata_override=None, status_override=None, touch_record_timestamp=True):
     descriptor = _safe_dict(prepared.get("descriptor"))
     metadata = metadata_override if isinstance(metadata_override, dict) else _safe_dict(descriptor.get("metadata"))
     status_value = status_override or descriptor.get("status") or "draft"
@@ -1269,6 +1269,7 @@ def _persist_publication_record(prepared, metadata_override=None, status_overrid
         launch_url=access_payload.get("launchUrl"),
         sample_url=access_payload.get("sampleUrl"),
         public_base_url=access_payload.get("publicBaseUrl"),
+        touch_updated_at=touch_record_timestamp,
     )
     if isDatabaseEnabled() and not persisted:
         raise RuntimeError("发布记录写入数据库失败")
@@ -1452,6 +1453,123 @@ def _get_publication_response(publication_id, include_runtime_state=True, includ
                 )
                 return response if _is_supported_publication_record(response) else None
     return None
+
+
+def _persist_publication_snapshot(publication, metadata_override=None, status_override=None, touch_record_timestamp=True):
+    if not isinstance(publication, dict):
+        return False
+    publication_id = publication.get("publicationId") or publication.get("id")
+    if not publication_id:
+        return False
+    metadata = metadata_override if isinstance(metadata_override, dict) else _safe_dict(publication.get("metadata"))
+    prepared = {
+        "publicationId": publication_id,
+        "artifactId": publication.get("artifactId"),
+        "publishType": publication.get("publishType"),
+        "publishPath": publication.get("publishPath"),
+        "alias": publication.get("alias"),
+        "publishedAt": publication.get("publishedAt") or publication.get("createdAt") or datetime.now(timezone.utc).isoformat(),
+        "descriptor": {
+            "id": publication_id,
+            "artifactId": publication.get("artifactId"),
+            "publishType": publication.get("publishType"),
+            "publishPath": publication.get("publishPath"),
+            "alias": publication.get("alias"),
+            "status": status_override or publication.get("status") or "draft",
+            "publishedAt": publication.get("publishedAt"),
+            "createdAt": publication.get("createdAt"),
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+            "metadata": metadata,
+        },
+    }
+    _persist_publication_record(
+        prepared,
+        metadata_override=metadata,
+        status_override=status_override or publication.get("status") or "draft",
+        touch_record_timestamp=touch_record_timestamp,
+    )
+    return True
+
+
+def _get_publication_geoserver_identity(publication):
+    metadata = _safe_dict((publication or {}).get("metadata"))
+    if not _is_geoserver_publish_method(metadata.get("publishMethod")):
+        return None, None
+    custom_metadata = _safe_dict(metadata.get("customMetadata"))
+    workspace = _first_non_blank(
+        metadata.get("geoserverWorkspace"),
+        custom_metadata.get("geoserverWorkspace"),
+        config.get("geoserverWorkspace"),
+        "atlasworks",
+    )
+    layer_names = metadata.get("geoserverLayerNames") or custom_metadata.get("geoserverLayerNames") or []
+    if not isinstance(layer_names, list):
+        layer_names = []
+    layer_names = [str(name).strip() for name in layer_names if str(name).strip()]
+    if not layer_names:
+        single_name = _first_non_blank(
+            metadata.get("geoserverLayerName"),
+            custom_metadata.get("geoserverLayerName"),
+        )
+        if single_name:
+            layer_names.append(single_name)
+    return workspace, layer_names
+
+
+def _normalize_seed_status_payload(payload):
+    payload = _safe_dict(payload)
+    running = bool(payload.get("running"))
+    status_text = str(payload.get("statusText") or payload.get("status") or "").strip()
+    lowered = status_text.lower()
+    if running:
+        state = "running"
+    elif not status_text or status_text == "当前没有运行中的预热任务" or "no running" in lowered or "idle" in lowered:
+        state = "idle"
+    elif "error" in lowered or "failed" in lowered:
+        state = "failed"
+    else:
+        state = "submitted"
+    return {
+        "running": running,
+        "state": state,
+        "status": payload.get("status"),
+        "statusText": status_text or "当前没有运行中的预热任务",
+        "taskCount": int(payload.get("taskCount") or 0),
+        "taskQueues": payload.get("taskQueues") or [],
+        "workspace": payload.get("workspace"),
+        "layerName": payload.get("layerName"),
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _store_publication_seed_status(publication, seed_status):
+    if not isinstance(publication, dict):
+        return seed_status
+    metadata = _safe_dict(publication.get("metadata"))
+    custom_metadata = _safe_dict(metadata.get("customMetadata"))
+    normalized_status = _normalize_seed_status_payload(seed_status)
+    previous_status = _safe_dict(metadata.get("seedStatus") or custom_metadata.get("seedStatus"))
+    if (
+        normalized_status.get("state") == "idle"
+        and (
+            bool(previous_status.get("running"))
+            or str(previous_status.get("state") or "").strip().lower() in {"running", "submitted", "completed"}
+        )
+    ):
+        normalized_status["state"] = "completed"
+        normalized_status["statusText"] = "预热已完成"
+    metadata["seedStatus"] = normalized_status
+    custom_metadata["seedStatus"] = normalized_status
+    metadata["customMetadata"] = custom_metadata
+    publication["metadata"] = metadata
+    publication["customMetadata"] = custom_metadata
+    _persist_publication_snapshot(
+        publication,
+        metadata_override=metadata,
+        status_override=publication.get("status"),
+        touch_record_timestamp=False,
+    )
+    return normalized_status
 
 
 def _get_task_record(task_id):
@@ -1866,6 +1984,7 @@ def _publication_record_to_response(record, include_runtime_state=True, include_
                 launch_url=response.get("launchUrl"),
                 sample_url=response.get("sampleUrl"),
                 public_base_url=response.get("publicBaseUrl"),
+                touch_updated_at=False,
             )
             if not persisted:
                 logMessage(f"发布 URL 回填失败: {record.get('id')}", "WARNING")
@@ -2289,6 +2408,29 @@ def getPublication(publication_id=None, publicationId=None):
         return jsonify({"error": "发布记录不存在"}), 404
     except Exception as exc:
         logMessage(f"读取发布记录失败 {publication_id}: {exc}", "ERROR")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+def getPublicationSeedRuntime(publication_id=None, publicationId=None):
+    try:
+        publication_id = publication_id or publicationId
+        publication = _get_publication_response(publication_id, include_runtime_state=False)
+        if not publication:
+            return jsonify({"error": "发布记录不存在"}), 404
+
+        workspace, layer_names = _get_publication_geoserver_identity(publication)
+        if not workspace or not layer_names:
+            return jsonify({"error": "当前发布不存在可用的 GeoServer 图层"}), 400
+
+        seed_status = getSeedStatus(workspace, layer_names[0])
+        normalized_status = _store_publication_seed_status(publication, seed_status)
+        return jsonify({
+            "success": True,
+            "publicationId": publication_id,
+            **normalized_status,
+        })
+    except Exception as exc:
+        logMessage(f"读取发布预热状态失败 {publication_id}: {exc}", "ERROR")
         return jsonify({"success": False, "error": str(exc)}), 500
 
 

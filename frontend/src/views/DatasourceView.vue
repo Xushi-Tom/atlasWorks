@@ -7,6 +7,9 @@ import ResizableDrawer from '../components/ResizableDrawer.vue';
 import { api } from '../services/api';
 import { formatBytes, formatDateTime } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
+import { setNavigationIntent } from '../utils/navigationIntent';
+
+const emit = defineEmits(['navigate']);
 
 const ARCHIVE_EXTENSIONS = ['.zip', '.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.7z'];
 
@@ -165,6 +168,37 @@ async function showFileDetails(file) {
     } catch (error) {
         pushToast(`获取文件详情失败: ${error.message}`, 'error', 4500);
     }
+}
+
+function openMapTilesFromDatasource(file) {
+    const targetPath = String(file?.path || selectedFile.value?.path || '').trim();
+    if (!targetPath) {
+        pushToast('未找到可用的数据源路径', 'warning');
+        return;
+    }
+    setNavigationIntent({
+        section: 'map-tiles',
+        sourcePath: targetPath,
+        sourceMode: 'datasource-file'
+    });
+    emit('navigate', { section: 'map-tiles' });
+}
+
+function openPublishFromDatasource(file) {
+    const targetPath = String(file?.path || selectedFile.value?.path || '').trim();
+    if (!targetPath) {
+        pushToast('未找到可用的数据源路径', 'warning');
+        return;
+    }
+    setNavigationIntent({
+        section: 'publish',
+        sourceMode: 'datasource',
+        workspacePath: targetPath,
+        publishType: 'imagery',
+        publishMethod: 'geoserver-wmts',
+        alias: String(file?.name || selectedFile.value?.name || '').replace(/\.[^.]+$/, '')
+    });
+    emit('navigate', { section: 'publish' });
 }
 
 function closeDetailModal() {
@@ -378,6 +412,13 @@ onMounted(async () => {
                                         详情
                                     </el-button>
                                     <el-button
+                                        v-if="row.entryType === 'file' && ['.tif', '.tiff'].includes(String(row.extension || '').toLowerCase())"
+                                        link
+                                        @click="openMapTilesFromDatasource(row)"
+                                    >
+                                        去切片
+                                    </el-button>
+                                    <el-button
                                         v-if="row.entryType === 'file' && isArchiveName(row.name)"
                                         link
                                         @click="extractArchive(row)"
@@ -437,6 +478,21 @@ onMounted(async () => {
                         {{ selectedFile.geoBounds ? `${selectedFile.geoBounds.west}, ${selectedFile.geoBounds.south}, ${selectedFile.geoBounds.east}, ${selectedFile.geoBounds.north}` : '-' }}
                     </el-descriptions-item>
                 </el-descriptions>
+                <div class="browser-detail-actions">
+                    <el-button
+                        v-if="['.tif', '.tiff'].includes(String(selectedFile.extension || '').toLowerCase())"
+                        type="primary"
+                        @click="openMapTilesFromDatasource(selectedFile)"
+                    >
+                        去地图切片
+                    </el-button>
+                    <el-button
+                        v-if="['.tif', '.tiff'].includes(String(selectedFile.extension || '').toLowerCase())"
+                        @click="openPublishFromDatasource(selectedFile)"
+                    >
+                        直接发布服务
+                    </el-button>
+                </div>
             </div>
         </ResizableDrawer>
 
@@ -542,6 +598,13 @@ onMounted(async () => {
     gap: 16px;
     color: var(--tf-text-muted);
     font-size: 13px;
+}
+
+.browser-detail-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .browser-panel {

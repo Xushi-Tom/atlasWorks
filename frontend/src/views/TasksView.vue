@@ -6,6 +6,9 @@ import ResizableDrawer from '../components/ResizableDrawer.vue';
 import { api } from '../services/api';
 import { formatDateTime } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
+import { setNavigationIntent } from '../utils/navigationIntent';
+
+const emit = defineEmits(['navigate']);
 
 const tasks = ref([]);
 const statusFilter = ref('');
@@ -17,6 +20,7 @@ const detailVisible = ref(false);
 const detailLoading = ref(false);
 const selectedTask = ref(null);
 const taskEvents = ref([]);
+const detailTab = ref('summary');
 let loadTimer = null;
 
 const statusLabelMap = {
@@ -100,6 +104,62 @@ function formatEventType(eventType) {
         .join(' / ');
 }
 
+function getTaskMeta(task) {
+    const result = task?.result || {};
+    const parts = [inferTaskType(task)];
+    if (result?.artifactId) {
+        parts.push(`产物 ${result.artifactId}`);
+    }
+    return parts.join(' · ');
+}
+
+function getTaskStageDetail(task) {
+    const files = task?.files || {};
+    const stats = task?.stats || {};
+    const message = String(task?.message || '').trim();
+    if (message) {
+        return message;
+    }
+
+    const totalFiles = Number(files?.total || 0);
+    if (totalFiles > 0) {
+        const completedFiles = Number(files?.completed || 0);
+        const failedFiles = Number(files?.failed || 0);
+        return failedFiles > 0
+            ? `文件 ${completedFiles}/${totalFiles}，失败 ${failedFiles}`
+            : `文件 ${completedFiles}/${totalFiles}`;
+    }
+
+    const totalTiles = Number(stats?.totalTiles || 0);
+    if (totalTiles > 0) {
+        const processedTiles = Number(stats?.processedTiles || 0);
+        const failedTiles = Number(stats?.failedTiles || 0);
+        return failedTiles > 0
+            ? `瓦片 ${processedTiles}/${totalTiles}，失败 ${failedTiles}`
+            : `瓦片 ${processedTiles}/${totalTiles}`;
+    }
+
+    return task?.result?.outputPath || task?.result?.mergedOutputPath || '暂无回传信息';
+}
+
+function getProgressClass(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'completed') return 'task-progress-value-success';
+    if (normalized === 'running') return 'task-progress-value-running';
+    if (normalized === 'failed') return 'task-progress-value-danger';
+    if (normalized === 'stopped') return 'task-progress-value-muted';
+    return 'task-progress-value-default';
+}
+
+function getDetailStatusClass(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'completed') return 'task-status-chip-success';
+    if (normalized === 'running') return 'task-status-chip-running';
+    if (normalized === 'failed') return 'task-status-chip-danger';
+    if (normalized === 'stopped') return 'task-status-chip-muted';
+    return 'task-status-chip-default';
+}
+
 function getTaskSummaryStats(task) {
     const result = task?.result || {};
     return [
@@ -159,6 +219,7 @@ async function openDetail(task) {
     detailLoading.value = true;
     selectedTask.value = null;
     taskEvents.value = [];
+    detailTab.value = 'summary';
 
     try {
         const [taskDetail, eventsResponse] = await Promise.all([
@@ -200,6 +261,34 @@ async function removeTask(taskId) {
         if (error === 'cancel' || error === 'close' || error?.message === 'cancel') return;
         pushToast(`删除任务失败: ${error.message}`, 'error', 4500);
     }
+}
+
+function openPublishFromTask(task) {
+    const targetTask = task || selectedTask.value;
+    const taskId = String(targetTask?.taskId || '').trim();
+    if (!taskId) {
+        pushToast('未找到任务标识', 'warning');
+        return;
+    }
+    const result = targetTask?.result || {};
+    const publishTypeHint = String(result?.publishHints?.publishType || '').trim();
+    const normalizedPublishType = publishTypeHint === 'geo' ? 'vector' : publishTypeHint;
+    setNavigationIntent({
+        section: 'publish',
+        sourceMode: 'task',
+        taskId,
+        alias: String(result?.outputPath || result?.mergedOutputPath || taskId).split('/').filter(Boolean).pop() || taskId,
+        publishType: normalizedPublishType || undefined,
+        publishMethod: result?.publishHints?.publishMethod || undefined
+    });
+    emit('navigate', {
+        section: 'publish',
+        sourceMode: 'task',
+        taskId,
+        alias: String(result?.outputPath || result?.mergedOutputPath || taskId).split('/').filter(Boolean).pop() || taskId,
+        publishType: normalizedPublishType || undefined,
+        publishMethod: result?.publishHints?.publishMethod || undefined
+    });
 }
 
 onMounted(async () => {
@@ -263,19 +352,21 @@ onBeforeUnmount(() => {
                 <table class="layui-table">
                     <colgroup>
                         <col style="width: 60px" />
-                        <col style="min-width: 200px" />
+                        <col style="min-width: 280px" />
                         <col style="width: 90px" />
-                        <col style="min-width: 160px" />
-                        <col style="width: 165px" />
-                        <col style="width: 165px" />
-                        <col style="width: 140px" />
+                        <col style="width: 88px" />
+                        <col style="min-width: 260px" />
+                        <col style="width: 168px" />
+                        <col style="width: 168px" />
+                        <col style="width: 236px" />
                     </colgroup>
                     <thead>
                         <tr>
                             <th>序号</th>
-                            <th>任务 ID</th>
+                            <th>任务信息</th>
                             <th>状态</th>
                             <th>进度</th>
+                            <th>过程说明</th>
                             <th>开始时间</th>
                             <th>结束时间</th>
                             <th>操作</th>
@@ -284,20 +375,26 @@ onBeforeUnmount(() => {
                     <tbody>
                         <tr v-for="row in visibleTasks" :key="row.taskId">
                             <td class="cell-center">{{ row.orderNo }}</td>
-                            <td class="cell-id">{{ row.taskId }}</td>
+                            <td>
+                                <div class="task-info-cell">
+                                    <div class="task-info-id">{{ row.taskId }}</div>
+                                    <div class="task-info-meta">{{ getTaskMeta(row) }}</div>
+                                </div>
+                            </td>
                             <td class="cell-center">
                                 <span :class="['layui-badge', `layui-badge-${getStatusTagType(row.status)}`]">
                                     {{ getStatusLabel(row.status) }}
                                 </span>
                             </td>
+                            <td class="cell-center">
+                                <div :class="['task-progress-value', getProgressClass(row.status)]">
+                                    {{ formatProgress(row.progress) }}%
+                                </div>
+                            </td>
                             <td>
-                                <div class="layui-progress">
-                                    <div
-                                        class="layui-progress-bar"
-                                        :class="{ 'layui-progress-bar-active': row.status === 'running' }"
-                                        :style="{ width: formatProgress(row.progress) + '%' }"
-                                    />
-                                    <span class="layui-progress-text">{{ formatProgress(row.progress) }}%</span>
+                                <div class="task-stage-cell">
+                                    <div class="task-stage-title">{{ row.currentStage || '等待回传' }}</div>
+                                    <div class="task-stage-detail">{{ getTaskStageDetail(row) }}</div>
                                 </div>
                             </td>
                             <td>{{ formatDateTime(row.startTime) }}</td>
@@ -305,13 +402,14 @@ onBeforeUnmount(() => {
                             <td class="cell-center">
                                 <div class="layui-table-actions">
                                     <a class="layui-link" @click="openDetail(row)">详情</a>
+                                    <a v-if="row.status === 'completed'" class="layui-link" @click="openPublishFromTask(row)">去发布</a>
                                     <a v-if="row.status === 'running'" class="layui-link layui-link-warn" @click="stopTask(row.taskId)">停止</a>
                                     <a v-else class="layui-link layui-link-danger" @click="removeTask(row.taskId)">删除</a>
                                 </div>
                             </td>
                         </tr>
                         <tr v-if="!visibleTasks.length">
-                            <td colspan="7" class="cell-empty">暂无任务数据</td>
+                            <td colspan="8" class="cell-empty">暂无任务数据</td>
                         </tr>
                     </tbody>
                 </table>
@@ -342,7 +440,7 @@ onBeforeUnmount(() => {
                         <div class="task-detail-hero-main">
                             <div class="task-detail-id">{{ selectedTask.taskId || '-' }}</div>
                             <div class="task-detail-meta">
-                                <el-tag :type="getStatusTagType(selectedTask.status)">{{ getStatusLabel(selectedTask.status) }}</el-tag>
+                                <span :class="['task-status-chip', getDetailStatusClass(selectedTask.status)]">{{ getStatusLabel(selectedTask.status) }}</span>
                                 <span>{{ inferTaskType(selectedTask) }}</span>
                                 <span>阶段：{{ selectedTask.currentStage || '等待回传' }}</span>
                                 <span>开始：{{ formatDateTime(selectedTask.startTime) }}</span>
@@ -350,41 +448,58 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
 
-                    <div class="task-detail-card task-detail-card--summary">
-                        <div class="task-detail-card-title">核心信息</div>
-                        <div class="task-detail-progress-panel">
-                            <div class="task-detail-progress-row">
-                                <el-progress :percentage="formatProgress(selectedTask.progress)" :stroke-width="14" :show-text="false" />
-                                <strong>{{ formatProgress(selectedTask.progress) }}%</strong>
-                            </div>
-                        </div>
-                        <div class="task-detail-summary-stack">
-                            <div v-for="item in getTaskSummaryStats(selectedTask)" :key="item.label" class="task-detail-summary-item">
-                                <span>{{ item.label }}</span>
-                                <strong>{{ item.value || '-' }}</strong>
-                            </div>
-                        </div>
-                        <div class="task-detail-message-panel">
-                            <span>过程说明</span>
-                            <strong>{{ selectedTask.message || '暂无过程说明' }}</strong>
-                        </div>
-                    </div>
-
-                    <div v-if="taskEvents.length" class="task-detail-card">
-                        <div class="task-detail-card-title">最近过程信息</div>
-                        <el-timeline class="task-detail-native-timeline">
-                            <el-timeline-item
-                                v-for="event in taskEvents.slice(0, 12)"
-                                :key="event.id || `${event.eventType}-${event.eventAt}`"
-                                :timestamp="formatDateTime(event.eventAt)"
-                                placement="top"
+                    <div class="task-detail-card task-detail-card--tabs">
+                        <div class="task-detail-tabs">
+                            <button
+                                type="button"
+                                :class="['task-detail-tab', { 'is-active': detailTab === 'summary' }]"
+                                @click="detailTab = 'summary'"
                             >
-                                <div class="task-detail-timeline-card">
-                                    <strong>{{ formatEventType(event.eventType) }}</strong>
-                                    <div>{{ event.details?.message || event.details?.stage || event.details?.status || '过程已记录' }}</div>
+                                核心信息
+                            </button>
+                            <button
+                                type="button"
+                                :class="['task-detail-tab', { 'is-active': detailTab === 'process' }]"
+                                @click="detailTab = 'process'"
+                            >
+                                过程信息
+                            </button>
+                        </div>
+
+                        <div v-if="detailTab === 'summary'" class="task-detail-tab-panel">
+                            <div class="task-detail-summary-stack">
+                                <div v-for="item in getTaskSummaryStats(selectedTask)" :key="item.label" class="task-detail-summary-item">
+                                    <span>{{ item.label }}</span>
+                                    <strong>{{ item.value || '-' }}</strong>
                                 </div>
-                            </el-timeline-item>
-                        </el-timeline>
+                            </div>
+                            <div class="task-detail-message-panel">
+                                <span>过程信息</span>
+                                <strong>{{ selectedTask.message || '暂无过程信息' }}</strong>
+                            </div>
+                            <div class="task-detail-summary-actions">
+                                <el-button v-if="selectedTask.status === 'completed'" type="primary" @click="openPublishFromTask(selectedTask)">将任务结果去发布</el-button>
+                            </div>
+                        </div>
+
+                        <div v-else class="task-detail-tab-panel">
+                            <div v-if="taskEvents.length" class="task-detail-process-shell">
+                                <el-timeline class="task-detail-native-timeline">
+                                    <el-timeline-item
+                                        v-for="event in taskEvents.slice(0, 12)"
+                                        :key="event.id || `${event.eventType}-${event.eventAt}`"
+                                        :timestamp="formatDateTime(event.eventAt)"
+                                        placement="top"
+                                    >
+                                        <div class="task-detail-timeline-card">
+                                            <strong>{{ formatEventType(event.eventType) }}</strong>
+                                            <div>{{ event.details?.message || event.details?.stage || event.details?.status || '过程已记录' }}</div>
+                                        </div>
+                                    </el-timeline-item>
+                                </el-timeline>
+                            </div>
+                            <div v-else class="task-detail-empty-state">暂无过程信息</div>
+                        </div>
                     </div>
                 </div>
             </template>
@@ -402,6 +517,13 @@ onBeforeUnmount(() => {
     border: 1px solid var(--tf-border);
     border-radius: 16px;
     background: var(--tf-surface);
+}
+
+.task-detail-summary-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .page-banner__title {
@@ -558,10 +680,49 @@ onBeforeUnmount(() => {
     text-align: center;
 }
 
-.cell-id {
+.task-info-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.task-info-id {
     font-family: "Consolas", "Monaco", "Courier New", monospace;
     font-size: 13px;
     color: var(--tf-text-primary);
+    line-height: 1.5;
+    word-break: break-all;
+}
+
+.task-info-meta {
+    color: var(--tf-text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.task-stage-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.task-stage-title {
+    color: var(--tf-text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.task-stage-detail {
+    color: var(--tf-text-muted);
+    font-size: 12px;
+    line-height: 1.6;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
 }
 
 .cell-empty {
@@ -601,42 +762,47 @@ onBeforeUnmount(() => {
     background: #909399;
 }
 
-.layui-progress {
-    position: relative;
-    height: 18px;
-    background: var(--tf-surface-muted);
-    border-radius: 999px;
-    overflow: hidden;
-}
-
-.layui-progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, #67c23a, #85ce61);
-    border-radius: 999px;
-    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.layui-progress-bar-active {
-    background: linear-gradient(90deg, #409eff, #66b1ff);
-    background-size: 200% 100%;
-    animation: layui-progress-shimmer 2s ease infinite;
-}
-
-@keyframes layui-progress-shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
-
-.layui-progress-text {
-    position: absolute;
-    inset: 0;
-    display: flex;
+.task-progress-value {
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
-    font-weight: 600;
-    color: #fff;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    min-width: 56px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    border: 1px solid transparent;
+}
+
+.task-progress-value-success {
+    color: #95de64;
+    background: rgba(103, 194, 58, 0.14);
+    border-color: rgba(103, 194, 58, 0.28);
+}
+
+.task-progress-value-running {
+    color: #73c0ff;
+    background: rgba(64, 158, 255, 0.14);
+    border-color: rgba(64, 158, 255, 0.3);
+}
+
+.task-progress-value-danger {
+    color: #ff9b9b;
+    background: rgba(245, 108, 108, 0.14);
+    border-color: rgba(245, 108, 108, 0.28);
+}
+
+.task-progress-value-muted {
+    color: var(--tf-text-secondary);
+    background: rgba(144, 147, 153, 0.14);
+    border-color: rgba(144, 147, 153, 0.26);
+}
+
+.task-progress-value-default {
+    color: var(--tf-text-primary);
+    background: var(--tf-surface-muted);
+    border-color: var(--tf-border);
 }
 
 .layui-table-actions {
@@ -644,6 +810,8 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: center;
     gap: 16px;
+    min-width: 208px;
+    white-space: nowrap;
 }
 
 .layui-link {
@@ -690,6 +858,12 @@ onBeforeUnmount(() => {
     color: var(--tf-text-muted);
     font-size: 13px;
     flex-shrink: 0;
+}
+
+.layui-table-footer :deep(.el-pagination .el-pager) {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
 }
 
 .layui-toolbar :deep(.el-input__wrapper),
@@ -749,6 +923,50 @@ onBeforeUnmount(() => {
     font-size: 13px;
 }
 
+.task-status-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 60px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    border: 1px solid transparent;
+    letter-spacing: 0;
+}
+
+.task-status-chip-success {
+    color: #95de64 !important;
+    background: rgba(103, 194, 58, 0.16);
+    border-color: rgba(103, 194, 58, 0.3);
+}
+
+.task-status-chip-running {
+    color: #73c0ff !important;
+    background: rgba(64, 158, 255, 0.16);
+    border-color: rgba(64, 158, 255, 0.32);
+}
+
+.task-status-chip-danger {
+    color: #ffb3b3 !important;
+    background: rgba(245, 108, 108, 0.18);
+    border-color: rgba(245, 108, 108, 0.34);
+}
+
+.task-status-chip-muted {
+    color: var(--tf-text-secondary) !important;
+    background: rgba(144, 147, 153, 0.16);
+    border-color: rgba(144, 147, 153, 0.28);
+}
+
+.task-status-chip-default {
+    color: var(--tf-text-primary) !important;
+    background: var(--tf-surface-muted);
+    border-color: var(--tf-border);
+}
+
 .task-detail-card {
     border: 1px solid var(--tf-border);
     border-radius: 16px;
@@ -763,31 +981,50 @@ onBeforeUnmount(() => {
     font-weight: 600;
 }
 
-.task-detail-progress-panel {
-    margin-bottom: 14px;
-    padding: 14px 16px;
-    border-radius: 12px;
-    background: var(--tf-surface);
-    border: 1px solid var(--tf-border);
+.task-detail-card {
+    padding: 18px;
 }
 
-.task-detail-progress-row {
+.task-detail-card--tabs {
+    padding: 0;
+    overflow: hidden;
+}
+
+.task-detail-tabs {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 10px;
+    padding: 14px 18px 0;
+    border-bottom: 1px solid var(--tf-border);
 }
 
-.task-detail-progress-row :deep(.el-progress) {
-    flex: 1;
-}
-
-.task-detail-progress-row strong {
-    color: var(--tf-text-primary);
-    font-size: 18px;
+.task-detail-tab {
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--tf-text-secondary);
+    font-size: 13px;
+    font-weight: 700;
     line-height: 1;
+    padding: 10px 14px;
+    border-radius: 12px 12px 0 0;
+    cursor: pointer;
+    transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
 }
 
-.task-detail-card {
+.task-detail-tab:hover {
+    color: var(--tf-text-primary);
+    background: var(--tf-surface);
+}
+
+.task-detail-tab.is-active {
+    color: var(--tf-text-primary);
+    background: var(--tf-surface);
+    border-color: var(--tf-border);
+    border-bottom-color: var(--tf-surface);
+}
+
+.task-detail-tab-panel {
     padding: 18px;
 }
 
@@ -841,6 +1078,10 @@ onBeforeUnmount(() => {
     margin-top: 4px;
 }
 
+.task-detail-process-shell {
+    min-height: 120px;
+}
+
 .task-detail-timeline-card {
     padding: 12px 14px;
     border-radius: 12px;
@@ -864,6 +1105,16 @@ onBeforeUnmount(() => {
 
 .task-detail-native-timeline :deep(.el-timeline-item__timestamp) {
     color: var(--tf-text-muted);
+}
+
+.task-detail-empty-state {
+    padding: 36px 20px;
+    border-radius: 12px;
+    border: 1px dashed var(--tf-border);
+    background: var(--tf-surface);
+    color: var(--tf-text-muted);
+    text-align: center;
+    font-size: 13px;
 }
 
 @media (max-width: 960px) {

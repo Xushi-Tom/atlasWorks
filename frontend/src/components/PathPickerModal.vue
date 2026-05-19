@@ -452,16 +452,17 @@ watch(() => props.currentValue, () => {
 .picker-toolbar-button {
     min-height: 32px;
     padding: 0 14px;
-    border: 1px solid #c6cdd8;
+    border: 1px solid var(--tf-border-strong);
     border-radius: 8px;
-    background: linear-gradient(180deg, #ffffff 0%, #edf1f5 100%);
-    color: #1f2937;
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-primary);
     cursor: pointer;
 }
 
 .picker-toolbar-button:hover:not(:disabled) {
-    background: linear-gradient(180deg, #ffffff 0%, #e7edf5 100%);
-    border-color: #9fb8dc;
+    background: var(--tf-accent-soft);
+    border-color: var(--tf-accent);
+    color: var(--tf-accent);
 }
 
 .picker-toolbar-button:disabled {
@@ -470,13 +471,13 @@ watch(() => props.currentValue, () => {
 }
 
 .picker-toolbar-button-primary {
-    border-color: #8ab0e6;
-    background: linear-gradient(180deg, #f7fbff 0%, #dbeafe 100%);
-    color: #174ea6;
+    border-color: var(--tf-accent);
+    background: var(--tf-accent-soft);
+    color: var(--tf-accent);
 }
 
 .picker-toolbar-button-primary:hover:not(:disabled) {
-    background: linear-gradient(180deg, #ffffff 0%, #cfe3ff 100%);
+    filter: brightness(1.05);
 }
 
 .picker-location-bar {
@@ -484,10 +485,10 @@ watch(() => props.currentValue, () => {
     padding: 0 12px;
     display: flex;
     align-items: center;
-    border: 1px solid #cfd6df;
+    border: 1px solid var(--tf-border);
     border-radius: 8px;
-    background: #ffffff;
-    color: #344054;
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-primary);
     font-size: 13px;
     overflow: hidden;
     white-space: nowrap;
@@ -495,15 +496,15 @@ watch(() => props.currentValue, () => {
 }
 
 .picker-location-meta {
-    color: #667085;
+    color: var(--tf-text-secondary);
     font-size: 12px;
 }
 
 .picker-selection-strip {
     padding: 12px 14px;
-    border: 1px solid #d8dee7;
+    border: 1px solid var(--tf-border);
     border-radius: 10px;
-    background: #ffffff;
+    background: var(--tf-surface);
     margin-bottom: 12px;
 }
 
@@ -516,7 +517,7 @@ watch(() => props.currentValue, () => {
 }
 
 .picker-selection-strip-head strong {
-    color: #111827;
+    color: var(--tf-text-primary);
     font-size: 13px;
 }
 
@@ -524,7 +525,7 @@ watch(() => props.currentValue, () => {
     padding: 0;
     border: 0;
     background: transparent;
-    color: #2563eb;
+    color: var(--tf-accent);
     cursor: pointer;
 }
 
@@ -543,9 +544,9 @@ watch(() => props.currentValue, () => {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
     align-items: center;
-    border: 1px solid #d9e1ec;
+    border: 1px solid var(--tf-border);
     border-radius: 8px;
-    background: #f8fafc;
+    background: var(--tf-surface-soft);
 }
 
 .picker-selection-item span {
@@ -553,27 +554,28 @@ watch(() => props.currentValue, () => {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    color: #344054;
+    color: var(--tf-text-primary);
     font-size: 12px;
 }
 
 .picker-selection-item button {
     border: 0;
     background: transparent;
-    color: #667085;
+    color: var(--tf-text-secondary);
     cursor: pointer;
 }
 
 .picker-browser-frame {
-    border: 1px solid #d6dde7;
+    border: 1px solid var(--tf-border);
     border-radius: 10px;
-    background: #ffffff;
+    background: var(--tf-surface);
     overflow: hidden;
 }
 
 .picker-browser-body {
     max-height: 520px;
     overflow-y: auto;
+    background: var(--tf-surface);
 }
 
 .picker-window-footer {
@@ -582,15 +584,15 @@ watch(() => props.currentValue, () => {
     justify-content: space-between;
     gap: 16px;
     padding: 14px 18px 18px;
-    border-top: 1px solid #d6dde6;
-    background: linear-gradient(180deg, #f8fafc 0%, #eef2f6 100%);
+    border-top: 1px solid var(--tf-border);
+    background: var(--tf-surface);
 }
 
 .picker-footer-meta {
     display: flex;
     align-items: center;
     gap: 14px;
-    color: #667085;
+    color: var(--tf-text-secondary);
     font-size: 12px;
 }
 
@@ -609,25 +611,25 @@ watch(() => props.currentValue, () => {
 }
 
 .picker-window-footer :deep(.btn-secondary) {
-    border: 1px solid #c6cdd8;
-    background: linear-gradient(180deg, #ffffff 0%, #edf1f5 100%);
-    color: #344054;
+    border: 1px solid var(--tf-border-strong);
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-primary);
 }
 
 .picker-window-footer :deep(.btn-secondary:hover) {
-    border-color: #aeb9c7;
-    background: linear-gradient(180deg, #ffffff 0%, #e6ecf3 100%);
+    border-color: var(--tf-accent);
+    background: var(--tf-accent-soft);
+    color: var(--tf-accent);
 }
 
 .picker-window-footer :deep(.btn-primary) {
-    border: 1px solid #8ab0e6;
-    background: linear-gradient(180deg, #f7fbff 0%, #dbeafe 100%);
-    color: #174ea6;
+    border: 1px solid var(--tf-accent);
+    background: var(--tf-accent-soft);
+    color: var(--tf-accent);
 }
 
 .picker-window-footer :deep(.btn-primary:hover) {
-    border-color: #6d98db;
-    background: linear-gradient(180deg, #ffffff 0%, #cfe3ff 100%);
+    filter: brightness(1.05);
 }
 
 .picker-window-header :deep(.message-close) {
@@ -679,7 +681,7 @@ watch(() => props.currentValue, () => {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    color: #101828;
+    color: var(--tf-text-primary);
     font-weight: 600;
 }
 
@@ -694,10 +696,43 @@ watch(() => props.currentValue, () => {
     padding: 12px 16px;
     display: flex;
     justify-content: flex-end;
-    color: #667085;
+    color: var(--tf-text-secondary);
     font-size: 12px;
-    border-top: 1px solid #edf1f5;
-    background: #ffffff;
+    border-top: 1px solid var(--tf-border);
+    background: var(--tf-surface);
+}
+
+.picker-browser-table :deep(.el-table) {
+    --el-table-border-color: var(--tf-border);
+    --el-table-header-bg-color: var(--tf-surface-soft);
+    --el-table-tr-bg-color: var(--tf-surface);
+    --el-table-bg-color: var(--tf-surface);
+    --el-bg-color: var(--tf-surface);
+    --el-fill-color-blank: var(--tf-surface);
+    --el-table-row-hover-bg-color: var(--tf-surface-muted);
+    color: var(--tf-text-primary);
+    background: var(--tf-surface);
+}
+
+.picker-browser-table :deep(.el-table__inner-wrapper),
+.picker-browser-table :deep(.el-table__body-wrapper),
+.picker-browser-table :deep(.el-table__header-wrapper),
+.picker-browser-table :deep(.el-table__empty-block),
+.picker-browser-table :deep(.el-table__empty-text),
+.picker-browser-table :deep(.el-table__fixed),
+.picker-browser-table :deep(.el-table__fixed-right) {
+    background: var(--tf-surface) !important;
+    color: var(--tf-text-primary);
+}
+
+.picker-browser-table :deep(th.el-table__cell) {
+    background: var(--tf-surface-soft) !important;
+    color: var(--tf-text-secondary);
+}
+
+.picker-browser-table :deep(td.el-table__cell) {
+    background: var(--tf-surface) !important;
+    color: var(--tf-text-primary);
 }
 
 @media (max-width: 900px) {

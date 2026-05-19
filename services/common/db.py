@@ -868,6 +868,7 @@ def upsertPublicationRecord(
     launch_url=None,
     sample_url=None,
     public_base_url=None,
+    touch_updated_at=True,
 ):
     if not isDatabaseEnabled():
         return False
@@ -904,7 +905,7 @@ def upsertPublicationRecord(
                     sample_url = EXCLUDED.sample_url,
                     public_base_url = EXCLUDED.public_base_url,
                     published_at = EXCLUDED.published_at,
-                    updated_at = NOW()
+                    updated_at = CASE WHEN %s THEN NOW() ELSE tf_publications.updated_at END
                 """,
                 (
                     str(publication_id),
@@ -920,6 +921,7 @@ def upsertPublicationRecord(
                     sample_url,
                     public_base_url,
                     published_at,
+                    bool(touch_updated_at),
                 ),
             )
         conn.commit()

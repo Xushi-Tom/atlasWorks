@@ -4,7 +4,7 @@
 from flask import request
 
 from apiDocs import getOpenApiSpec, getSwaggerUi
-from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, listArtifacts, listPublications, servePublicationAsset, servePublishedPath, serveWmts, togglePublicationEnabled, updatePublication
+from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, getPublicationSeedRuntime, listArtifacts, listPublications, servePublicationAsset, servePublishedPath, serveWmts, togglePublicationEnabled, updatePublication
 from dataSourceOps import getDataSourceInfo, getDataSourceWorkspaceInfo, listDataSources, recommendConfig, resolveDataSourceFiles, serveDataSourceFile
 from fileSplitOps import splitLargeFile
 from geoserverOps import geoserverCancelSeed, geoserverDeleteLayer, geoserverHealth, geoserverLayerDetail, geoserverListLayers, geoserverPublish, geoserverSeed, geoserverSeedStatus
@@ -13,7 +13,7 @@ from preflight import runPreflightCheck
 from systemOps import healthCheck, listApiRoutes, systemInfo, updateContainerInfo
 from taskCenter import cleanupTasks, deleteTask, getTaskStatus, listTaskEventStream, listTasks, stopTask
 from terrainOps import createTerrainTiles, decompressTerrain, updateLayerJson
-from tileAdminOps import convertTileFormat
+from tileAdminOps import convertTileFormat, deleteCacheDirectory, getCacheDetail, getCacheInfo
 from tiles3dOps import create3DTiles
 from uploadOps import extractArchiveFile, uploadFolderFiles, uploadSingleFile, uploadZipArchive
 from vectorTilesOps import createVectorTiles
@@ -32,6 +32,10 @@ def handlePublicationDetail(publicationId):
     if request.method == "DELETE":
         return deletePublication(publicationId=publicationId)
     return getPublication(publicationId=publicationId)
+
+
+def handlePublicationSeedRuntime(publicationId):
+    return getPublicationSeedRuntime(publicationId=publicationId)
 
 
 def handlePublicationToggle(publicationId):
@@ -77,6 +81,9 @@ def registerRoutes(app):
     app.add_url_rule("/api/tile/mvt", endpoint="create_vector_tiles", view_func=createVectorTiles, methods=["POST"])
     app.add_url_rule("/api/tile/3dtiles", endpoint="create_3d_tiles", view_func=create3DTiles, methods=["POST"])
     app.add_url_rule("/api/tile/convert", endpoint="convert_tile_format", view_func=convertTileFormat, methods=["POST"])
+    app.add_url_rule("/api/tile/cache", endpoint="tile_cache_list", view_func=getCacheInfo, methods=["GET"])
+    app.add_url_rule("/api/tile/cache/detail", endpoint="tile_cache_detail", view_func=getCacheDetail, methods=["GET"])
+    app.add_url_rule("/api/tile/cache/delete", endpoint="tile_cache_delete", view_func=deleteCacheDirectory, methods=["POST"])
 
     app.add_url_rule("/api/tasks/<taskId>", endpoint="get_task_status", view_func=getTaskStatus, methods=["GET"])
     app.add_url_rule("/api/tasks/<taskId>/events", endpoint="get_task_events", view_func=listTaskEventStream, methods=["GET"])
@@ -91,6 +98,7 @@ def registerRoutes(app):
 
     app.add_url_rule("/api/publications", endpoint="publications", view_func=handlePublications, methods=["GET", "POST"])
     app.add_url_rule("/api/publications/<publicationId>", endpoint="publication_detail", view_func=handlePublicationDetail, methods=["GET", "PUT", "DELETE"])
+    app.add_url_rule("/api/publications/<publicationId>/seed-status", endpoint="publication_seed_runtime", view_func=handlePublicationSeedRuntime, methods=["GET"])
     app.add_url_rule("/api/publications/<publicationId>/enabled", endpoint="publication_toggle", view_func=handlePublicationToggle, methods=["PATCH"])
     app.add_url_rule("/api/geoserver/health", endpoint="geoserver_health", view_func=geoserverHealth, methods=["GET"])
     app.add_url_rule("/api/geoserver/publish", endpoint="geoserver_publish", view_func=geoserverPublish, methods=["POST"])

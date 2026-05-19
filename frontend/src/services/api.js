@@ -383,6 +383,29 @@ class AtlasWorksApi {
         return this.post('/api/tile/convert', params);
     }
 
+    async getTileCacheInfo() {
+        return this.get('/api/tile/cache');
+    }
+
+    async getTileCacheDetail(path) {
+        return this.get('/api/tile/cache/detail', {
+            path: normalizeRelativePath(path)
+        });
+    }
+
+    async deleteTileCache(path) {
+        return this.post('/api/tile/cache/delete', {
+            path: normalizeRelativePath(path)
+        });
+    }
+
+    async deleteTileCacheZoomLevels(path, zoomLevels = []) {
+        return this.post('/api/tile/cache/delete', {
+            path: normalizeRelativePath(path),
+            zoomLevels
+        });
+    }
+
     async listArtifacts(params = {}) {
         return this.get('/api/artifacts', params);
     }
@@ -397,6 +420,10 @@ class AtlasWorksApi {
 
     async getPublication(publicationId) {
         return this.get(`/api/publications/${encodeURIComponent(publicationId)}`);
+    }
+
+    async getPublicationSeedStatus(publicationId) {
+        return this.get(`/api/publications/${encodeURIComponent(publicationId)}/seed-status`);
     }
 
     async updatePublication(publicationId, params) {

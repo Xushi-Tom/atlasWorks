@@ -13,6 +13,7 @@ from catalog import (
     getArtifact,
     getArtifactManifest,
     getPublication,
+    getPublicationSeedRuntime,
     listArtifacts,
     listPublications,
     servePublicationAsset,
@@ -64,6 +65,10 @@ def _handle_publication_detail(publication_id):
     return getPublication(publication_id=publication_id)
 
 
+def _handle_publication_seed_runtime(publication_id):
+    return getPublicationSeedRuntime(publication_id=publication_id)
+
+
 def _handle_publication_toggle(publication_id):
     return togglePublicationEnabled(publication_id=publication_id)
 
@@ -99,6 +104,7 @@ app.add_url_rule("/api/artifacts/<artifactId>", endpoint="publisher_artifact", v
 app.add_url_rule("/api/artifacts/<artifactId>/manifest", endpoint="publisher_artifact_manifest", view_func=getArtifactManifest, methods=["GET"])
 app.add_url_rule("/api/publications", endpoint="publisher_publications", view_func=_handle_publications, methods=["GET", "POST"])
 app.add_url_rule("/api/publications/<publication_id>", endpoint="publisher_publication_detail", view_func=_handle_publication_detail, methods=["GET", "PUT", "DELETE"])
+app.add_url_rule("/api/publications/<publication_id>/seed-status", endpoint="publisher_publication_seed_runtime", view_func=_handle_publication_seed_runtime, methods=["GET"])
 app.add_url_rule("/api/publications/<publication_id>/enabled", endpoint="publisher_publication_toggle", view_func=_handle_publication_toggle, methods=["PATCH"])
 app.add_url_rule("/publication-assets/<publication_id>", endpoint="publisher_publication_root", view_func=servePublicationAsset, defaults={"relative_path": ""}, methods=["GET"])
 app.add_url_rule("/publication-assets/<publication_id>/<path:relative_path>", endpoint="publisher_publication_asset", view_func=servePublicationAsset, methods=["GET"])

@@ -6,6 +6,7 @@ import './styles/standard-theme.css';
 import AppSidebar from './components/AppSidebar.vue';
 import AppToastStack from './components/AppToastStack.vue';
 import { useToastState } from './composables/useToast';
+import { emitNavigationIntent, setNavigationIntent } from './utils/navigationIntent';
 
 const DashboardView = defineAsyncComponent(() => import('./views/DashboardView.vue'));
 const DatasourceView = defineAsyncComponent(() => import('./views/DatasourceView.vue'));
@@ -76,7 +77,7 @@ const currentViewProps = computed(() => {
         };
     }
 
-    if (['map-tiles', 'vector-tiles', 'terrain-tiles', 'tiles-3d'].includes(currentSection.value)) {
+    if (['map-tiles', 'vector-tiles', 'terrain-tiles', 'tiles-3d', 'datasource', 'workspace', 'tasks', 'publish'].includes(currentSection.value)) {
         return {
             onNavigate: navigate
         };
@@ -141,6 +142,19 @@ function cleanupInjectedOverlays() {
 function navigate(payload = {}) {
     const nextSection = payload.section || 'dashboard';
     const nextSubsection = payload.subsection || '';
+    const sameSection = nextSection === currentSection.value;
+    const hasIntentPayload = Boolean(
+        payload?.sourceMode
+        || payload?.taskId
+        || payload?.workspacePath
+        || payload?.alias
+        || payload?.publishType
+        || payload?.publishMethod
+    );
+
+    if (payload?.section && hasIntentPayload) {
+        setNavigationIntent(payload);
+    }
 
     if (nextSection !== currentSection.value) {
         cleanupFloatingLayers();
@@ -164,6 +178,9 @@ function navigate(payload = {}) {
     }
 
     currentSection.value = viewMap[nextSection] ? nextSection : 'dashboard';
+    if (sameSection && payload?.section && hasIntentPayload) {
+        emitNavigationIntent(payload);
+    }
 }
 
 function handleSidebarNavigate(payload = {}) {

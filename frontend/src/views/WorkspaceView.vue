@@ -7,6 +7,9 @@ import ResizableDrawer from '../components/ResizableDrawer.vue';
 import { api } from '../services/api';
 import { formatBytes, formatDateTime } from '../utils/formatters';
 import { pushToast } from '../composables/useToast';
+import { setNavigationIntent } from '../utils/navigationIntent';
+
+const emit = defineEmits(['navigate']);
 
 const ARCHIVE_EXTENSIONS = ['.zip', '.tar', '.tgz', '.tar.gz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.7z'];
 
@@ -165,6 +168,28 @@ async function showFileDetails(file) {
     } catch (error) {
         pushToast(`文件详情加载失败: ${error.message}`, 'error', 4500);
     }
+}
+
+function openPublishFromWorkspace(file) {
+    const filePath = String(file?.path || selectedFile.value?.path || '').trim();
+    const targetPath = String(currentPath.value || (file?.entryType === 'directory' ? filePath : '') || '').trim();
+    if (!targetPath) {
+        pushToast('未找到可用的工作空间路径', 'warning');
+        return;
+    }
+    const aliasSource = String(targetPath).split('/').filter(Boolean).pop() || String(file?.name || selectedFile.value?.name || '').trim();
+    setNavigationIntent({
+        section: 'publish',
+        sourceMode: 'manual',
+        workspacePath: targetPath,
+        alias: aliasSource
+    });
+    emit('navigate', {
+        section: 'publish',
+        sourceMode: 'manual',
+        workspacePath: targetPath,
+        alias: aliasSource
+    });
 }
 
 function closeDetailModal() {
@@ -379,6 +404,13 @@ onMounted(async () => {
                                         详情
                                     </el-button>
                                     <el-button
+                                        v-if="row.entryType === 'directory'"
+                                        link
+                                        @click="openPublishFromWorkspace(row)"
+                                    >
+                                        去发布
+                                    </el-button>
+                                    <el-button
                                         v-if="row.entryType === 'file' && isArchiveName(row.name)"
                                         link
                                         @click="extractArchive(row)"
@@ -426,6 +458,9 @@ onMounted(async () => {
                         >
                         <div v-else class="message warning">图片加载失败</div>
                     </div>
+                </div>
+                <div class="workspace-detail-actions">
+                    <el-button type="primary" @click="openPublishFromWorkspace(selectedFile)">按当前路径发布</el-button>
                 </div>
             </div>
         </ResizableDrawer>
@@ -494,6 +529,13 @@ onMounted(async () => {
 
 .workspace-preview-image {
     max-height: 520px;
+}
+
+.workspace-detail-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .browser-name-button {

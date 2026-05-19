@@ -15,6 +15,33 @@ from taskState import appendTaskLog, createTaskRecord
 from utils import logMessage
 
 
+def _normalize_tiles_relative_path(path_value):
+    path = str(path_value or "").strip().replace("\\", "/").strip("/")
+    return path
+
+
+def _resolve_tiles_relative_path(path_value):
+    relative_path = _normalize_tiles_relative_path(path_value)
+    if not relative_path:
+        raise ValueError("缺少缓存目录路径")
+    tiles_root = os.path.abspath(config["tilesDir"])
+    target_path = os.path.abspath(os.path.join(tiles_root, relative_path))
+    if not target_path.startswith(tiles_root):
+        raise ValueError("缓存目录超出 tiles 根目录")
+    return relative_path, target_path
+
+
+def _directory_size_bytes(path_value):
+    total = 0
+    for root, _, files in os.walk(path_value):
+        for filename in files:
+            try:
+                total += os.path.getsize(os.path.join(root, filename))
+            except OSError:
+                continue
+    return int(total)
+
+
 def getCacheInfo():
     """获取瓦片缓存信息。"""
     try:
@@ -66,6 +93,10 @@ def getCacheInfo():
 
             cache_item["hasShpIndex"] = os.path.exists(os.path.join(item_path, "tile_index.shp"))
             cache_item["hasGeoJsonIndex"] = os.path.exists(os.path.join(item_path, "tile_index.geojson"))
+            try:
+                cache_item["sizeBytes"] = _directory_size_bytes(item_path)
+            except Exception:
+                cache_item["sizeBytes"] = 0
 
             try:
                 tile_count = 0
@@ -87,6 +118,94 @@ def getCacheInfo():
         )
     except Exception as exc:
         logMessage(f"获取缓存信息失败: {exc}", "ERROR")
+        return jsonify({"error": str(exc)}), 500
+
+
+def getCacheDetail():
+    try:
+        relative_path, target_path = _resolve_tiles_relative_path(request.args.get("path"))
+        if not os.path.isdir(target_path):
+            return jsonify({"error": f"缓存目录不存在: {relative_path}"}), 404
+
+        metadata = {}
+        metadata_file = os.path.join(target_path, "tile_metadata.json")
+        if os.path.exists(metadata_file):
+            try:
+                import json
+                with open(metadata_file, "r", encoding="utf-8") as file_obj:
+                    metadata = json.load(file_obj)
+            except Exception as exc:
+                metadata = {"metadataError": str(exc)}
+
+        zoom_levels = []
+        for item in sorted(os.listdir(target_path)):
+            item_path = os.path.join(target_path, item)
+            if os.path.isdir(item_path) and str(item).isdigit():
+                try:
+                    tile_files = 0
+                    for _, _, files in os.walk(item_path):
+                        tile_files += len([name for name in files if name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".pbf", ".json", ".terrain", ".b3dm", ".glb", ".gltf"))])
+                    zoom_levels.append({
+                        "zoom": int(item),
+                        "tileFiles": tile_files,
+                    })
+                except Exception:
+                    zoom_levels.append({
+                        "zoom": int(item),
+                        "tileFiles": 0,
+                    })
+
+        return jsonify({
+            "success": True,
+            "path": relative_path,
+            "fullPath": target_path,
+            "sizeBytes": _directory_size_bytes(target_path),
+            "zoomLevels": zoom_levels,
+            "metadata": metadata,
+        })
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logMessage(f"读取缓存详情失败: {exc}", "ERROR")
+        return jsonify({"error": str(exc)}), 500
+
+
+def deleteCacheDirectory():
+    try:
+        data = request.get_json(silent=True) or {}
+        relative_path, target_path = _resolve_tiles_relative_path(data.get("path") or request.args.get("path"))
+        if not os.path.exists(target_path):
+            return jsonify({"success": True, "path": relative_path, "deleted": False, "message": "缓存目录不存在"})
+        if not os.path.isdir(target_path):
+            return jsonify({"error": "目标不是目录"}), 400
+        zoom_levels = data.get("zoomLevels")
+        if isinstance(zoom_levels, list) and zoom_levels:
+            deleted_levels = []
+            missing_levels = []
+            for zoom in zoom_levels:
+                zoom_name = str(zoom).strip()
+                if not zoom_name.isdigit():
+                    continue
+                zoom_path = os.path.join(target_path, zoom_name)
+                if os.path.isdir(zoom_path):
+                    shutil.rmtree(zoom_path)
+                    deleted_levels.append(int(zoom_name))
+                else:
+                    missing_levels.append(int(zoom_name))
+            return jsonify({
+                "success": True,
+                "path": relative_path,
+                "deleted": bool(deleted_levels),
+                "deletedZoomLevels": deleted_levels,
+                "missingZoomLevels": missing_levels,
+            })
+
+        shutil.rmtree(target_path)
+        return jsonify({"success": True, "path": relative_path, "deleted": True})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logMessage(f"删除缓存目录失败: {exc}", "ERROR")
         return jsonify({"error": str(exc)}), 500
 
 
