@@ -6,7 +6,6 @@ import math
 import os
 import re
 import requests
-import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,7 +15,7 @@ from flask import jsonify, request
 
 from artifacts import finalizeTaskArtifact
 from config import config, taskLock, taskProcesses, taskStatus
-from dataSourceOps import findTifFilesInFolders, getSourceBandInfoCached
+from dataSourceOps import findTifFilesInFolders
 from db import enqueueBuildJob, isDatabaseEnabled, syncTaskSnapshot
 from geoserverOps import createRasterStyle, deleteStore, deleteStyle, publishGeoserverPayload, setLayerDefaultStyle
 from taskState import appendTaskLog, createTaskRecord
@@ -28,7 +27,6 @@ from utils import (
     normalizeProjection,
     normalizeTileScheme,
     resolveTilesOutputPath,
-    runCommand,
 )
 
 
@@ -99,16 +97,7 @@ def checkTileHasNodata(tileFile, transparencyThreshold=0.1):
                 return transparentCount > 0
             return transparentRatio >= threshold
     except Exception:
-        try:
-            result = subprocess.run(["gdalinfo", "-stats", tileFile], capture_output=True, text=True, timeout=10)
-            if result.returncode != 0:
-                return True
-            output = result.stdout
-            hasNodata = "NoData Value=" in output
-            hasAlphaTransparency = "ColorInterp=Alpha" in output and ("Min=0" in output or "Minimum=0" in output)
-            return hasNodata or hasAlphaTransparency
-        except Exception:
-            return True
+        return True
 
 
 def deleteNodataTilesInternal(tilesPath, includeDetails=True, transparencyThreshold=0.1):
@@ -258,110 +247,6 @@ def scanNodataTiles():
         errorMessage = f"扫描透明瓦片失败: {exc}"
         logMessage(errorMessage, "ERROR")
         return jsonify({"error": errorMessage}), 500
-
-
-def extractGeographicBounds(gdalinfoOutput: str) -> dict:
-    try:
-        lines = gdalinfoOutput.split("\n")
-        bounds = {}
-        coordinateSystemType = None
-        for line in lines:
-            line = line.strip()
-            if line.startswith("PROJCS["):
-                coordinateSystemType = "projected"
-                break
-            if line.startswith("GEOGCS[") or line.startswith("GEOGCRS["):
-                coordinateSystemType = "geographic"
-                break
-        if coordinateSystemType is None:
-            return None
-
-        def parseDmsCoordinate(coordStr):
-            match = re.search(r"(\d+)d\s*(\d+)'(\d+\.?\d*)\"([EWNS])", coordStr)
-            if not match:
-                return None
-            degrees = float(match.group(1))
-            minutes = float(match.group(2))
-            seconds = float(match.group(3))
-            direction = match.group(4)
-            decimalDegrees = degrees + minutes / 60 + seconds / 3600
-            if direction in ["W", "S"]:
-                decimalDegrees = -decimalDegrees
-            return decimalDegrees
-
-        def parseDecimalCoordinate(coordStr):
-            numbers = re.findall(r"(-?\d+\.?\d*)", coordStr)
-            if len(numbers) >= 2:
-                return float(numbers[0]), float(numbers[1])
-            return None, None
-
-        cornerSection = False
-        for line in lines:
-            line = line.strip()
-            if line.startswith("Corner Coordinates:"):
-                cornerSection = True
-                continue
-            if cornerSection and line.startswith("Upper Left"):
-                parts = line.split(")")
-                if coordinateSystemType == "projected" and len(parts) >= 2:
-                    coordSection = parts[1].strip().replace("(", "").replace(")", "")
-                    if "," in coordSection:
-                        lonStr, latStr = coordSection.split(",", 1)
-                        lon = parseDmsCoordinate(lonStr.strip())
-                        lat = parseDmsCoordinate(latStr.strip())
-                        if lon is not None and lat is not None:
-                            bounds["upperLeftLon"] = lon
-                            bounds["upperLeftLat"] = lat
-                elif coordinateSystemType == "geographic" and len(parts) >= 1:
-                    coordSection = parts[0].split("(")[1].strip() if "(" in parts[0] else parts[0].strip()
-                    lon, lat = parseDecimalCoordinate(coordSection)
-                    if lon is not None and lat is not None:
-                        bounds["upperLeftLon"] = lon
-                        bounds["upperLeftLat"] = lat
-            elif cornerSection and line.startswith("Lower Right"):
-                parts = line.split(")")
-                if coordinateSystemType == "projected" and len(parts) >= 2:
-                    coordSection = parts[1].strip().replace("(", "").replace(")", "")
-                    if "," in coordSection:
-                        lonStr, latStr = coordSection.split(",", 1)
-                        lon = parseDmsCoordinate(lonStr.strip())
-                        lat = parseDmsCoordinate(latStr.strip())
-                        if lon is not None and lat is not None:
-                            bounds["lowerRightLon"] = lon
-                            bounds["lowerRightLat"] = lat
-                elif coordinateSystemType == "geographic" and len(parts) >= 1:
-                    coordSection = parts[0].split("(")[1].strip() if "(" in parts[0] else parts[0].strip()
-                    lon, lat = parseDecimalCoordinate(coordSection)
-                    if lon is not None and lat is not None:
-                        bounds["lowerRightLon"] = lon
-                        bounds["lowerRightLat"] = lat
-        if "upperLeftLon" in bounds and "lowerRightLon" in bounds:
-            west = bounds["upperLeftLon"]
-            east = bounds["lowerRightLon"]
-            north = bounds["upperLeftLat"]
-            south = bounds["lowerRightLat"]
-            widthDegrees = east - west
-            heightDegrees = north - south
-            if widthDegrees < 0:
-                widthDegrees += 360
-            if heightDegrees < 0:
-                heightDegrees = abs(heightDegrees)
-            bounds.update({"west": west, "east": east, "north": north, "south": south, "widthDegrees": widthDegrees, "heightDegrees": heightDegrees})
-        return bounds if bounds else None
-    except Exception as exc:
-        logMessage(f"提取地理边界失败: {exc}", "ERROR")
-        return None
-
-
-def getFileGeographicBounds(filePath: str) -> dict:
-    try:
-        result = runCommand(["gdalinfo", filePath])
-        if not result["success"]:
-            return None
-        return extractGeographicBounds(result["stdout"])
-    except Exception as exc:
-        logMessage(f"获取文件地理边界失败: {filePath}, 错误: {exc}", "ERROR")
-        return None
 
 
 def _safe_geoserver_tile_name(value, default_value):
@@ -544,38 +429,6 @@ def _union_bounds(bounds_list):
     if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
         raise ValueError(f"GeoServer 返回非法图层范围: {bounds}")
     return bounds
-
-
-def _validate_geoserver_render_options(tif_files, render_options):
-    errors = []
-    warnings = []
-    render_mode = str(render_options.get("renderMode") or "auto").strip().lower()
-    if render_mode not in {"auto", "gray", "rgb"}:
-        errors.append(f"渲染模式不支持: {render_mode}")
-        return errors, warnings
-    if render_mode == "auto":
-        return errors, warnings
-
-    requested_bands = [normalizeInt(render_options.get("redBand"), 1, 1)]
-    if render_mode == "rgb":
-        requested_bands.extend([
-            normalizeInt(render_options.get("greenBand"), 2, 1),
-            normalizeInt(render_options.get("blueBand"), 3, 1),
-        ])
-    max_requested = max(requested_bands)
-    for tif_file in tif_files:
-        try:
-            band_info = getSourceBandInfoCached(tif_file)
-            band_count = int(band_info.get("bandCount") or 0)
-        except Exception as exc:
-            warnings.append(f"{os.path.basename(tif_file)} 波段读取失败: {exc}")
-            continue
-        if band_count <= 0:
-            warnings.append(f"{os.path.basename(tif_file)} 未读取到有效波段数")
-            continue
-        if max_requested > band_count:
-            errors.append(f"{os.path.basename(tif_file)} 只有 {band_count} 个波段，当前请求波段 {requested_bands}")
-    return errors, warnings
 
 
 def _publish_geoserver_tile_layers(tif_files, layer_name, render_options, image_format):
@@ -874,12 +727,10 @@ def createIndexedTiles():
         max_zoom = normalizeInt(data.get("maxZoom"), 12, min_zoom)
         tile_size = normalizeInt(data.get("tileSize"), 256, 64)
         projection = normalizeProjection(data.get("projection", "EPSG:3857"))
-        data_format = data.get("dataFormat", "xyz")
         image_format = normalizeImageFormat(data.get("imageFormat", "png"))
         tile_scheme = normalizeTileScheme(data.get("tileScheme", "tms"))
         wms_concurrency = normalizeInt(data.get("wmsConcurrency", data.get("threads")), 4, 1, 16)
         transparent_background = bool(data.get("transparentBackground", True))
-        use_source_nodata = False if data.get("useSourceNodata") is False else True
         render_mode = str(data.get("renderMode") or "auto").strip().lower()
         if render_mode not in {"auto", "gray", "rgb"}:
             render_mode = "auto"
@@ -896,12 +747,10 @@ def createIndexedTiles():
 
         render_options = {
             "projection": projection,
-            "dataFormat": data_format,
             "imageFormat": image_format,
             "tileScheme": tile_scheme,
             "wmsConcurrency": wms_concurrency,
             "transparentBackground": transparent_background,
-            "useSourceNodata": use_source_nodata,
             "renderMode": render_mode,
             "redBand": red_band,
             "greenBand": green_band,
@@ -923,12 +772,6 @@ def createIndexedTiles():
                     tif_files.append(full_path)
             if not tif_files:
                 errors.append("匹配结果存在，但源文件都不可用")
-        if tif_files:
-            render_errors, render_warnings = _validate_geoserver_render_options(tif_files, render_options)
-            errors.extend(render_errors)
-            if render_warnings:
-                logMessage(f"GeoServer 地图切片渲染配置提示: {'; '.join(render_warnings[:5])}", "WARNING")
-
         if errors:
             failed_record = createTaskRecord(
                 task_id=task_id,
@@ -1152,12 +995,10 @@ def createIndexedTiles():
                 "maxZoom": max_zoom,
                 "tileSize": tile_size,
                 "projection": projection,
-                "dataFormat": data_format,
                 "imageFormat": image_format,
                 "tileScheme": tile_scheme,
                 "wmsConcurrency": wms_concurrency,
                 "transparentBackground": transparent_background,
-                "useSourceNodata": use_source_nodata,
                 "renderMode": render_mode,
                 "redBand": red_band,
                 "greenBand": green_band,
@@ -1222,14 +1063,12 @@ def createIndexedTiles():
                 "zoomLevels": f"{min_zoom}-{max_zoom}",
                 "tileSize": tile_size,
                 "projection": projection,
-                "dataFormat": data_format,
                 "imageFormat": image_format,
                 "tileScheme": tile_scheme,
                 "bands": {"red": red_band, "green": green_band, "blue": blue_band},
                 "enableIncrementalUpdate": enable_incremental_update,
                 "wmsConcurrency": wms_concurrency,
                 "transparentBackground": transparent_background,
-                "useSourceNodata": use_source_nodata,
                 "renderMode": render_mode,
                 "nodataValue": nodata_value,
                 "skipNodataTiles": skip_nodata_tiles,

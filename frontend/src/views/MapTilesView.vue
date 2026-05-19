@@ -22,7 +22,6 @@ const form = reactive({
     tileScheme: 'google',
     wmsConcurrency: 4,
     transparentBackground: true,
-    useSourceNodata: true,
     nodataValue: '',
     renderMode: 'auto',
     redBand: 1,
@@ -209,10 +208,6 @@ function applyRecommendation(recommendations) {
     pushToast('已应用智能推荐参数', 'success');
 }
 
-function syncTileSchemePayload() {
-    form.dataFormat = form.tileScheme === 'tms' ? 'tms' : 'xyz';
-}
-
 async function submit() {
     const folderPaths = normalizeListInput(form.folderPaths);
     const filePatterns = normalizeListInput(form.filePatterns);
@@ -222,7 +217,6 @@ async function submit() {
     }
 
     try {
-        syncTileSchemePayload();
         const payload = {
             ...form,
             folderPaths,
@@ -232,7 +226,6 @@ async function submit() {
             tileSize: Number(form.tileSize),
             wmsConcurrency: Number(form.wmsConcurrency),
             transparentBackground: Boolean(form.transparentBackground),
-            useSourceNodata: Boolean(form.useSourceNodata),
             nodataValue: String(form.nodataValue || '').trim() || null,
             renderMode: form.renderMode,
             redBand: Number(form.redBand),
@@ -269,10 +262,6 @@ function applyIntent(intent = {}) {
 watch(() => `${form.folderPaths}|${form.filePatterns}`, () => {
     scheduleRefreshBandOptions();
 });
-
-watch(() => form.tileScheme, () => {
-    syncTileSchemePayload();
-}, { immediate: true });
 
 onBeforeUnmount(() => {
     if (bandRefreshTimer) {
@@ -409,13 +398,12 @@ onMounted(() => {
 
                             <section class="advanced-config-section">
                                 <div class="advanced-config-section__title">输出与透明</div>
-                                <div class="advanced-config-section__desc">PNG 默认启用透明背景；NoData 留空时优先使用源文件元数据。</div>
+                                <div class="advanced-config-section__desc">PNG 默认启用透明背景；如需覆盖渲染时的 NoData，可手动填写。</div>
                                 <div class="switch-row">
                                     <el-form-item label="透明背景"><el-switch v-model="form.transparentBackground" /></el-form-item>
-                                    <el-form-item label="使用源 NoData"><el-switch v-model="form.useSourceNodata" /></el-form-item>
                                 </div>
                                 <el-form-item label="手动 NoData 值">
-                                    <el-input v-model="form.nodataValue" placeholder="留空则使用源文件自带 NoData" />
+                                    <el-input v-model="form.nodataValue" placeholder="留空则按 GeoServer 默认渲染" />
                                 </el-form-item>
                             </section>
 
