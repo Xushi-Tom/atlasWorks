@@ -49,6 +49,7 @@ MAX_VECTOR_CHUNK_LAT_SPAN_DEG = 2.0
 MIN_VECTOR_SPLIT_RECORDS = 24
 TARGET_MODEL_CHUNK_RECORDS = 128
 MAX_MODEL_CHUNK_FACE_COUNT = 20000
+DEFAULT_MODEL_SOURCE_UP_AXIS = "Y"
 
 
 def _pad_bytes(data, alignment=8, pad_byte=b" "):
@@ -331,7 +332,8 @@ def _resolve_single_source(folder_paths, file_patterns, source_path, data_type):
         raise ValueError("未找到匹配的输入文件")
     if len(matched_files) > 1:
         if data_type == "osgb":
-            raise ValueError("匹配到多个 .osgb，请改用 sourcePath 指向上级目录以启用批量 OSGB 转换")
+            matched_rel, matched_full = _resolve_relative_files(matched_files)
+            return matched_rel, matched_full
         if data_type == "pointcloud":
             matched_rel, matched_full = _resolve_relative_files(matched_files)
             return matched_rel, matched_full
@@ -713,6 +715,19 @@ def _estimate_geometric_error_for_region(region):
     return max(1.0, max(span_x, span_y, span_h) * 0.25)
 
 
+def _build_region_child(west, south, east, north, min_height, max_height, content_file, transform=None):
+    region = _region_bounds(west, south, east, north, min_height, max_height)
+    node = {
+        "boundingVolume": {"region": region},
+        "geometricError": _estimate_geometric_error_for_region(region),
+        "refine": "ADD",
+        "content": {"uri": content_file},
+    }
+    if transform:
+        node["transform"] = transform
+    return node
+
+
 def _child_region(child):
     return ((child or {}).get("boundingVolume") or {}).get("region")
 
@@ -1023,6 +1038,44 @@ def _apply_scene_transform(scene, scale, rotation_z_degrees):
     return scene
 
 
+def _apply_scene_up_axis(scene, source_up_axis="Z"):
+    try:
+        import trimesh
+    except Exception as exc:
+        raise RuntimeError(f"模型处理依赖不可用: {exc}")
+
+    axis = str(source_up_axis or "Z").strip().upper()
+    if axis == "Y":
+        rotation = trimesh.transformations.rotation_matrix(
+            math.radians(90.0),
+            [1, 0, 0],
+        )
+        scene.apply_transform(rotation)
+    elif axis == "X":
+        rotation = trimesh.transformations.rotation_matrix(
+            math.radians(-90.0),
+            [0, 1, 0],
+        )
+        scene.apply_transform(rotation)
+    return scene
+
+
+def _coerce_transform_matrix4(transform):
+    if transform is None:
+        return None
+    try:
+        import numpy as np
+    except Exception as exc:
+        raise RuntimeError(f"OBJ 分块依赖不可用: {exc}")
+
+    matrix = np.asarray(transform, dtype=float)
+    if matrix.shape == (4, 4):
+        return matrix
+    if matrix.size == 16:
+        return matrix.reshape((4, 4))
+    raise RuntimeError(f"4x4 变换矩阵格式无效: {matrix.shape}")
+
+
 def _is_identity_transform(transform, tolerance=1e-9):
     if transform is None:
         return True
@@ -1030,7 +1083,11 @@ def _is_identity_transform(transform, tolerance=1e-9):
         import numpy as np
     except Exception:
         return False
-    return bool(np.allclose(transform, np.eye(4), atol=float(tolerance)))
+    try:
+        matrix = _coerce_transform_matrix4(transform)
+    except Exception:
+        return False
+    return bool(np.allclose(matrix, np.eye(4), atol=float(tolerance)))
 
 
 def _export_scene_content(scene, output_dir, content_stem, content_format):
@@ -1087,35 +1144,77 @@ def _write_exported_obj_bundle(obj_text, assets, target_dir, chunk_stem):
     return obj_path
 
 
-def _split_face_groups(face_centers, max_face_count):
+def _split_spatial_groups(point_matrix, max_group_size):
     try:
         import numpy as np
     except Exception as exc:
         raise RuntimeError(f"OBJ 分块依赖不可用: {exc}")
 
-    indices = np.arange(len(face_centers), dtype=int)
-    if len(indices) <= int(max_face_count):
+    indices = np.arange(len(point_matrix), dtype=int)
+    max_size = max(1, int(max_group_size or 1))
+    if len(indices) <= max_size:
         return [indices.tolist()]
 
-    pending = [indices]
+    pending = [indices.tolist()]
     output = []
     while pending:
-        current = pending.pop()
-        if len(current) <= int(max_face_count):
-            output.append(current.tolist())
+        current_list = pending.pop()
+        if len(current_list) <= max_size:
+            output.append(current_list)
             continue
 
-        centers = face_centers[current]
-        spans = centers.max(axis=0) - centers.min(axis=0)
-        axis = int(0 if spans[0] >= spans[1] else 1)
-        ordered = current[np.argsort(centers[:, axis], kind="mergesort")]
-        pivot = len(ordered) // 2
-        if pivot <= 0 or pivot >= len(ordered):
-            output.append(current.tolist())
+        current = np.asarray(current_list, dtype=int)
+        centers = point_matrix[current]
+        x_values = centers[:, 0]
+        y_values = centers[:, 1]
+        min_x = float(x_values.min())
+        max_x = float(x_values.max())
+        min_y = float(y_values.min())
+        max_y = float(y_values.max())
+        span_x = max_x - min_x
+        span_y = max_y - min_y
+
+        if span_x < 1e-9 and span_y < 1e-9:
+            ordered = current[np.argsort(centers[:, 2] if centers.shape[1] > 2 else centers[:, 0], kind="mergesort")]
+            for start in range(0, len(ordered), max_size):
+                output.append(ordered[start:start + max_size].tolist())
             continue
-        pending.append(ordered[pivot:])
-        pending.append(ordered[:pivot])
+
+        target_groups = max(2, int(math.ceil(float(len(current)) / float(max_size))))
+        span_ratio = max(span_x, 1e-9) / max(span_y, 1e-9)
+        grid_x = max(1, int(math.ceil(math.sqrt(target_groups * span_ratio))))
+        grid_y = max(1, int(math.ceil(float(target_groups) / float(grid_x))))
+        bucket_map = {}
+        for point_index, point in zip(current.tolist(), centers.tolist()):
+            x_value = float(point[0])
+            y_value = float(point[1])
+            bucket_x = int(((x_value - min_x) / span_x) * grid_x) if span_x > 1e-9 else 0
+            bucket_y = int(((y_value - min_y) / span_y) * grid_y) if span_y > 1e-9 else 0
+            bucket_x = min(max(bucket_x, 0), grid_x - 1)
+            bucket_y = min(max(bucket_y, 0), grid_y - 1)
+            bucket_map.setdefault((bucket_x, bucket_y), []).append(point_index)
+
+        next_groups = [group for _, group in sorted(bucket_map.items(), key=lambda item: item[0]) if group]
+        if len(next_groups) <= 1:
+            axis = 0 if span_x >= span_y else 1
+            ordered = current[np.argsort(centers[:, axis], kind="mergesort")]
+            pivot = len(ordered) // 2
+            if pivot <= 0 or pivot >= len(ordered):
+                for start in range(0, len(ordered), max_size):
+                    output.append(ordered[start:start + max_size].tolist())
+                continue
+            next_groups = [ordered[:pivot].tolist(), ordered[pivot:].tolist()]
+
+        for group in next_groups:
+            if len(group) > max_size:
+                pending.append(group)
+            else:
+                output.append(group)
     return output
+
+
+def _split_face_groups(face_centers, max_face_count):
+    return _split_spatial_groups(face_centers, max_face_count)
 
 
 def _build_model_mesh_record(mesh, name, geometry_name=None, transform=None, face_indices=None):
@@ -1174,7 +1273,6 @@ def _split_model_mesh_records(mesh, base_name, geometry_name, transform=None, ma
 
 def _materialize_model_record_mesh(scene, record):
     try:
-        import numpy as np
         import trimesh
     except Exception as exc:
         raise RuntimeError(f"OBJ 分块依赖不可用: {exc}")
@@ -1187,7 +1285,7 @@ def _materialize_model_record_mesh(scene, record):
     mesh = geometry.copy()
     transform = record.get("transform")
     if transform is not None and not _is_identity_transform(transform):
-        mesh.apply_transform(np.asarray(transform, dtype=float))
+        mesh.apply_transform(_coerce_transform_matrix4(transform))
 
     face_indices = record.get("faceIndices")
     if face_indices:
@@ -1220,7 +1318,7 @@ def _collect_model_mesh_records(scene, max_face_count=MAX_MODEL_CHUNK_FACE_COUNT
                 mesh,
                 str(node_name or geom_name),
                 str(geom_name),
-                transform=transform_matrix.reshape(-1).tolist() if transform_matrix is not None else None,
+                transform=transform_matrix.tolist() if transform_matrix is not None else None,
                 max_face_count=max_face_count,
             )
         )
@@ -1232,25 +1330,20 @@ def _split_model_chunk_records(records, target_records=TARGET_MODEL_CHUNK_RECORD
         return []
 
     max_records = max(1, int(target_records or 1))
-    pending = [list(records)]
-    output = []
-    while pending:
-        current = pending.pop()
-        if len(current) <= max_records:
-            output.append(current)
-            continue
+    if len(records) <= max_records:
+        return [list(records)]
 
-        span_x = max(item["centroidX"] for item in current) - min(item["centroidX"] for item in current)
-        span_y = max(item["centroidY"] for item in current) - min(item["centroidY"] for item in current)
-        key_name = "centroidX" if span_x >= span_y else "centroidY"
-        ordered = sorted(current, key=lambda item: float(item[key_name]))
-        pivot = len(ordered) // 2
-        if pivot <= 0 or pivot >= len(ordered):
-            output.append(current)
-            continue
-        pending.append(ordered[pivot:])
-        pending.append(ordered[:pivot])
-    return output
+    try:
+        import numpy as np
+    except Exception as exc:
+        raise RuntimeError(f"OBJ 分块依赖不可用: {exc}")
+
+    centers = np.asarray(
+        [[float(item["centroidX"]), float(item["centroidY"]), float(item["centroidZ"])] for item in records],
+        dtype=float,
+    )
+    groups = _split_spatial_groups(centers, max_records)
+    return [[records[index] for index in group] for group in groups if group]
 
 
 def _export_model_chunk_records(
@@ -1317,10 +1410,12 @@ def _export_model_chunk_records(
 
 def _convert_obj_to_glb(source_path, glb_path, task_id=None):
     command = ["obj2gltf", "-i", source_path, "-o", glb_path, "-b"]
+    env = os.environ.copy()
+    env["NODE_OPTIONS"] = f"{env.get('NODE_OPTIONS', '')} --max-old-space-size=6144".strip()
     if task_id:
-        result = runCommandWithProcessTracking(command, task_id)
+        result = runCommandWithProcessTracking(command, task_id, env=env)
     else:
-        result = runCommand(command)
+        result = runCommand(command, env=env)
     if not result.get("success"):
         raise RuntimeError(result.get("stderr") or result.get("error") or "obj2gltf 执行失败")
     if not os.path.exists(glb_path):
@@ -1337,6 +1432,7 @@ def _convert_osgb_to_obj(source_path, obj_path, task_id=None):
         raise RuntimeError(result.get("stderr") or result.get("error") or "osgconv 执行失败")
     if not os.path.exists(obj_path):
         raise RuntimeError("osgconv 未生成 OBJ 输出")
+    return obj_path
 
 
 def _polygon_area(points):
@@ -1828,6 +1924,7 @@ def _export_obj_tiles(
     enable_pyramid=False,
     pyramid_leaf_size=8,
     pyramid_max_depth=4,
+    source_up_axis="Z",
     task_id=None,
     stop_checker=None,
 ):
@@ -1836,6 +1933,7 @@ def _export_obj_tiles(
 
     _ensure_not_stopped(stop_checker)
     scene = _load_scene(source_path)
+    _apply_scene_up_axis(scene, source_up_axis)
     _apply_scene_transform(scene, scale, rotation_z_degrees)
     _ensure_not_stopped(stop_checker)
     format_name = _normalize_content_format(content_format)
@@ -1891,22 +1989,16 @@ def _export_obj_tiles(
             chunk_height = float(height or 0.0) + center_z
 
             children.append(
-                {
-                    "boundingVolume": {
-                        "region": _region_bounds(
-                            chunk_lon - delta_lon,
-                            chunk_lat - delta_lat,
-                            chunk_lon + delta_lon,
-                            chunk_lat + delta_lat,
-                            chunk_min_height,
-                            chunk_max_height,
-                        )
-                    },
-                    "geometricError": 0,
-                    "refine": "ADD",
-                    "transform": _enu_transform(chunk_lon, chunk_lat, chunk_height),
-                    "content": {"uri": content_file},
-                }
+                _build_region_child(
+                    chunk_lon - delta_lon,
+                    chunk_lat - delta_lat,
+                    chunk_lon + delta_lon,
+                    chunk_lat + delta_lat,
+                    chunk_min_height,
+                    chunk_max_height,
+                    content_file,
+                    transform=_enu_transform(chunk_lon, chunk_lat, chunk_height),
+                )
             )
             total_features += int(chunk_result.get("recordCount") or 0)
             gc.collect()
@@ -2045,6 +2137,7 @@ def _export_osgb_tiles(
     children = []
     content_files = []
     skipped_files = []
+    skipped_details = []
     global_min_x = float("inf")
     global_min_y = float("inf")
     global_max_x = float("-inf")
@@ -2065,12 +2158,14 @@ def _export_osgb_tiles(
                 bounds = scene.bounds
                 if bounds is None:
                     skipped_files.append(osgb_file)
+                    skipped_details.append({"file": osgb_file, "reason": "转换结果缺少有效包围盒"})
                     continue
 
                 min_corner = [float(value) for value in bounds[0]]
                 max_corner = [float(value) for value in bounds[1]]
                 if any(math.isnan(value) for value in min_corner + max_corner):
                     skipped_files.append(osgb_file)
+                    skipped_details.append({"file": osgb_file, "reason": "转换结果包围盒包含 NaN"})
                     continue
 
                 center_x = (min_corner[0] + max_corner[0]) * 0.5
@@ -2097,22 +2192,16 @@ def _export_osgb_tiles(
                 content_files.append(chunk_file)
 
                 children.append(
-                    {
-                        "boundingVolume": {
-                            "region": _region_bounds(
-                                chunk_lon - delta_lon,
-                                chunk_lat - delta_lat,
-                                chunk_lon + delta_lon,
-                                chunk_lat + delta_lat,
-                                min_height,
-                                max_height,
-                            )
-                        },
-                        "geometricError": 0,
-                        "refine": "ADD",
-                        "transform": _enu_transform(chunk_lon, chunk_lat, chunk_height),
-                        "content": {"uri": chunk_file},
-                    }
+                    _build_region_child(
+                        chunk_lon - delta_lon,
+                        chunk_lat - delta_lat,
+                        chunk_lon + delta_lon,
+                        chunk_lat + delta_lat,
+                        min_height,
+                        max_height,
+                        chunk_file,
+                        transform=_enu_transform(chunk_lon, chunk_lat, chunk_height),
+                    )
                 )
 
                 global_min_x = min(global_min_x, min_corner[0])
@@ -2122,12 +2211,17 @@ def _export_osgb_tiles(
                 global_min_z = min(global_min_z, min_corner[2])
                 global_max_z = max(global_max_z, max_corner[2])
                 chunk_index += 1
-            except Exception:
+            except Exception as exc:
                 skipped_files.append(osgb_file)
+                skipped_details.append({"file": osgb_file, "reason": str(exc)})
                 continue
 
         if not children:
             raise RuntimeError("OSGB 批量转换失败：未生成有效分块内容")
+        skipped_ratio = len(skipped_files) / max(len(osgb_files), 1)
+        if skipped_ratio > 0.3:
+            examples = "; ".join(f"{os.path.basename(item['file'])}: {item['reason']}" for item in skipped_details[:5])
+            raise RuntimeError(f"OSGB 批量转换失败比例过高: {len(skipped_files)}/{len(osgb_files)}。{examples}")
 
         west = float(longitude) + (global_min_x / max(meters_lon_ref, 1.0))
         south = float(latitude) + (global_min_y / max(meters_lat_ref, 1.0))
@@ -2138,7 +2232,7 @@ def _export_osgb_tiles(
 
         final_children, root_geometric_error = _apply_optional_pyramid(
             children,
-            enable_pyramid=enable_pyramid,
+            enable_pyramid=enable_pyramid or len(children) > pyramid_leaf_size,
             pyramid_leaf_size=pyramid_leaf_size,
             pyramid_max_depth=pyramid_max_depth,
         )
@@ -2163,6 +2257,8 @@ def _export_osgb_tiles(
             "chunkCount": len(children),
             "rootChildren": len(final_children),
             "skippedFiles": len(skipped_files),
+            "skippedDetails": skipped_details[:100],
+            "pyramidApplied": len(final_children) < len(children),
         }
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -2357,6 +2453,7 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
             enable_pyramid=enable_pyramid,
             pyramid_leaf_size=pyramid_leaf_size,
             pyramid_max_depth=pyramid_max_depth,
+            source_up_axis=DEFAULT_MODEL_SOURCE_UP_AXIS,
             task_id=task_id,
             stop_checker=stop_checker,
         )
@@ -2414,6 +2511,9 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
         if data_type == "vector":
             record["result"]["vectorHeightMode"] = vector_height_mode
             record["result"]["floorHeightMeters"] = float(floor_height_meters)
+        if data_type == "model":
+            record["result"]["sourceUpAxis"] = DEFAULT_MODEL_SOURCE_UP_AXIS
+            record["result"]["gltfUpAxis"] = "Z"
         if longitude is not None and latitude is not None and data_type in {"model", "osgb"}:
             record["result"]["resolvedAnchor"] = {
                 "longitude": float(longitude),
@@ -2431,6 +2531,10 @@ def _process_tiles3d_task(task_id, source_rel_path, source_full_path, output_pat
             record["result"]["rootChildren"] = result.get("rootChildren")
         if result.get("skippedFiles") is not None:
             record["result"]["skippedFiles"] = result.get("skippedFiles")
+        if result.get("skippedDetails") is not None:
+            record["result"]["skippedDetails"] = result.get("skippedDetails")
+        if result.get("pyramidApplied") is not None:
+            record["result"]["pyramidApplied"] = result.get("pyramidApplied")
         if result.get("sceneBounds") is not None:
             record["result"]["sceneBounds"] = result.get("sceneBounds")
         appendTaskLog(record, "完成", "completed", "3D Tiles 输出已生成", progress=100, outputPath=output_path, entryFile=result.get("entryFile"))

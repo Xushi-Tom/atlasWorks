@@ -37,6 +37,8 @@ RUN printf "deb %s bullseye main contrib non-free\n" "${APT_MIRROR}" > /etc/apt/
     libgdal-dev \
     libgl1 \
     libglu1-mesa \
+    libsqlite3-dev \
+    zlib1g-dev \
     openscenegraph \
     p7zip-full \
     python3 \
@@ -89,6 +91,12 @@ RUN cmake -S /tmp/build/cesium-terrain-builder -B /tmp/build/cesium-terrain-buil
     && cmake --install /tmp/build/cesium-terrain-builder/build \
     && echo "/usr/local/lib" > /etc/ld.so.conf.d/atlasworks.conf \
     && ldconfig
+
+RUN git clone --depth 1 https://github.com/felt/tippecanoe.git /tmp/build/tippecanoe \
+    && cd /tmp/build/tippecanoe \
+    && make -j$(nproc) \
+    && make install \
+    && rm -rf /tmp/build/tippecanoe
 
 RUN wget -O /usr/local/bin/gdal2tiles.py https://raw.githubusercontent.com/OSGeo/gdal/v2.4.0/gdal/swig/python/scripts/gdal2tiles.py \
     && chmod +x /usr/local/bin/gdal2tiles.py \

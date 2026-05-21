@@ -16,6 +16,8 @@ from catalog import (
     getPublicationSeedRuntime,
     listArtifacts,
     listPublications,
+    serveMbtilesTile,
+    serveMbtilesTileJson,
     servePublicationAsset,
     servePublishedPath,
     serveWmts,
@@ -37,6 +39,7 @@ CORS(
         r"/published/*": {"origins": "*", "methods": ["GET", "HEAD", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization", "Range"]},
         r"/publication-assets": {"origins": "*", "methods": ["GET", "HEAD", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization", "Range"]},
         r"/publication-assets/*": {"origins": "*", "methods": ["GET", "HEAD", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization", "Range"]},
+        r"/mvt/*": {"origins": "*", "methods": ["GET", "HEAD", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization", "Range"]},
         r"/wmts": {"origins": "*", "methods": ["GET", "HEAD", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization"]},
     },
 )
@@ -108,6 +111,8 @@ app.add_url_rule("/api/publications/<publication_id>/seed-status", endpoint="pub
 app.add_url_rule("/api/publications/<publication_id>/enabled", endpoint="publisher_publication_toggle", view_func=_handle_publication_toggle, methods=["PATCH"])
 app.add_url_rule("/publication-assets/<publication_id>", endpoint="publisher_publication_root", view_func=servePublicationAsset, defaults={"relative_path": ""}, methods=["GET"])
 app.add_url_rule("/publication-assets/<publication_id>/<path:relative_path>", endpoint="publisher_publication_asset", view_func=servePublicationAsset, methods=["GET"])
+app.add_url_rule("/mvt/<publication_id>/tiles.json", endpoint="publisher_mbtiles_tilejson", view_func=serveMbtilesTileJson, methods=["GET"])
+app.add_url_rule("/mvt/<publication_id>/<int:z>/<int:x>/<path:y>", endpoint="publisher_mbtiles_tile", view_func=serveMbtilesTile, methods=["GET"])
 app.add_url_rule("/published", endpoint="publisher_published_root", view_func=servePublishedPath, defaults={"relative_path": ""}, methods=["GET"])
 app.add_url_rule("/published/<path:relative_path>", endpoint="publisher_published_asset", view_func=servePublishedPath, methods=["GET"])
 app.add_url_rule("/wmts", endpoint="publisher_wmts", view_func=serveWmts, methods=["GET", "OPTIONS"])

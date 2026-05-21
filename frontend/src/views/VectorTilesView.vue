@@ -153,7 +153,7 @@ async function submit() {
                 <div class="tile-page-toolbar">
                     <div class="tile-page-toolbar__meta">
                         <div class="tile-page-toolbar__title">二维矢量切片</div>
-                        <div class="tile-page-toolbar__desc">GeoJSON、SHP、GPKG 统一按纵向模块配置，GeoJSON 可附加 zoom 过滤规则。</div>
+                        <div class="tile-page-toolbar__desc">GeoJSON、SHP、GPKG 输出静态二维矢量瓦片；大范围 MVT 到 z12+ 会生成大量小文件。</div>
                     </div>
                     <div class="tile-page-toolbar__actions">
                         <el-button @click="applyLevelRuleTemplate" :disabled="form.tileFormat !== 'geojson'">填入行政区模板</el-button>
@@ -212,6 +212,13 @@ async function submit() {
                             <el-col :xs="24" :md="12"><el-form-item label="最小层级"><el-input-number v-model="form.minZoom" :min="0" :max="22" controls-position="right" /></el-form-item></el-col>
                             <el-col :xs="24" :md="12"><el-form-item label="最大层级"><el-input-number v-model="form.maxZoom" :min="0" :max="22" controls-position="right" /></el-form-item></el-col>
                         </el-row>
+                        <el-alert
+                            v-if="form.tileFormat === 'mvt' && Number(form.maxZoom) >= 12"
+                            type="warning"
+                            :closable="false"
+                            show-icon
+                            title="静态 MVT 高层级会产生大量 .pbf 小文件，大范围数据建议先裁剪或降低到 z10/z11；动态 MVT 请走发布管理。"
+                        />
                     </el-form>
                 </el-card>
 

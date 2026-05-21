@@ -6,6 +6,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -25,6 +26,11 @@ SUPPORTED_VECTOR_EXTENSIONS = [".geojson", ".json", ".shp", ".gpkg"]
 VECTOR_TILE_FORMATS = {"mvt", "geojson"}
 GEOJSON_TILE_METHOD = "geojson-tile"
 WEB_MERCATOR_MAX_LAT = 85.0511287798066
+TIPPECANOE_RESILIENT_ARGS = [
+    "--detect-shared-borders",
+    "--coalesce-densest-as-needed",
+    "--extend-zooms-if-still-dropping",
+]
 
 
 def _as_bool(value, default=False):
@@ -89,6 +95,26 @@ def _vector_publish_method(tile_format):
     return GEOJSON_TILE_METHOD if tile_format == "geojson" else "mvt"
 
 
+def _estimate_static_mvt_risk(source_count, min_zoom, max_zoom):
+    if max_zoom >= 14:
+        return "高风险：静态 MVT 到 z14+ 可能生成几十万到上百万个小文件，大范围数据会比较慢"
+    if max_zoom >= 12:
+        return "中风险：静态 MVT 到 z12+ 文件数增长很快，建议大范围数据先裁剪或降低层级"
+    return None
+
+
+def _normalize_mvt_error_message(message):
+    text = str(message or "").strip()
+    lowered = text.lower()
+    if "could not make tile" in lowered and "no zoom levels were successfully written" in lowered:
+        return (
+            "MVT 切片失败：低层级瓦片承载的数据过大，Tippecanoe 在自动降采样后仍无法把瓦片压到限制内。"
+            "这通常不是文件损坏，而是面要素范围太大/属性太重。"
+            "建议降低最大层级、先裁剪范围、精简属性，或继续放宽切片策略。"
+        )
+    return text
+
+
 def _count_vector_tiles(output_path, tile_extension=".pbf"):
     tile_count = 0
     for root, _, files in os.walk(output_path):
@@ -118,6 +144,97 @@ def _find_sample_tile(output_path, tile_extension=".pbf"):
                         "path": f"{zoom_name}/{x_name}/{filename}",
                     }
     return None
+
+
+def _run_mvt_command_with_progress(command, task_id, output_path, tile_extension=".pbf"):
+    process = None
+    previous_entry = None
+    started_at = time.time()
+    last_update = 0
+    stderr_chunks = []
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        with taskLock:
+            previous_entry = taskProcesses.get(task_id)
+            taskProcesses[task_id] = process
+
+        def read_stderr():
+            try:
+                for line in process.stderr:
+                    if line:
+                        stderr_chunks.append(line)
+            except Exception:
+                pass
+
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
+
+        while True:
+            return_code = process.poll()
+            now = time.time()
+            if now - last_update >= 10:
+                generated_tiles = _count_vector_tiles(output_path, tile_extension)
+                elapsed_seconds = max(1, int(now - started_at))
+                with taskLock:
+                    current_task = taskStatus.get(task_id)
+                    if current_task and str(current_task.get("status", "")).lower() != "stopped":
+                        current_task["progress"] = 55
+                        current_task["message"] = f"正在生成 MVT 目录切片，已生成约 {generated_tiles} 个瓦片"
+                        current_task["currentStage"] = "生成 MVT"
+                        current_task["stats"] = {
+                            **current_task.get("stats", {}),
+                            "processedTiles": generated_tiles,
+                            "totalTiles": 0,
+                            "remainingTiles": 0,
+                            "averageSpeed": round(generated_tiles / elapsed_seconds, 2),
+                            "successRate": "生成中",
+                        }
+                        current_task["processingInfo"] = {
+                            **current_task.get("processingInfo", {}),
+                            "generatedTiles": generated_tiles,
+                            "elapsedSeconds": elapsed_seconds,
+                            "outputPath": output_path,
+                        }
+                _sync_vector_task_snapshot(task_id)
+                last_update = now
+
+            if _task_was_stopped(task_id):
+                try:
+                    process.terminate()
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                return {"success": False, "stopped": True, "error": "任务已停止"}
+
+            if return_code is not None:
+                break
+
+            time.sleep(1)
+
+        stderr_thread.join(timeout=1)
+        stderr = "".join(stderr_chunks)
+        return {
+            "success": process.returncode == 0,
+            "returncode": process.returncode,
+            "stdout": "",
+            "stderr": stderr,
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    finally:
+        with taskLock:
+            current = taskProcesses.get(task_id)
+            if process is not None and current is process:
+                if previous_entry is not None:
+                    taskProcesses[task_id] = previous_entry
+                else:
+                    taskProcesses.pop(task_id, None)
 
 
 def _clear_directory(path):
@@ -470,6 +587,7 @@ def runVectorTileTask(task_id, task_payload):
     overwrite = _as_bool(task_payload.get("overwrite"), False)
     min_zoom = normalizeInt(task_payload.get("minZoom"), 0, 0, 22)
     max_zoom = normalizeInt(task_payload.get("maxZoom"), 14, 0, 22)
+    risk_warning = task_payload.get("riskWarning")
     dataset_name = _sanitize_layer_name(
         task_payload.get("datasetName") or f"atlasworks_{tile_format}",
         f"atlasworks_{tile_format}",
@@ -506,16 +624,23 @@ def runVectorTileTask(task_id, task_payload):
                 extra={
                     "jobType": "geojson_tiles" if tile_format == "geojson" else "mvt_tiles",
                     "workerId": task_payload.get("workerId"),
+                    "riskWarning": risk_warning,
                 },
             )
+            if risk_warning:
+                appendTaskLog(taskStatus[task_id], "风险提示", "warning", risk_warning, 0)
         _sync_vector_task_snapshot(task_id)
 
         _ensure_task_not_stopped(task_id)
         temp_dir = tempfile.mkdtemp(prefix=f"atlasworks-vector-{task_id}-")
-        staging_output_path = os.path.join(temp_dir, f"{tile_format}_output")
+        direct_output = tile_format == "mvt"
+        staging_output_path = output_path if direct_output else os.path.join(temp_dir, f"{tile_format}_output")
         merged_gpkg_path = os.path.join(temp_dir, "source_layers.gpkg")
         layer_names = []
         used_layer_names = set()
+
+        if direct_output and overwrite:
+            _clear_directory(output_path)
 
         for index, file_info in enumerate(source_files):
             _ensure_task_not_stopped(task_id)
@@ -580,24 +705,33 @@ def runVectorTileTask(task_id, task_payload):
 
         generated_bounds = None
         if tile_format == "mvt":
-            build_command = [
+            tippecanoe_input_path = os.path.join(temp_dir, "tippecanoe_input.geojsonseq")
+            export_command = [
                 "ogr2ogr",
-                "-f",
-                "MVT",
-                staging_output_path,
+                "-f", "GeoJSONSeq",
+                tippecanoe_input_path,
                 merged_gpkg_path,
-                "-dsco",
-                "FORMAT=DIRECTORY",
-                "-dsco",
-                f"MINZOOM={min_zoom}",
-                "-dsco",
-                f"MAXZOOM={max_zoom}",
-                "-dsco",
-                f"NAME={dataset_name}",
+                "-t_srs", "EPSG:4326",
             ]
-            build_result = runCommandWithProcessTracking(build_command, task_id)
-            if not build_result.get("success"):
+            export_result = runCommandWithProcessTracking(export_command, task_id)
+            if not export_result.get("success"):
                 if _task_was_stopped(task_id):
+                    raise RuntimeError("任务已停止")
+                raise RuntimeError(export_result.get("stderr") or export_result.get("error") or "导出 Tippecanoe 输入失败")
+            build_command = [
+                "tippecanoe",
+                "-e", staging_output_path,
+                "-Z", str(min_zoom),
+                "-z", str(max_zoom),
+                "-l", dataset_name,
+                "--no-tile-compression",
+                "--force",
+            ]
+            build_command.extend(TIPPECANOE_RESILIENT_ARGS)
+            build_command.append(tippecanoe_input_path)
+            build_result = _run_mvt_command_with_progress(build_command, task_id, staging_output_path, tile_extension)
+            if not build_result.get("success"):
+                if build_result.get("stopped") or _task_was_stopped(task_id):
                     raise RuntimeError("任务已停止")
                 raise RuntimeError(build_result.get("stderr") or build_result.get("error") or "生成 MVT 失败")
         else:
@@ -620,9 +754,10 @@ def runVectorTileTask(task_id, task_payload):
         if tile_count <= 0:
             raise RuntimeError(f"{format_label} 输出目录中未生成任何 {tile_extension} 瓦片")
 
-        if overwrite:
+        if not direct_output and overwrite:
             _clear_directory(output_path)
-        shutil.copytree(staging_output_path, output_path, dirs_exist_ok=True)
+        if not direct_output:
+            shutil.copytree(staging_output_path, output_path, dirs_exist_ok=True)
         sample_tile = _find_sample_tile(output_path, tile_extension)
         tileset_metadata_path = _write_tileset_metadata(
             output_path,
@@ -714,13 +849,14 @@ def runVectorTileTask(task_id, task_payload):
     except Exception as exc:
         stopped = str(exc) == "任务已停止"
         failure_label = "GeoJSON" if tile_format == "geojson" else "MVT"
+        error_message = str(exc) if tile_format == "geojson" else _normalize_mvt_error_message(exc)
         with taskLock:
             current_task = taskStatus.get(task_id, {})
             taskStatus[task_id] = createTaskRecord(
                 task_id=task_id,
                 status="stopped" if stopped else "failed",
                 progress=current_task.get("progress", 0),
-                message=f"{failure_label} 切片任务已停止" if stopped else f"{failure_label} 切片失败: {exc}",
+                message=f"{failure_label} 切片任务已停止" if stopped else f"{failure_label} 切片失败: {error_message}",
                 start_time=current_task.get("startTime", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                 end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 current_stage="已停止" if stopped else "失败",
@@ -728,17 +864,17 @@ def runVectorTileTask(task_id, task_payload):
                 result=current_task.get("result", {}),
                 files=current_task.get("files", {"total": len(source_files), "completed": 0, "failed": 0, "current": None}),
                 stats=current_task.get("stats"),
-                error=None if stopped else str(exc),
+                error=None if stopped else error_message,
             )
             appendTaskLog(
                 taskStatus[task_id],
                 "任务停止" if stopped else "异常退出",
                 "stopped" if stopped else "failed",
-                "任务已停止" if stopped else str(exc),
+                "任务已停止" if stopped else error_message,
                 current_task.get("progress", 0),
             )
         _sync_vector_task_snapshot(task_id)
-        logMessage(f"{failure_label} 切片任务{'停止' if stopped else '失败'}: {task_id} - {exc}", "WARNING" if stopped else "ERROR")
+        logMessage(f"{failure_label} 切片任务{'停止' if stopped else '失败'}: {task_id} - {error_message}", "WARNING" if stopped else "ERROR")
     finally:
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -832,6 +968,8 @@ def createVectorTiles():
                 taskStatus[task_id] = _build_failed_task(task_id, ["没有找到有效的矢量源文件"])
             return jsonify({"success": False, "taskId": task_id, "message": "没有找到有效的矢量源文件", "statusUrl": f"/api/tasks/{task_id}"}), 200
 
+        risk_warning = _estimate_static_mvt_risk(len(source_files), min_zoom, max_zoom) if tile_format == "mvt" else None
+
         task_payload = {
             "taskId": task_id,
             "jobType": "geojson_tiles" if tile_format == "geojson" else "mvt_tiles",
@@ -849,6 +987,7 @@ def createVectorTiles():
             ],
             "unmatchedPolicy": unmatched_policy,
             "overwrite": overwrite,
+            "riskWarning": risk_warning,
         }
 
         queued_record = createTaskRecord(
@@ -865,7 +1004,20 @@ def createVectorTiles():
                     "message": f"任务已入队，识别到 {len(source_files)} 个矢量源文件",
                     "timestamp": datetime.now().isoformat(),
                     "progress": 0,
-                }
+                },
+                *(
+                    [
+                        {
+                            "stage": "风险提示",
+                            "status": "warning",
+                            "message": risk_warning,
+                            "timestamp": datetime.now().isoformat(),
+                            "progress": 0,
+                        }
+                    ]
+                    if risk_warning
+                    else []
+                ),
             ],
             files={"total": len(source_files), "completed": 0, "failed": 0, "current": None},
             extra={
@@ -914,7 +1066,9 @@ def createVectorTiles():
                         for rule in level_rules
                     ],
                     "overwrite": overwrite,
+                    "riskWarning": risk_warning,
                 },
+                "warnings": [risk_warning] if risk_warning else [],
             }
         )
     except Exception as exc:

@@ -4,7 +4,7 @@
 from flask import request
 
 from apiDocs import getOpenApiSpec, getSwaggerUi
-from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, getPublicationSeedRuntime, listArtifacts, listPublications, servePublicationAsset, servePublishedPath, serveWmts, togglePublicationEnabled, updatePublication
+from catalog import createPublication, deletePublication, getArtifact, getArtifactManifest, getPublication, getPublicationSeedRuntime, listArtifacts, listPublications, serveMbtilesTile, serveMbtilesTileJson, servePublicationAsset, servePublishedPath, serveWmts, togglePublicationEnabled, updatePublication
 from dataSourceOps import getDataSourceInfo, getDataSourceWorkspaceInfo, listDataSources, recommendConfig, resolveDataSourceFiles, serveDataSourceFile
 from fileSplitOps import splitLargeFile
 from geoserverOps import geoserverCancelSeed, geoserverDeleteLayer, geoserverHealth, geoserverLayerDetail, geoserverListLayers, geoserverPublish, geoserverSeed, geoserverSeedStatus
@@ -110,6 +110,8 @@ def registerRoutes(app):
     app.add_url_rule("/api/geoserver/layers/<name>/seed/cancel", endpoint="geoserver_layer_seed_cancel", view_func=geoserverCancelSeed, methods=["POST"])
     app.add_url_rule("/publication-assets/<publication_id>", endpoint="published_publication_root", view_func=servePublicationAsset, defaults={"relative_path": ""}, methods=["GET"])
     app.add_url_rule("/publication-assets/<publication_id>/<path:relative_path>", endpoint="published_publication_asset", view_func=servePublicationAsset, methods=["GET"])
+    app.add_url_rule("/mvt/<publication_id>/tiles.json", endpoint="mbtiles_tilejson", view_func=serveMbtilesTileJson, methods=["GET"])
+    app.add_url_rule("/mvt/<publication_id>/<int:z>/<int:x>/<path:y>", endpoint="mbtiles_tile", view_func=serveMbtilesTile, methods=["GET"])
     app.add_url_rule("/published", endpoint="published_root", view_func=servePublishedPath, defaults={"relative_path": ""}, methods=["GET"])
     app.add_url_rule("/published/<path:relative_path>", endpoint="published_asset", view_func=servePublishedPath, methods=["GET"])
     app.add_url_rule("/wmts", endpoint="wmts_service", view_func=serveWmts, methods=["GET", "OPTIONS"])

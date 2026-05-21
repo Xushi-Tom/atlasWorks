@@ -1,7 +1,18 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
+import 'ol/ol.css';
 import { Aim, Monitor, Orange } from '@element-plus/icons-vue';
+import Map from 'ol/Map';
+import View from 'ol/View';
+import TileLayer from 'ol/layer/Tile';
+import VectorTileLayer from 'ol/layer/VectorTile';
+import XYZ from 'ol/source/XYZ';
+import VectorTileSource from 'ol/source/VectorTile';
+import MVT from 'ol/format/MVT';
+import GeoJSON from 'ol/format/GeoJSON';
+import { Fill, Stroke, Style, Circle as CircleStyle } from 'ol/style';
+import { fromLonLat, transformExtent } from 'ol/proj';
 import ResizableDrawer from './ResizableDrawer.vue';
 
 const props = defineProps({
@@ -18,20 +29,58 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue']);
 
 const viewerContainer = ref(null);
+const vectorContainer = ref(null);
 const previewStatus = ref('');
 const previewReady = ref(false);
 const sceneMode = ref('3d');
 
 let viewerInstance = null;
+let vectorMapInstance = null;
 let cesiumLibPromise = null;
 let activeCesium = null;
+let vectorResizeObserver = null;
+let vectorRefreshTimers = [];
+let vectorRetryTimer = null;
 
 const GEOSERVER_METHODS = ['geoserver-wms', 'geoserver-wmts'];
 const RASTER_METHODS = ['xyz', 'tms', ...GEOSERVER_METHODS];
 const TERRAIN_METHODS = ['cesium-terrain', 'quantized-mesh', 'terrain'];
-const VECTOR_MVT_METHODS = ['mvt', 'vector-tile', 'vector-tiles'];
+const VECTOR_MVT_METHODS = ['mvt', 'mvt-xyz', 'mvt-tms', 'vector-tile', 'vector-tiles', 'mbtiles-mvt', 'mvt-dynamic', 'dynamic-mvt'];
 const VECTOR_GEOJSON_METHODS = ['geojson-tile', 'geojson-tiles'];
 const TILES_3D_METHODS = ['3d-tiles'];
+const WEB_MERCATOR_EXTENT = [-20037508.342789244, -20037508.342789244, 20037508.342789244, 20037508.342789244];
+
+const vectorPointStyle = new Style({
+    image: new CircleStyle({
+        radius: 4,
+        fill: new Fill({ color: 'rgba(87, 210, 255, 0.92)' }),
+        stroke: new Stroke({ color: 'rgba(7, 23, 36, 0.95)', width: 1.2 })
+    })
+});
+
+const vectorLineStyle = new Style({
+    stroke: new Stroke({
+        color: 'rgba(87, 210, 255, 0.95)',
+        width: 1.8
+    })
+});
+
+const vectorPolygonStyle = new Style({
+    fill: new Fill({ color: 'rgba(87, 210, 255, 0.18)' }),
+    stroke: new Stroke({ color: 'rgba(87, 210, 255, 0.95)', width: 1.4 })
+});
+
+const vectorFallbackStyle = new Style({
+    stroke: new Stroke({
+        color: 'rgba(87, 210, 255, 0.95)',
+        width: 1.4
+    }),
+    fill: new Fill({ color: 'rgba(87, 210, 255, 0.12)' }),
+    image: new CircleStyle({
+        radius: 3,
+        fill: new Fill({ color: 'rgba(87, 210, 255, 0.92)' })
+    })
+});
 
 function normalizeTileScheme(value) {
     const scheme = String(value || '').trim().toLowerCase();
@@ -41,10 +90,21 @@ function normalizeTileScheme(value) {
 
 function getPublicationTileScheme(publication) {
     const publishMethod = String(publication?.metadata?.publishMethod || publication?.publishMethod || '').trim().toLowerCase();
-    if (publishMethod === 'xyz' || publishMethod === 'wmts' || GEOSERVER_METHODS.includes(publishMethod)) return 'xyz';
-    if (publishMethod === 'tms') return 'tms';
+    if (
+        publishMethod === 'xyz'
+        || publishMethod === 'wmts'
+        || publishMethod === 'mvt-xyz'
+        || publishMethod === 'mbtiles-mvt'
+        || publishMethod === 'mvt-dynamic'
+        || publishMethod === 'dynamic-mvt'
+        || GEOSERVER_METHODS.includes(publishMethod)
+    ) return 'xyz';
+    if (publishMethod === 'tms' || publishMethod === 'mvt-tms') return 'tms';
     return normalizeTileScheme(
-        publication?.metadata?.sourceTileScheme
+        publication?.vectorPublication?.scheme
+        || publication?.metadata?.tileScheme
+        || publication?.customMetadata?.tileScheme
+        || publication?.metadata?.sourceTileScheme
         || publication?.customMetadata?.sourceTileScheme
         || publication?.sourceTileScheme
     );
@@ -60,6 +120,15 @@ function parseSampleTile(url) {
         x: Number(match[2]),
         y: Number(match[3])
     };
+}
+
+function tileTemplateForOpenLayers(url, tileScheme = 'xyz') {
+    const value = String(url || '').trim();
+    if (!value) return '';
+    if (tileScheme === 'tms') {
+        return value.replace('{reverseY}', '{-y}').replace('{y}', '{-y}');
+    }
+    return value.replace('{reverseY}', '{y}');
 }
 
 function normalizeProjection(value) {
@@ -197,13 +266,59 @@ async function fetchTileJsonMetadata(url) {
     }
 }
 
+function getVectorStyle(feature) {
+    const geometry = feature?.getGeometry?.();
+    const type = geometry?.getType?.() || '';
+    if (type.includes('Point')) return vectorPointStyle;
+    if (type.includes('LineString')) return vectorLineStyle;
+    if (type.includes('Polygon')) return vectorPolygonStyle;
+    return vectorFallbackStyle;
+}
+
+function getStaticAssetUrl(path) {
+    const normalized = String(path || '').replace(/^\/+/, '');
+    return `${window.location.origin}/static/${normalized}`;
+}
+
+function replaceTileTokens(url, replacements = {}) {
+    let result = String(url || '').trim();
+    Object.entries(replacements).forEach(([key, value]) => {
+        result = result.replaceAll(`{${key}}`, String(value));
+    });
+    return result;
+}
+
+function buildVectorTileUrl(config, z, x, y) {
+    const normalizedY = config.tileScheme === 'tms'
+        ? ((2 ** z) - y - 1)
+        : y;
+    return replaceTileTokens(config.url, {
+        z,
+        x,
+        y: normalizedY,
+        reverseY: (2 ** z) - y - 1
+    });
+}
+
+function describeVectorSource(config) {
+    const url = String(config?.url || '').trim();
+    if (!url) return '';
+    try {
+        const parsed = new URL(url, window.location.origin);
+        return `${config?.tileScheme?.toUpperCase?.() || 'XYZ'} · ${parsed.origin}${parsed.pathname}`;
+    } catch {
+        return `${config?.tileScheme?.toUpperCase?.() || 'XYZ'} · ${url}`;
+    }
+}
+
 const previewConfig = computed(() => {
     const publication = props.publication || {};
+    const vectorPublication = publication?.vectorPublication || {};
     const publishMethod = String(publication?.metadata?.publishMethod || publication?.publishMethod || '').trim().toLowerCase();
     const tileScheme = getPublicationTileScheme(publication);
     const sourceProjection = normalizeProjection(publication?.sourceProjection || publication?.metadata?.sourceProjection || publication?.customMetadata?.sourceProjection);
-    const sampleTile = parseSampleTile(publication?.sampleUrl);
-    const vectorBounds = normalizeWgs84Bounds(publication?.vectorPublication?.bounds);
+    const sampleTile = parseSampleTile(vectorPublication?.sampleTileUrl || publication?.sampleUrl);
+    const vectorBounds = normalizeWgs84Bounds(vectorPublication?.bounds);
     const publicationBounds = normalizeWgs84Bounds(publication?.bounds)
         || normalizeWgs84Bounds(publication?.metadata?.bounds)
         || normalizeWgs84Bounds(publication?.customMetadata?.bounds)
@@ -215,6 +330,7 @@ const previewConfig = computed(() => {
         const wmsConfig = parseWmsPreviewUrl(publication?.wmsUrl);
         return {
             supported: true,
+            engine: 'cesium',
             mode: wmtsTemplates.length ? 'wmts-imagery' : (wmsConfig ? 'wms-imagery' : 'imagery'),
             title: 'Cesium 影像预览',
             description: wmtsTemplates.length
@@ -236,6 +352,7 @@ const previewConfig = computed(() => {
     if (RASTER_METHODS.includes(publishMethod) && publication?.accessUrl) {
         return {
             supported: true,
+            engine: 'cesium',
             mode: 'imagery',
             title: 'Cesium 影像预览',
             description: `使用 Cesium 按 ${tileScheme.toUpperCase()} 规则请求影像瓦片。`,
@@ -252,6 +369,7 @@ const previewConfig = computed(() => {
         const terrainRootUrl = buildTerrainRootUrl(publication);
         return {
             supported: Boolean(terrainRootUrl),
+            engine: 'cesium',
             mode: 'terrain',
             title: 'Cesium 地形预览',
             description: '使用 CesiumTerrainProvider 加载 Quantized Mesh / Cesium Terrain 地形数据。',
@@ -264,6 +382,7 @@ const previewConfig = computed(() => {
     if ((TILES_3D_METHODS.includes(publishMethod) || publication?.publishType === '3dtiles') && publication?.launchUrl) {
         return {
             supported: true,
+            engine: 'cesium',
             mode: '3dtiles',
             title: 'Cesium 3D Tiles 预览',
             description: '使用 Cesium3DTileset 加载 tileset.json。',
@@ -273,23 +392,64 @@ const previewConfig = computed(() => {
         };
     }
 
-    if (VECTOR_MVT_METHODS.includes(publishMethod) || VECTOR_GEOJSON_METHODS.includes(publishMethod)) {
+    if (VECTOR_MVT_METHODS.includes(publishMethod)) {
         return {
-            supported: false,
-            mode: 'vector',
-            title: '暂不支持内置预览',
-            description: '当前二维矢量瓦片暂未接入 Cesium 内置预览，请直接使用发布地址验证。',
-            url: String(publication?.accessUrl || '').trim()
+            supported: Boolean(vectorPublication.xyzTemplate || publication?.accessUrl),
+            engine: 'ol',
+            mode: 'vector-mvt',
+            title: 'MVT 矢量瓦片预览',
+            description: '在发布预览中直接加载 MVT / PBF 瓦片，便于快速验证样式、范围和层级可用性。',
+            url: String(vectorPublication.xyzTemplate || publication?.accessUrl || '').trim(),
+            tileJsonUrl: String(vectorPublication.tileJsonUrl || publication?.launchUrl || '').trim(),
+            tileScheme,
+            sampleTile,
+            bounds: focusBounds
+        };
+    }
+
+    if (VECTOR_GEOJSON_METHODS.includes(publishMethod)) {
+        return {
+            supported: Boolean(vectorPublication.xyzTemplate || publication?.accessUrl),
+            engine: 'ol',
+            mode: 'vector-geojson',
+            title: 'GeoJSON 瓦片预览',
+            description: '在发布预览中直接加载 GeoJSON 瓦片，适合快速验证切片结果与范围。',
+            url: String(vectorPublication.xyzTemplate || publication?.accessUrl || '').trim(),
+            tileJsonUrl: String(vectorPublication.tileJsonUrl || publication?.launchUrl || '').trim(),
+            tileScheme,
+            sampleTile,
+            bounds: focusBounds
         };
     }
 
     return {
         supported: false,
+        engine: '',
         mode: '',
         title: '暂不支持预览',
         description: '当前发布类型没有可用的 Cesium 内置预览。',
         url: String(publication?.accessUrl || '').trim()
     };
+});
+
+const previewRenderSignature = computed(() => {
+    const publication = props.publication || {};
+    const vectorPublication = publication?.vectorPublication || {};
+    return JSON.stringify({
+        publicationId: publication?.publicationId || publication?.id || '',
+        publishType: publication?.publishType || '',
+        publishMethod: publication?.publishMethod || publication?.metadata?.publishMethod || '',
+        accessUrl: publication?.accessUrl || '',
+        launchUrl: publication?.launchUrl || '',
+        sampleUrl: publication?.sampleUrl || '',
+        wmsUrl: publication?.wmsUrl || '',
+        wmtsTileUrl: publication?.wmtsTileUrl || '',
+        vectorXyzTemplate: vectorPublication?.xyzTemplate || '',
+        vectorTileJsonUrl: vectorPublication?.tileJsonUrl || '',
+        vectorSampleTileUrl: vectorPublication?.sampleTileUrl || '',
+        vectorScheme: vectorPublication?.scheme || '',
+        bounds: vectorPublication?.bounds || publication?.bounds || publication?.metadata?.bounds || null,
+    });
 });
 
 function close() {
@@ -309,8 +469,51 @@ function destroyViewer() {
         viewerInstance.destroy();
         viewerInstance = null;
     }
+    if (vectorResizeObserver) {
+        vectorResizeObserver.disconnect();
+        vectorResizeObserver = null;
+    }
+    vectorRefreshTimers.forEach(timer => window.clearTimeout(timer));
+    vectorRefreshTimers = [];
+    if (vectorRetryTimer) {
+        window.clearTimeout(vectorRetryTimer);
+        vectorRetryTimer = null;
+    }
+    if (vectorMapInstance) {
+        vectorMapInstance.setTarget(undefined);
+        vectorMapInstance = null;
+    }
     previewReady.value = false;
     activeCesium = null;
+}
+
+async function waitForRenderableContainer(element, timeoutMs = 1200) {
+    const startedAt = Date.now();
+    while (element && (Date.now() - startedAt) < timeoutMs) {
+        const width = Number(element.clientWidth || 0);
+        const height = Number(element.clientHeight || 0);
+        if (width > 0 && height > 0) return true;
+        await new Promise(resolve => window.setTimeout(resolve, 60));
+    }
+    return Boolean(element && element.clientWidth > 0 && element.clientHeight > 0);
+}
+
+function scheduleVectorMapRefresh(config) {
+    if (!vectorMapInstance) return;
+    vectorRefreshTimers.forEach(timer => window.clearTimeout(timer));
+    vectorRefreshTimers = [];
+
+    [0, 160, 320, 640].forEach(delay => {
+        const timer = window.setTimeout(async () => {
+            if (!vectorMapInstance) return;
+            vectorMapInstance.updateSize();
+            vectorMapInstance.renderSync();
+            if (delay >= 160) {
+                await focusVectorPreview(config, 0);
+            }
+        }, delay);
+        vectorRefreshTimers.push(timer);
+    });
 }
 
 async function createViewer(Cesium) {
@@ -537,6 +740,177 @@ async function renderTilesetPreview(Cesium, viewer, config) {
     await viewer.zoomTo(tileset);
 }
 
+async function focusVectorPreview(config, duration = 250) {
+    if (!vectorMapInstance) return;
+    const bounds = await resolveFocusBounds(config);
+    const focusBounds = bounds && !shouldUseSampleTileFocus(bounds, config)
+        ? bounds
+        : sampleTileBounds(config);
+    const view = vectorMapInstance.getView();
+    if (focusBounds) {
+        view.fit(transformExtent(focusBounds, 'EPSG:4326', 'EPSG:3857'), {
+            padding: [36, 36, 36, 36],
+            duration,
+            maxZoom: 7
+        });
+        return;
+    }
+    if (config.sampleTile) {
+        const sampleY = config.tileScheme === 'tms'
+            ? (2 ** config.sampleTile.z) - config.sampleTile.y - 1
+            : config.sampleTile.y;
+        const [west, north] = tileToLonLat(config.sampleTile.z, config.sampleTile.x, sampleY);
+        const [east, south] = tileToLonLat(config.sampleTile.z, config.sampleTile.x + 1, sampleY + 1);
+        view.fit(transformExtent([west, south, east, north], 'EPSG:4326', 'EPSG:3857'), {
+            padding: [36, 36, 36, 36],
+            duration,
+            maxZoom: 7
+        });
+        return;
+    }
+    view.animate({
+        center: fromLonLat([110, 24]),
+        zoom: 3,
+        duration
+    });
+}
+
+async function renderVectorPreview(config) {
+    if (!vectorContainer.value) return;
+    await waitForRenderableContainer(vectorContainer.value);
+    if (vectorResizeObserver) {
+        vectorResizeObserver.disconnect();
+        vectorResizeObserver = null;
+    }
+    if (vectorMapInstance) {
+        vectorMapInstance.setTarget(undefined);
+        vectorMapInstance = null;
+    }
+
+    const format = config.mode === 'vector-geojson'
+        ? new GeoJSON()
+        : new MVT();
+
+    const olTemplateUrl = tileTemplateForOpenLayers(config.url, config.tileScheme);
+    const source = new VectorTileSource({
+        url: olTemplateUrl || undefined,
+        format,
+        projection: 'EPSG:3857'
+    });
+
+    const basemapUrl = getStaticAssetUrl('basemap/global-imagery/{z}/{x}/{y}.jpeg');
+    const baseLayer = new TileLayer({
+        source: new XYZ({
+            url: basemapUrl,
+            projection: 'EPSG:3857',
+            minZoom: 0,
+            maxZoom: 7,
+            crossOrigin: 'anonymous',
+            wrapX: true
+        }),
+        opacity: 0.88
+    });
+
+    const vectorLayer = new VectorTileLayer({
+        source,
+        style: getVectorStyle,
+        renderMode: 'hybrid',
+        declutter: true
+    });
+
+    let loadedTileCount = 0;
+    let anyVectorTileRequest = false;
+    source.on('tileloadend', () => {
+        anyVectorTileRequest = true;
+        loadedTileCount++;
+        previewStatus.value = `已加载 ${loadedTileCount} 个矢量瓦片`;
+    });
+    source.on('tileloadstart', () => {
+        anyVectorTileRequest = true;
+        const requestSample = config.sampleTile
+            ? buildVectorTileUrl(config, config.sampleTile.z, config.sampleTile.x, config.sampleTile.y)
+            : olTemplateUrl;
+        previewStatus.value = requestSample
+            ? `正在请求矢量瓦片... ${describeVectorSource(config)} · 请求示例 ${requestSample}`
+            : `正在请求矢量瓦片... ${describeVectorSource(config)}`;
+    });
+    source.on('tileloaderror', (event) => {
+        anyVectorTileRequest = true;
+        const coord = event.tile?.tileCoord;
+        if (coord) {
+            const [z, x, rawY] = coord;
+            const y = -rawY - 1;
+            console.warn(`MVT tile load failed: z=${z} x=${x} y=${y}`);
+            previewStatus.value = `矢量瓦片加载失败: z=${z}, x=${x}, y=${y}`;
+        } else {
+            previewStatus.value = '矢量瓦片加载失败';
+        }
+    });
+
+    baseLayer.getSource()?.on('imageloaderror', () => {
+        previewStatus.value = '离线底图加载失败';
+    });
+    baseLayer.getSource()?.on('imageloadstart', () => {
+        if (!previewStatus.value) {
+            previewStatus.value = '正在加载预览底图...';
+        }
+    });
+
+    vectorMapInstance = new Map({
+        target: vectorContainer.value,
+        layers: [baseLayer, vectorLayer],
+        view: new View({
+            center: fromLonLat([110, 24]),
+            zoom: 3,
+            minZoom: 1,
+            maxZoom: 22,
+            extent: WEB_MERCATOR_EXTENT
+        }),
+        controls: []
+    });
+    vectorMapInstance.once('postrender', async () => {
+        if (!vectorMapInstance) return;
+        vectorMapInstance.updateSize();
+        vectorMapInstance.renderSync();
+        await focusVectorPreview(config, 0);
+    });
+
+    if (typeof ResizeObserver !== 'undefined' && vectorContainer.value) {
+        vectorResizeObserver = new ResizeObserver(() => {
+            if (!vectorMapInstance) return;
+            vectorMapInstance.updateSize();
+            vectorMapInstance.renderSync();
+        });
+        vectorResizeObserver.observe(vectorContainer.value);
+    }
+
+    window.requestAnimationFrame(() => {
+        if (!vectorMapInstance) return;
+        vectorMapInstance.updateSize();
+        vectorMapInstance.renderSync();
+        source.refresh();
+    });
+
+    previewStatus.value = '正在加载矢量瓦片...';
+    const sourceDescription = describeVectorSource(config);
+    if (sourceDescription) {
+        previewStatus.value = `正在加载矢量瓦片... ${sourceDescription}`;
+    }
+    scheduleVectorMapRefresh(config);
+    await focusVectorPreview(config, 0);
+    source.refresh();
+    vectorRetryTimer = window.setTimeout(async () => {
+        if (vectorMapInstance && !anyVectorTileRequest && !loadedTileCount) {
+            if (!config.retry) {
+                previewStatus.value = '首次渲染未触发请求，正在自动重试...';
+                await renderVectorPreview({ ...config, retry: true });
+                return;
+            }
+            previewStatus.value = '未触发矢量瓦片请求，请检查范围、缩放级别或发布地址';
+        }
+    }, 1200);
+}
+
 async function renderPreview() {
     destroyViewer();
     previewStatus.value = '';
@@ -546,28 +920,34 @@ async function renderPreview() {
     }
 
     await nextTick();
-    if (!viewerContainer.value) return;
+    const isOl = previewConfig.value.engine === 'ol';
+    if (isOl ? !vectorContainer.value : !viewerContainer.value) return;
 
     try {
-        const Cesium = await ensureCesium();
-        const viewer = await createViewer(Cesium);
-        if (!viewer) return;
+        if (isOl) {
+            await new Promise(resolve => window.setTimeout(resolve, 260));
+            await renderVectorPreview(previewConfig.value);
+        } else {
+            const Cesium = await ensureCesium();
+            const viewer = await createViewer(Cesium);
+            if (!viewer) return;
 
-        viewerInstance = viewer;
-        activeCesium = Cesium;
-        await addWorldBaseLayer(Cesium, viewer);
-        setDefaultCamera(Cesium, viewer);
+            viewerInstance = viewer;
+            activeCesium = Cesium;
+            await addWorldBaseLayer(Cesium, viewer);
+            setDefaultCamera(Cesium, viewer);
 
-        if (previewConfig.value.mode === 'wmts-imagery') {
-            await renderWmtsImageryPreview(Cesium, viewer, previewConfig.value);
-        } else if (previewConfig.value.mode === 'wms-imagery') {
-            await renderWmsImageryPreview(Cesium, viewer, previewConfig.value);
-        } else if (previewConfig.value.mode === 'imagery') {
-            await renderImageryPreview(Cesium, viewer, previewConfig.value);
-        } else if (previewConfig.value.mode === 'terrain') {
-            await renderTerrainPreview(Cesium, viewer, previewConfig.value);
-        } else if (previewConfig.value.mode === '3dtiles') {
-            await renderTilesetPreview(Cesium, viewer, previewConfig.value);
+            if (previewConfig.value.mode === 'wmts-imagery') {
+                await renderWmtsImageryPreview(Cesium, viewer, previewConfig.value);
+            } else if (previewConfig.value.mode === 'wms-imagery') {
+                await renderWmsImageryPreview(Cesium, viewer, previewConfig.value);
+            } else if (previewConfig.value.mode === 'imagery') {
+                await renderImageryPreview(Cesium, viewer, previewConfig.value);
+            } else if (previewConfig.value.mode === 'terrain') {
+                await renderTerrainPreview(Cesium, viewer, previewConfig.value);
+            } else if (previewConfig.value.mode === '3dtiles') {
+                await renderTilesetPreview(Cesium, viewer, previewConfig.value);
+            }
         }
 
         previewReady.value = true;
@@ -578,12 +958,17 @@ async function renderPreview() {
 }
 
 async function flyToRegion() {
-    if (!viewerInstance || !activeCesium || !previewConfig.value.supported) return;
+    if (!previewConfig.value.supported) return;
+    if (previewConfig.value.engine === 'ol') {
+        await focusVectorPreview(previewConfig.value, 350);
+        return;
+    }
+    if (!viewerInstance || !activeCesium) return;
     await focusViewer(activeCesium, viewerInstance, previewConfig.value, 0.8);
 }
 
 function switchSceneMode(mode) {
-    if (!viewerInstance || !activeCesium) return;
+    if (previewConfig.value.engine !== 'cesium' || !viewerInstance || !activeCesium) return;
     sceneMode.value = mode;
     if (mode === '3d') {
         viewerInstance.scene.morphTo3D(0.6);
@@ -593,7 +978,7 @@ function switchSceneMode(mode) {
 }
 
 watch(
-    () => [props.modelValue, props.publication],
+    () => [props.modelValue, previewRenderSignature.value],
     async () => {
         if (props.modelValue) {
             await renderPreview();
@@ -601,8 +986,15 @@ watch(
             destroyViewer();
         }
     },
-    { deep: true, flush: 'post' }
+    { flush: 'post' }
 );
+
+onMounted(async () => {
+    if (props.modelValue) {
+        await nextTick();
+        await renderPreview();
+    }
+});
 
 onBeforeUnmount(() => {
     destroyViewer();
@@ -628,7 +1020,7 @@ onBeforeUnmount(() => {
                     <div class="preview-subtitle">{{ previewConfig.title }}</div>
                 </div>
                 <div class="preview-toolbar-actions">
-                    <div v-if="previewConfig.supported" class="scene-mode-switch">
+                    <div v-if="previewConfig.supported && previewConfig.engine === 'cesium'" class="scene-mode-switch">
                         <el-button
                             :type="sceneMode === '2d' ? 'primary' : 'default'"
                             plain
@@ -656,12 +1048,14 @@ onBeforeUnmount(() => {
                     >
                         飞到区域
                     </el-button>
-                    <el-tag v-else type="info">暂不支持</el-tag>
+                    <el-tag v-if="previewConfig.supported && previewConfig.engine === 'ol'" type="success">MVT 预览</el-tag>
+                    <el-tag v-else-if="!previewConfig.supported" type="info">暂不支持</el-tag>
                 </div>
             </div>
 
             <div v-if="previewConfig.supported" class="preview-map-shell">
-                <div ref="viewerContainer" class="preview-map" />
+                <div v-if="previewConfig.engine === 'cesium'" ref="viewerContainer" class="preview-map" />
+                <div v-else ref="vectorContainer" class="preview-map preview-map-vector" />
             </div>
             <el-empty v-else description="当前发布类型还没有内置预览器" />
 
@@ -720,6 +1114,32 @@ onBeforeUnmount(() => {
 .preview-map {
     width: 100%;
     height: 640px;
+}
+
+.preview-map-vector {
+    position: relative;
+    touch-action: none;
+    cursor: grab;
+    pointer-events: auto;
+}
+
+.preview-map-vector:active {
+    cursor: grabbing;
+}
+
+.preview-map-vector :deep(.ol-viewport),
+.preview-map-vector :deep(.ol-overlaycontainer-stopevent),
+.preview-map-vector :deep(.ol-overlaycontainer) {
+    width: 100%;
+    height: 100%;
+}
+
+.preview-map-vector :deep(.ol-viewport) {
+    touch-action: none;
+}
+
+.preview-map-vector :deep(canvas) {
+    pointer-events: auto;
 }
 
 .preview-status {

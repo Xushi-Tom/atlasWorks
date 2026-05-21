@@ -12,7 +12,6 @@ const form = reactive({
     dataType: 'pointcloud',
     folderPaths: '',
     filePatterns: '',
-    sourcePath: '',
     outputPath: '',
     crsPreset: '',
     crsCustom: '',
@@ -82,7 +81,7 @@ const sourcePlaceholder = computed(() => {
     if (form.dataType === 'pointcloud') return '选择 .las / .laz 点云文件（支持多选）';
     if (form.dataType === 'vector') return '选择 .geojson / .shp 建筑面文件';
     if (form.dataType === 'model') return '选择 .obj 模型文件';
-    return 'OSGB 使用下方“单文件/目录”选择';
+    return '支持单个 .osgb、多个 .osgb、*.osgb 或 **/*.osgb';
 });
 
 const defaultHeightUnitLabel = computed(() => (
@@ -90,9 +89,6 @@ const defaultHeightUnitLabel = computed(() => (
 ));
 
 watch(() => form.dataType, nextType => {
-    if (nextType !== 'osgb') {
-        form.sourcePath = '';
-    }
     if ((nextType === 'vector' || nextType === 'osgb') && !form.crsPreset) {
         form.crsPreset = 'EPSG:4326';
     }
@@ -123,39 +119,9 @@ function clearField(field) {
     form[field] = '';
 }
 
-function resolveOsgbSourcePath(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return undefined;
-
-    if (raw.startsWith('[') && raw.endsWith(']')) {
-        try {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-                const normalized = parsed.map(item => String(item || '').trim()).filter(Boolean);
-                if (!normalized.length) return undefined;
-                return normalized.length === 1 ? normalized[0] : normalized;
-            }
-        } catch {
-            // fallback
-        }
-    }
-
-    const list = normalizeListInput(raw);
-    if (!list.length) return undefined;
-    return list.length === 1 ? list[0] : list;
-}
-
 async function submit() {
     const filePatterns = normalizeListInput(form.filePatterns);
-    const sourcePath = form.dataType === 'osgb'
-        ? resolveOsgbSourcePath(form.sourcePath)
-        : String(form.sourcePath || '').trim();
-    if (form.dataType === 'osgb') {
-        if (!sourcePath) {
-            pushToast('OSGB 请先选择文件/目录（支持 *.osgb 和多文件）', 'warning');
-            return;
-        }
-    } else if (!filePatterns.length) {
+    if (!filePatterns.length) {
         pushToast('请先选择输入文件', 'warning');
         return;
     }
@@ -177,8 +143,7 @@ async function submit() {
         const payload = {
             dataType: form.dataType,
             folderPaths: normalizeListInput(form.folderPaths),
-            filePatterns: form.dataType === 'osgb' ? [] : filePatterns,
-            sourcePath: sourcePath || undefined,
+            filePatterns,
             outputPath: form.outputPath,
             crs: effectiveCrs.value || undefined,
             heightField: form.heightField,
@@ -266,31 +231,22 @@ async function submit() {
                             </div>
                         </el-form-item>
 
-                        <el-form-item v-if="form.dataType !== 'osgb'" label="输入文件">
+                        <el-form-item label="输入文件格式">
                             <div class="path-field path-field-inline">
                                 <el-input v-model="form.filePatterns" :placeholder="sourcePlaceholder" />
                                 <div class="path-field-actions">
                                     <el-button @click="openPicker({ title: '选择 3D Tiles 输入文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'filePatterns', allowedExtensions: allowedExtensions })">选择文件</el-button>
                                     <el-button
-                                        v-if="form.dataType === 'pointcloud'"
-                                        @click="openPicker({ title: '选择多个点云文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: allowedExtensions })"
+                                        v-if="form.dataType === 'pointcloud' || form.dataType === 'osgb'"
+                                        @click="openPicker({ title: '选择多个 3D Tiles 输入文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'filePatterns', allowedExtensions: allowedExtensions })"
                                     >
                                         选择多个文件
                                     </el-button>
                                     <el-button @click="clearField('filePatterns')">清空</el-button>
                                 </div>
                             </div>
-                        </el-form-item>
-
-                        <el-form-item v-else label="OSGB 输入（支持多文件/目录/*）">
-                            <div class="path-field path-field-inline">
-                                <el-input v-model="form.sourcePath" placeholder="支持 .osgb、目录、*.osgb，多个文件可逗号分隔" />
-                                <div class="path-field-actions">
-                                    <el-button @click="openPicker({ title: '选择 OSGB 文件', source: 'datasource', selectionMode: 'file', multiple: false, field: 'sourcePath', allowedExtensions: ['.osgb'] })">选择文件</el-button>
-                                    <el-button @click="openPicker({ title: '选择多个 OSGB 文件', source: 'datasource', selectionMode: 'file', multiple: true, field: 'sourcePath', allowedExtensions: ['.osgb'] })">选择多个文件</el-button>
-                                    <el-button @click="openPicker({ title: '选择 OSGB 目录', source: 'datasource', selectionMode: 'folder', multiple: false, field: 'sourcePath', allowedExtensions: [] })">选择目录</el-button>
-                                    <el-button @click="clearField('sourcePath')">清空</el-button>
-                                </div>
+                            <div v-if="form.dataType === 'osgb'" class="tile-help">
+                                批量 OSGB：上方“数据源目录”选基础文件夹，例如 `redownload_20260409/osgb_batch`；这里填 `*.osgb`。也可以直接选择单个或多个 `.osgb` 文件。
                             </div>
                         </el-form-item>
 

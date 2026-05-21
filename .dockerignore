@@ -8,6 +8,5 @@ frontend/public
 frontend/*.config.*
 frontend/package*.json
 frontend/index.html
-frontend/dist/basemap
 runtime
 project-assets

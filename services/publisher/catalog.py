@@ -5,12 +5,16 @@ import json
 import math
 import os
 import socket
+import sqlite3
+import subprocess
+import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from urllib.parse import quote, unquote, urlsplit
 import xml.etree.ElementTree as ET
 
-from flask import Response, jsonify, redirect, request, send_from_directory
+from flask import Response, has_request_context, jsonify, redirect, request, send_from_directory
 
 from config import config, taskLock, taskStatus
 from geoserverOps import deleteStore, getSeedStatus, publishGeoserverPayload
@@ -43,9 +47,19 @@ GEOSERVER_PUBLISH_METHODS = {"geoserver-wms", "geoserver-wmts"}
 GEOSERVER_RASTER_EXTENSIONS = {".tif", ".tiff"}
 DATASOURCE_PUBLISH_TYPE = "imagery"
 DATASOURCE_PUBLISH_METHOD = "geoserver-wmts"
+MBTILES_PUBLISH_METHOD = "mbtiles-mvt"
+MBTILES_SOURCE_EXTENSIONS = {".geojson", ".json", ".shp", ".gpkg", ".mbtiles"}
+MBTILES_VECTOR_SOURCE_EXTENSIONS = {".geojson", ".json", ".shp", ".gpkg"}
+STATIC_MVT_PUBLISH_METHODS = {"mvt", "mvt-xyz", "mvt-tms", "vector-tile", "vector-tiles"}
+STATIC_GEOJSON_TILE_METHODS = {"geojson-tile", "geojson-tiles"}
 GEOSERVER_WMTS_GRIDSET = "EPSG:900913"
 WEB_MERCATOR_MAX = 20037508.342789244
 WEB_MERCATOR_MAX_LAT = 85.05112878
+TIPPECANOE_RESILIENT_ARGS = [
+    "--detect-shared-borders",
+    "--coalesce-densest-as-needed",
+    "--extend-zooms-if-still-dropping",
+]
 
 
 def _mime_from_extension(extension):
@@ -66,6 +80,10 @@ def _mime_from_extension(extension):
         ".cmpt": "application/octet-stream",
     }
     return mapping.get(ext)
+
+
+def _is_mbtiles_publish_method(publish_method):
+    return str(publish_method or "").strip().lower() in {"mbtiles-mvt", "mvt-dynamic", "dynamic-mvt"}
 
 
 def _extension_from_mime(mime_type):
@@ -184,9 +202,9 @@ def _normalize_tile_scheme(tile_scheme, default="tms"):
 
 def _target_tile_scheme_for_publish_method(publish_method):
     normalized = str(publish_method or "").strip().lower()
-    if normalized in {"xyz", "wmts"}:
+    if normalized in {"xyz", "wmts", "mvt-xyz"}:
         return "google"
-    if normalized == "tms":
+    if normalized in {"tms", "mvt-tms"}:
         return "tms"
     return ""
 
@@ -408,6 +426,276 @@ def _build_access_url(path_value):
     return f"{_public_base_url()}/published/{normalized_path}"
 
 
+def _mbtiles_metadata(mbtiles_path):
+    metadata = {}
+    with sqlite3.connect(f"file:{mbtiles_path}?mode=ro", uri=True) as connection:
+        for name, value in connection.execute("SELECT name, value FROM metadata"):
+            metadata[str(name)] = value
+    json_metadata = metadata.get("json")
+    if json_metadata:
+        try:
+            parsed = json.loads(json_metadata)
+            if isinstance(parsed, dict):
+                metadata["json"] = parsed
+        except Exception:
+            pass
+    return metadata
+
+
+def _parse_bounds(value):
+    if isinstance(value, list) and len(value) == 4:
+        try:
+            return [float(item) for item in value]
+        except Exception:
+            return None
+    parts = str(value or "").split(",")
+    if len(parts) != 4:
+        return None
+    try:
+        return [float(item.strip()) for item in parts]
+    except Exception:
+        return None
+
+
+def _mbtiles_tilejson(publication, metadata=None):
+    metadata = dict(metadata or {})
+    publication_id = str(publication.get("publicationId") or publication.get("id") or "").strip()
+    public_base = _public_base_url()
+    vector_layers = []
+    parsed_json = metadata.get("json")
+    if isinstance(parsed_json, dict):
+        vector_layers = parsed_json.get("vector_layers") or parsed_json.get("vectorLayers") or []
+    if not isinstance(vector_layers, list):
+        vector_layers = []
+    return {
+        "tilejson": "2.2.0",
+        "name": metadata.get("name") or publication.get("alias") or publication_id,
+        "format": "pbf",
+        "scheme": "xyz",
+        "minzoom": int(metadata.get("minzoom") or 0),
+        "maxzoom": int(metadata.get("maxzoom") or 14),
+        "bounds": _parse_bounds(metadata.get("bounds")) or [-180, -85.05112878, 180, 85.05112878],
+        "center": _parse_bounds(metadata.get("center")),
+        "tiles": [f"{public_base}/mvt/{publication_id}/{{z}}/{{x}}/{{y}}.pbf"],
+        "vector_layers": vector_layers,
+    }
+
+
+def _resolve_mbtiles_publication(publication_id):
+    publication = _get_publication_snapshot(publication_id)
+    if not publication:
+        return None, None, "发布记录不存在"
+    metadata = _safe_dict(publication.get("metadata"))
+    publish_method = metadata.get("publishMethod") or publication.get("publishMethod")
+    if not _is_mbtiles_publish_method(publish_method):
+        return None, None, "发布记录不是 MBTiles 动态 MVT"
+    enabled = metadata.get("enabled")
+    if enabled is None:
+        enabled = str(publication.get("status") or "").strip().lower() in {"enabled", "published", "active"}
+    if not bool(enabled):
+        return None, None, "发布记录未启用"
+    publish_path = publication.get("publishPath") or metadata.get("sourcePath") or metadata.get("workspacePath")
+    normalized_path, full_path = _resolve_datasource_path(publish_path)
+    if not os.path.isfile(full_path):
+        return None, None, "MBTiles 文件不存在"
+    if not full_path.lower().endswith(".mbtiles"):
+        return None, None, "发布源不是 .mbtiles 文件"
+    return publication, full_path, None
+
+
+def _sanitize_mbtiles_layer_name(value):
+    text = str(value or "").strip()
+    text = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in text).strip("_")
+    if not text:
+        text = "atlasworks_mvt"
+    if text[0].isdigit():
+        text = f"layer_{text}"
+    return text[:63]
+
+
+def _run_publish_command(command):
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or result.stdout or f"命令执行失败: {' '.join(command)}")
+    return result
+
+
+def _build_mbtiles_from_vector_source(source_path, alias, custom_metadata=None):
+    custom_metadata = _safe_dict(custom_metadata)
+    min_zoom = max(0, min(22, int(custom_metadata.get("minZoom") or 0)))
+    max_zoom = max(0, min(22, int(custom_metadata.get("maxZoom") or 14)))
+    if max_zoom < min_zoom:
+        raise ValueError("maxZoom 不能小于 minZoom")
+
+    layer_name = _sanitize_mbtiles_layer_name(
+        custom_metadata.get("layerName")
+        or os.path.splitext(os.path.basename(source_path))[0]
+        or alias
+    )
+    safe_alias = _sanitize_mbtiles_layer_name(alias or os.path.splitext(os.path.basename(source_path))[0] or "mbtiles")
+    output_dir = os.path.join(config["dataSourceDir"], "_generated", "mbtiles")
+    os.makedirs(output_dir, exist_ok=True)
+    output_name = f"{safe_alias}-{datetime.now().strftime('%Y%m%d%H%M%S')}.mbtiles"
+    output_path = os.path.join(output_dir, output_name)
+
+    temp_dir = tempfile.mkdtemp(prefix="atlasworks-publish-mbtiles-")
+    try:
+        gpkg_path = os.path.join(temp_dir, "source_layers.gpkg")
+        geojsonseq_path = os.path.join(temp_dir, "tippecanoe_input.geojsonseq")
+        source_layer = _sanitize_mbtiles_layer_name(os.path.splitext(os.path.basename(source_path))[0] or layer_name)
+        _run_publish_command([
+            "ogr2ogr",
+            "-f", "GPKG",
+            gpkg_path,
+            source_path,
+            "-nln", source_layer,
+            "-skipfailures",
+        ])
+        _run_publish_command([
+            "ogr2ogr",
+            "-f", "GeoJSONSeq",
+            geojsonseq_path,
+            gpkg_path,
+            "-t_srs", "EPSG:4326",
+        ])
+        _run_publish_command([
+            "tippecanoe",
+            "-o", output_path,
+            "-Z", str(min_zoom),
+            "-z", str(max_zoom),
+            "-l", layer_name,
+            "--force",
+            *TIPPECANOE_RESILIENT_ARGS,
+            geojsonseq_path,
+        ])
+    finally:
+        try:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    relative_output = os.path.relpath(output_path, config["dataSourceDir"]).replace("\\", "/")
+    return {
+        "path": relative_output,
+        "fullPath": output_path,
+        "minZoom": min_zoom,
+        "maxZoom": max_zoom,
+        "layerName": layer_name,
+    }
+
+
+def _run_async_mbtiles_generation(publication_id, source_path, alias, custom_metadata=None):
+    def _worker():
+        try:
+            publication = _get_publication_snapshot(publication_id)
+            if not publication:
+                return
+
+            base_metadata = _safe_dict(publication.get("metadata"))
+            merged_custom_metadata = _safe_dict(base_metadata.get("customMetadata"))
+            merged_custom_metadata.update(_safe_dict(custom_metadata))
+
+            generated = _build_mbtiles_from_vector_source(
+                source_path,
+                alias,
+                merged_custom_metadata,
+            )
+
+            merged_custom_metadata.update({
+                "generatedFrom": source_path,
+                "generatedMbtiles": generated["path"],
+                "minZoom": generated["minZoom"],
+                "maxZoom": generated["maxZoom"],
+                "layerName": generated["layerName"],
+                "buildState": "ready",
+                "buildError": "",
+            })
+
+            updated_metadata = {
+                **base_metadata,
+                "workspacePath": generated["path"],
+                "sourcePath": generated["path"],
+                "sourcePaths": [generated["path"]],
+                "sourceEntryCount": 1,
+                "sourceFileCount": 1,
+                "customMetadata": merged_custom_metadata,
+            }
+
+            publication["publishPath"] = generated["path"]
+            publication["status"] = "enabled" if bool(updated_metadata.get("enabled", True)) else "disabled"
+            publication["metadata"] = updated_metadata
+            publication["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            _persist_publication_snapshot(publication, metadata_override=updated_metadata, status_override=publication["status"])
+            logMessage(f"动态 MVT 后台生成完成: {publication_id} -> {generated['path']}", "INFO")
+        except Exception as exc:
+            publication = _get_publication_snapshot(publication_id)
+            if publication:
+                failed_metadata = _safe_dict(publication.get("metadata"))
+                failed_custom_metadata = _safe_dict(failed_metadata.get("customMetadata"))
+                failed_custom_metadata.update({
+                    "generatedFrom": source_path,
+                    "buildState": "failed",
+                    "buildError": str(exc),
+                })
+                failed_metadata["customMetadata"] = failed_custom_metadata
+                publication["status"] = "failed"
+                publication["metadata"] = failed_metadata
+                publication["updatedAt"] = datetime.now(timezone.utc).isoformat()
+                _persist_publication_snapshot(publication, metadata_override=failed_metadata, status_override="failed")
+            logMessage(f"动态 MVT 后台生成失败 {publication_id}: {exc}", "ERROR")
+
+    thread = threading.Thread(target=_worker, name=f"atlasworks-mbtiles-{publication_id}", daemon=True)
+    thread.start()
+
+
+def serveMbtilesTileJson(publication_id=None):
+    try:
+        publication, mbtiles_path, error = _resolve_mbtiles_publication(publication_id)
+        if error:
+            return jsonify({"success": False, "error": error}), 404
+        metadata = _mbtiles_metadata(mbtiles_path)
+        return jsonify(_mbtiles_tilejson(publication, metadata))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    except Exception as exc:
+        logMessage(f"读取 MBTiles TileJSON 失败 {publication_id}: {exc}", "ERROR")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+def serveMbtilesTile(publication_id=None, z=None, x=None, y=None):
+    try:
+        publication, mbtiles_path, error = _resolve_mbtiles_publication(publication_id)
+        if error:
+            return jsonify({"success": False, "error": error}), 404
+        zoom = int(z)
+        tile_column = int(x)
+        xyz_y = int(str(y).split(".")[0])
+        if zoom < 0 or tile_column < 0 or xyz_y < 0:
+            return jsonify({"success": False, "error": "瓦片坐标非法"}), 400
+        tile_row = (2 ** zoom - 1) - xyz_y
+        if tile_row < 0:
+            return jsonify({"success": False, "error": "瓦片坐标超出范围"}), 404
+        with sqlite3.connect(f"file:{mbtiles_path}?mode=ro", uri=True) as connection:
+            row = connection.execute(
+                "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?",
+                (zoom, tile_column, tile_row),
+            ).fetchone()
+        if not row:
+            return jsonify({"success": False, "error": "瓦片不存在"}), 404
+        tile_data = row[0]
+        response = Response(tile_data, mimetype="application/vnd.mapbox-vector-tile")
+        if bytes(tile_data[:2]) == b"\x1f\x8b":
+            response.headers["Content-Encoding"] = "gzip"
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+    except ValueError:
+        return jsonify({"success": False, "error": "瓦片坐标非法"}), 400
+    except Exception as exc:
+        logMessage(f"读取 MBTiles 瓦片失败 {publication_id}/{z}/{x}/{y}: {exc}", "ERROR")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 def _build_nginx_published_url(path_value):
     normalized_path = _normalize_relative_path(path_value)
     base_url = _nginx_public_base_url()
@@ -495,6 +783,19 @@ def _public_base_url():
     configured_base_url = str(config.get("publicBaseUrl") or "").strip().rstrip("/")
     if configured_base_url:
         return configured_base_url
+
+    if not has_request_context():
+        configured_base_host = str(config.get("publicBaseHost") or "").strip()
+        target_scheme = str(config.get("publicBaseScheme") or "http").strip() or "http"
+        try:
+            explicit_port = int(config.get("publicBasePort") or 0)
+        except (TypeError, ValueError):
+            explicit_port = 0
+        target_port = explicit_port or int(config.get("port") or 18000)
+        if configured_base_host:
+            return _build_host_url(target_scheme, configured_base_host, target_port)
+        detected_host = _detect_container_ip() or "127.0.0.1"
+        return _build_host_url(target_scheme, detected_host, target_port)
 
     request_parts = urlsplit(request.host_url)
     request_host = request_parts.hostname or ""
@@ -822,6 +1123,15 @@ def _resolve_data_source_path(path_value=""):
     return normalized_path, full_path
 
 
+def _resolve_datasource_path(path_value=""):
+    normalized_path = _normalize_relative_path(path_value)
+    data_root = os.path.abspath(config["dataSourceDir"])
+    full_path = os.path.abspath(os.path.join(data_root, normalized_path))
+    if full_path != data_root and not full_path.startswith(f"{data_root}{os.sep}"):
+        raise ValueError("数据源路径非法")
+    return normalized_path, full_path
+
+
 def _normalize_data_source_paths(source_paths):
     normalized = []
     seen = set()
@@ -849,7 +1159,7 @@ def _is_supported_publication_record(publication):
         or ""
     ).strip().lower()
     if source_mode == "datasource":
-        return _is_geoserver_publish_method(publish_method)
+        return _is_geoserver_publish_method(publish_method) or _is_mbtiles_publish_method(publish_method)
     return True
 
 
@@ -1030,6 +1340,21 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
     publish_method = str(publish_method or "").strip().lower()
     publish_type = str(publish_type or "").strip().lower()
 
+    if _is_mbtiles_publish_method(publish_method):
+        publication_key = str(publication_id or "").strip()
+        if publication_key:
+            access_url = f"{public_base}/mvt/{publication_key}/{{z}}/{{x}}/{{y}}.pbf"
+            launch_url = f"{public_base}/mvt/{publication_key}/tiles.json"
+            sample_url = f"{public_base}/mvt/{publication_key}/0/0/0.pbf"
+            browser_url = launch_url
+        return {
+            "browserUrl": browser_url,
+            "accessUrl": access_url,
+            "launchUrl": launch_url,
+            "sampleUrl": sample_url,
+            "publicBaseUrl": public_base,
+        }
+
     if publish_method in GEOSERVER_PUBLISH_METHODS:
         metadata_layer_names = metadata.get("geoserverLayerNames") or _safe_dict(metadata.get("customMetadata")).get("geoserverLayerNames")
         geoserver_urls = _build_geoserver_urls(
@@ -1072,10 +1397,10 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
     tile_profile = _resolve_tile_publish_profile(full_path, metadata=metadata)
     source_tile_scheme = tile_profile.get("sourceTileScheme") or "tms"
     target_tile_scheme = _target_tile_scheme_for_publish_method(publish_method)
-    is_vector_tile_publish = publish_method in {"mvt", "vector-tile", "vector-tiles", "geojson-tile", "geojson-tiles"}
+    is_vector_tile_publish = publish_method in STATIC_MVT_PUBLISH_METHODS or publish_method in STATIC_GEOJSON_TILE_METHODS
     tileset_entry = _find_tileset_entry(full_path) if publish_method == "3d-tiles" or publish_type == "3dtiles" else None
     enable_tile_template = (
-        publish_method in {"wmts", "tms", "xyz", "quantized-mesh", "cesium-terrain", "terrain", "mvt", "vector-tile", "vector-tiles", "geojson-tile", "geojson-tiles"}
+        publish_method in {"wmts", "tms", "xyz", "quantized-mesh", "cesium-terrain", "terrain"} or publish_method in STATIC_MVT_PUBLISH_METHODS or publish_method in STATIC_GEOJSON_TILE_METHODS
         or publish_type == "terrain"
     )
     tile_info = _find_tile_template_info(full_path) if enable_tile_template else None
@@ -1125,7 +1450,7 @@ def _build_publication_access_payload(publish_path, publish_method=None, publish
             if transformed_sample_y is not None:
                 sample_y = str(transformed_sample_y)
 
-        if publish_method in {"xyz", "tms"} and publication_id:
+        if (publish_method in {"xyz", "tms"} or publish_method in {"mvt-xyz", "mvt-tms"}) and publication_id:
             tile_template_url = _build_publication_asset_url(
                 publication_id,
                 f"{{z}}/{{x}}/{{y}}{tile_extension}",
@@ -1191,8 +1516,11 @@ def _augment_publication_response(payload, include_runtime_state=True, include_v
     response["enabled"] = bool(metadata.get("enabled", True))
     response["customMetadata"] = _safe_dict(response.get("customMetadata") or metadata.get("customMetadata"))
     response["publicationId"] = response.get("publicationId") or response.get("id")
+    publish_method = str(response.get("publishMethod") or metadata.get("publishMethod") or "").strip().lower()
+    publish_type = str(response.get("publishType") or "").strip().lower()
+    publish_path = response.get("publishPath") or metadata.get("workspacePath")
     response["bounds"] = _filter_focus_bounds(_publication_bounds(response, metadata))
-    if not response["bounds"]:
+    if not response["bounds"] and not _is_mbtiles_publish_method(publish_method):
         try:
             _, full_path = _resolve_tiles_path(publish_path)
             response["bounds"] = _tile_metadata_wgs84_bounds(full_path)
@@ -1203,10 +1531,7 @@ def _augment_publication_response(payload, include_runtime_state=True, include_v
     response["sourceEntryCount"] = int(metadata.get("sourceEntryCount") or 0)
     response["sourceFileCount"] = int(metadata.get("sourceFileCount") or 0)
 
-    publish_method = str(response.get("publishMethod") or metadata.get("publishMethod") or "").strip().lower()
-    publish_type = str(response.get("publishType") or "").strip().lower()
-    publish_path = response.get("publishPath") or metadata.get("workspacePath")
-    if publish_path and not metadata.get("sourceProjection"):
+    if publish_path and not metadata.get("sourceProjection") and not _is_mbtiles_publish_method(publish_method):
         try:
             _, full_path = _resolve_tiles_path(publish_path)
             tile_profile = _resolve_tile_publish_profile(full_path, metadata=metadata)
@@ -1215,24 +1540,29 @@ def _augment_publication_response(payload, include_runtime_state=True, include_v
         except Exception as exc:
             logMessage(f"补充发布投影信息失败: {publish_path} - {exc}", "WARNING")
     response["sourceProjection"] = metadata.get("sourceProjection") or ""
-    is_vector_tile_publish = publish_method in {"mvt", "vector-tile", "vector-tiles", "geojson-tile", "geojson-tiles"} or publish_type == "vector"
+    is_vector_tile_publish = publish_method in STATIC_MVT_PUBLISH_METHODS or publish_method in STATIC_GEOJSON_TILE_METHODS or _is_mbtiles_publish_method(publish_method) or publish_type == "vector"
     if include_vector_details and is_vector_tile_publish and publish_path:
         try:
-            normalized_path, full_path = _resolve_tiles_path(publish_path)
-            vector_tileset = _load_vector_tileset_metadata(full_path)
+            if _is_mbtiles_publish_method(publish_method):
+                normalized_path, full_path = _resolve_datasource_path(publish_path)
+                mbtiles_meta = _mbtiles_metadata(full_path) if os.path.isfile(full_path) else {}
+                vector_tileset = _mbtiles_tilejson(response, mbtiles_meta) if mbtiles_meta else None
+            else:
+                normalized_path, full_path = _resolve_tiles_path(publish_path)
+                vector_tileset = _load_vector_tileset_metadata(full_path)
             if vector_tileset:
                 vector_publication = {
-                    "kind": "mvt" if publish_method in {"mvt", "vector-tile", "vector-tiles"} else "geojson",
+                    "kind": "mvt" if publish_method in STATIC_MVT_PUBLISH_METHODS or _is_mbtiles_publish_method(publish_method) else "geojson",
                     "tileJsonUrl": response.get("launchUrl"),
                     "xyzTemplate": response.get("accessUrl"),
                     "sampleTileUrl": response.get("sampleUrl"),
-                    "tilesetUrl": f"{_public_base_url()}/published/{normalized_path}/tileset.json",
+                    "tilesetUrl": response.get("launchUrl") if _is_mbtiles_publish_method(publish_method) else f"{_public_base_url()}/published/{normalized_path}/tileset.json",
                     "format": vector_tileset.get("format"),
                     "scheme": vector_tileset.get("scheme"),
                     "minzoom": vector_tileset.get("minzoom"),
                     "maxzoom": vector_tileset.get("maxzoom"),
                     "bounds": vector_tileset.get("bounds"),
-                    "vectorLayers": vector_tileset.get("vectorLayers") or [],
+                    "vectorLayers": vector_tileset.get("vectorLayers") or vector_tileset.get("vector_layers") or [],
                 }
                 response["vectorPublication"] = vector_publication
                 metadata["vectorLayers"] = vector_publication["vectorLayers"]
@@ -1645,7 +1975,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         existing_custom_metadata.get("sourcePaths"),
     )
     source_entries = []
-    if normalized_publish_method in GEOSERVER_PUBLISH_METHODS:
+    if normalized_publish_method in GEOSERVER_PUBLISH_METHODS or _is_mbtiles_publish_method(normalized_publish_method):
         source_entries = _normalize_data_source_paths(incoming_source_paths)
         if not source_entries and workspace_path:
             source_entries = _normalize_data_source_paths([workspace_path])
@@ -1661,7 +1991,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         existing_metadata.get("sourceMode"),
         existing_custom_metadata.get("sourceMode"),
     ).lower()
-    if normalized_publish_method in GEOSERVER_PUBLISH_METHODS:
+    if normalized_publish_method in GEOSERVER_PUBLISH_METHODS or _is_mbtiles_publish_method(normalized_publish_method):
         source_mode_input = "datasource"
     if source_mode_input not in {"task", "manual", "artifact", "datasource"}:
         if task_id:
@@ -1671,7 +2001,13 @@ def _prepare_publication_payload(data, existing_publication=None):
         else:
             source_mode_input = "manual"
     if source_mode_input == "datasource":
-        if not normalized_publish_method or normalized_publish_method not in GEOSERVER_PUBLISH_METHODS:
+        if _is_mbtiles_publish_method(normalized_publish_method):
+            publish_method = MBTILES_PUBLISH_METHOD
+            normalized_publish_method = MBTILES_PUBLISH_METHOD
+        elif str(data.get("publishType") or "").strip().lower() == "vector" and not normalized_publish_method:
+            publish_method = MBTILES_PUBLISH_METHOD
+            normalized_publish_method = MBTILES_PUBLISH_METHOD
+        elif not normalized_publish_method or normalized_publish_method not in GEOSERVER_PUBLISH_METHODS:
             publish_method = DATASOURCE_PUBLISH_METHOD
             normalized_publish_method = DATASOURCE_PUBLISH_METHOD
 
@@ -1691,7 +2027,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         "imagery",
     )
     if source_mode_input == "datasource":
-        publish_type = DATASOURCE_PUBLISH_TYPE
+        publish_type = "vector" if _is_mbtiles_publish_method(normalized_publish_method) else DATASOURCE_PUBLISH_TYPE
     default_alias = artifact_id or task_id or os.path.basename(workspace_path.rstrip("/")) or "publication"
     alias = _first_non_blank(
         data.get("alias"),
@@ -1712,12 +2048,27 @@ def _prepare_publication_payload(data, existing_publication=None):
     publish_path_input = _normalize_data_source_path(raw_publish_path) if source_mode_input == "datasource" else _normalize_relative_path(raw_publish_path)
     publish_path = publish_path_input or default_publish_path
 
+    mbtiles_source_path = None
     if source_mode_input == "datasource":
         is_valid_publish_path, full_publish_path = validateDataSourcePath(publish_path)
         if not is_valid_publish_path:
             return None, (full_publish_path, 400)
         if not os.path.exists(full_publish_path):
             return None, ("发布数据源不存在", 404)
+        if _is_mbtiles_publish_method(normalized_publish_method):
+            source_extension = os.path.splitext(full_publish_path)[1].lower()
+            if not os.path.isfile(full_publish_path) or source_extension not in MBTILES_SOURCE_EXTENSIONS:
+                return None, ("动态 MVT 发布请选择 .mbtiles、.geojson、.shp 或 .gpkg 文件", 400)
+            if source_extension in MBTILES_VECTOR_SOURCE_EXTENSIONS:
+                original_source_path = publish_path
+                mbtiles_source_path = full_publish_path
+                custom_metadata = _safe_dict(data.get("customMetadata"))
+                custom_metadata.update({
+                    "generatedFrom": original_source_path,
+                    "buildState": "pending",
+                    "buildError": "",
+                })
+                data = {**data, "customMetadata": custom_metadata}
     else:
         is_valid_publish_path, full_publish_path = validateWorkspacePath(publish_path)
         if not is_valid_publish_path:
@@ -1794,7 +2145,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         "publishType": publish_type,
         "publishPath": publish_path,
         "alias": alias,
-        "status": "enabled" if enabled else "disabled",
+        "status": ("draft" if source_mode_input == "datasource" and _is_mbtiles_publish_method(normalized_publish_method) and mbtiles_source_path else ("enabled" if enabled else "disabled")),
         "publishedAt": published_at,
         "createdAt": existing_publication.get("createdAt") or published_at,
         "updatedAt": updated_at,
@@ -1832,6 +2183,7 @@ def _prepare_publication_payload(data, existing_publication=None):
         "descriptor": descriptor,
         "publishedAt": published_at,
         "artifact": artifact,
+        "pendingMbtilesSourcePath": mbtiles_source_path,
     }, None
 
 
@@ -1996,6 +2348,9 @@ def _publication_record_to_response(record, include_runtime_state=True, include_
 def _normalize_publication_status(status, metadata=None):
     metadata = _safe_dict(metadata)
     normalized_status = str(status or "").strip().lower()
+    custom_metadata = _safe_dict(metadata.get("customMetadata"))
+    if _is_mbtiles_publish_method(metadata.get("publishMethod")) and custom_metadata.get("buildState") == "pending":
+        return "draft"
     if normalized_status == "published":
         return "enabled" if metadata.get("enabled", True) else "disabled"
     return normalized_status or str(status or "").strip()
@@ -2006,6 +2361,13 @@ def _publication_record_to_list_item(record):
         return None
 
     metadata = _safe_dict(record.get("metadata"))
+    access_payload = _build_publication_access_payload(
+        record.get("publishPath"),
+        metadata.get("publishMethod"),
+        record.get("publishType"),
+        record.get("id"),
+        metadata,
+    )
     return {
         "publicationId": record.get("id"),
         "artifactId": record.get("artifactId"),
@@ -2022,6 +2384,10 @@ def _publication_record_to_list_item(record):
         "sourceEntryCount": int(metadata.get("sourceEntryCount") or 0),
         "sourceFileCount": int(metadata.get("sourceFileCount") or 0),
         "bounds": _publication_bounds(record, metadata),
+        "browserUrl": access_payload.get("browserUrl"),
+        "accessUrl": access_payload.get("accessUrl"),
+        "launchUrl": access_payload.get("launchUrl"),
+        "sampleUrl": access_payload.get("sampleUrl"),
         "publishedAt": record.get("publishedAt"),
         "createdAt": record.get("createdAt"),
         "updatedAt": record.get("updatedAt"),
@@ -2034,6 +2400,13 @@ def _publication_descriptor_to_list_item(payload):
 
     metadata = _safe_dict(payload.get("metadata"))
     publication_id = payload.get("publicationId") or payload.get("id")
+    access_payload = _build_publication_access_payload(
+        payload.get("publishPath"),
+        metadata.get("publishMethod"),
+        payload.get("publishType"),
+        publication_id,
+        metadata,
+    )
     return {
         "publicationId": publication_id,
         "artifactId": payload.get("artifactId"),
@@ -2050,6 +2423,10 @@ def _publication_descriptor_to_list_item(payload):
         "sourceEntryCount": int(metadata.get("sourceEntryCount") or 0),
         "sourceFileCount": int(metadata.get("sourceFileCount") or 0),
         "bounds": _publication_bounds(payload, metadata),
+        "browserUrl": access_payload.get("browserUrl"),
+        "accessUrl": access_payload.get("accessUrl"),
+        "launchUrl": access_payload.get("launchUrl"),
+        "sampleUrl": access_payload.get("sampleUrl"),
         "publishedAt": payload.get("publishedAt"),
         "createdAt": payload.get("createdAt"),
         "updatedAt": payload.get("updatedAt"),
@@ -2209,6 +2586,15 @@ def createPublication():
 
         _persist_publication_record(prepared, metadata_override=metadata, status_override=initial_status)
 
+        pending_mbtiles_source_path = prepared.get("pendingMbtilesSourcePath")
+        if pending_mbtiles_source_path:
+            _run_async_mbtiles_generation(
+                publication_id,
+                pending_mbtiles_source_path,
+                alias or os.path.splitext(os.path.basename(pending_mbtiles_source_path))[0],
+                metadata.get("customMetadata"),
+            )
+
         build_job_id = artifact.get("buildJobId") if artifact else None
         if build_job_id:
             appendJobEvent(
@@ -2276,6 +2662,15 @@ def updatePublication(publication_id=None, publicationId=None):
             metadata_override=prepared["descriptor"]["metadata"],
             status_override=descriptor["status"],
         )
+
+        pending_mbtiles_source_path = prepared.get("pendingMbtilesSourcePath")
+        if pending_mbtiles_source_path:
+            _run_async_mbtiles_generation(
+                prepared["publicationId"],
+                pending_mbtiles_source_path,
+                prepared["alias"] or os.path.splitext(os.path.basename(pending_mbtiles_source_path))[0],
+                prepared["descriptor"]["metadata"].get("customMetadata"),
+            )
 
         if publication_id != prepared["publicationId"]:
             deletePublicationRecord(publication_id)
@@ -2595,7 +2990,7 @@ def _resolve_publication_asset_path(publication, relative_path=""):
     publish_method = str(metadata.get("publishMethod") or "").strip().lower()
     tile_request = _parse_tile_request_path(normalized_relative)
 
-    if tile_request and publish_method in {"xyz", "tms"}:
+    if tile_request and publish_method in {"xyz", "tms", "mvt-xyz", "mvt-tms"}:
         tile_profile = _resolve_tile_publish_profile(full_publish_path, metadata=metadata)
         source_tile_scheme = tile_profile.get("sourceTileScheme") or "tms"
         requested_tile_scheme = _target_tile_scheme_for_publish_method(publish_method)

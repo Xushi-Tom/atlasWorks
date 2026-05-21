@@ -106,7 +106,9 @@ function syncSelection() {
     selectedPaths.value = normalizeListInput(props.currentValue);
 }
 
-const loadedCount = computed(() => tableRows.value.length);
+const loadedCount = computed(() => (
+    (browser.value?.directories || []).length + browserFiles.value.length
+));
 const hasMore = computed(() => loadedCount.value < total.value);
 
 function mergePagedRows(existingRows = [], incomingRows = []) {
