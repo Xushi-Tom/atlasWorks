@@ -990,6 +990,161 @@ def listPublicationRecords(limit=50):
             conn.close()
 
 
+def listPublicationRecordsPage(page=1, page_size=10, keyword="", publish_type="", status=""):
+    if not isDatabaseEnabled():
+        return [], {
+            "count": 0,
+            "total": 0,
+            "page": max(1, int(page or 1)),
+            "pageSize": max(1, int(page_size or 10)),
+            "totalPages": 0,
+            "hasPrev": False,
+            "hasNext": False,
+        }
+
+    current_page = max(1, int(page or 1))
+    current_page_size = max(1, int(page_size or 10))
+    offset = (current_page - 1) * current_page_size
+    filters = []
+    params = []
+
+    normalized_status_sql = """
+        CASE
+            WHEN lower(COALESCE(metadata #>> '{customMetadata,buildState}', '')) = 'pending'
+                 AND lower(COALESCE(metadata->>'publishMethod', '')) IN ('mbtiles-mvt', 'mvt-dynamic', 'dynamic-mvt')
+                THEN 'draft'
+            WHEN lower(COALESCE(status, '')) = 'published'
+                THEN CASE
+                    WHEN COALESCE((metadata->>'enabled')::boolean, TRUE) THEN 'enabled'
+                    ELSE 'disabled'
+                END
+            ELSE lower(COALESCE(NULLIF(status, ''), ''))
+        END
+    """
+
+    filters.append(
+        """
+        (
+            lower(COALESCE(metadata->>'sourceMode', '')) <> 'datasource'
+            OR lower(COALESCE(metadata->>'publishMethod', '')) IN (
+                'geoserver-wms', 'geoserver-wmts', 'mbtiles-mvt', 'mvt-dynamic', 'dynamic-mvt'
+            )
+        )
+        """
+    )
+
+    publish_type_value = str(publish_type or "").strip().lower()
+    if publish_type_value:
+        filters.append("lower(COALESCE(publish_type, '')) = %s")
+        params.append(publish_type_value)
+
+    status_value = str(status or "").strip().lower()
+    if status_value:
+        filters.append(f"({normalized_status_sql}) = %s")
+        params.append(status_value)
+
+    keyword_value = str(keyword or "").strip().lower()
+    if keyword_value:
+        filters.append(
+            f"""
+            (
+                lower(COALESCE(id, '')) LIKE %s
+                OR lower(COALESCE(alias, '')) LIKE %s
+                OR lower(COALESCE(publish_path, '')) LIKE %s
+                OR lower(COALESCE(metadata->>'workspacePath', '')) LIKE %s
+                OR lower(COALESCE(metadata->>'sourcePath', '')) LIKE %s
+                OR lower(COALESCE(metadata->>'taskId', '')) LIKE %s
+                OR lower(COALESCE(metadata->>'publishMethod', '')) LIKE %s
+                OR lower(COALESCE(publish_type, '')) LIKE %s
+                OR ({normalized_status_sql}) LIKE %s
+            )
+            """
+        )
+        keyword_pattern = f"%{keyword_value}%"
+        params.extend([keyword_pattern] * 9)
+
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    conn = None
+    try:
+        conn = _get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM tf_publications
+                {where_clause}
+                """,
+                tuple(params),
+            )
+            total = int(cursor.fetchone()[0] or 0)
+            total_pages = (total + current_page_size - 1) // current_page_size if total else 0
+            if total_pages:
+                current_page = min(current_page, total_pages)
+                offset = (current_page - 1) * current_page_size
+
+            cursor.execute(
+                f"""
+                SELECT id, artifact_id, publish_type, publish_path, alias, status, metadata::text,
+                       browser_url, access_url, launch_url, sample_url, public_base_url,
+                       published_at::text, created_at::text, updated_at::text
+                FROM tf_publications
+                {where_clause}
+                ORDER BY COALESCE(published_at, created_at) DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params + [current_page_size, offset]),
+            )
+            rows = cursor.fetchall()
+        conn.commit()
+
+        results = []
+        for row in rows:
+            results.append(
+                {
+                    "id": row[0],
+                    "artifactId": row[1],
+                    "publishType": row[2],
+                    "publishPath": row[3],
+                    "alias": row[4],
+                    "status": row[5],
+                    "metadata": json.loads(row[6]) if row[6] else {},
+                    "browserUrl": row[7],
+                    "accessUrl": row[8],
+                    "launchUrl": row[9],
+                    "sampleUrl": row[10],
+                    "publicBaseUrl": row[11],
+                    "publishedAt": row[12],
+                    "createdAt": row[13],
+                    "updatedAt": row[14],
+                }
+            )
+        return results, {
+            "count": len(results),
+            "total": total,
+            "page": current_page,
+            "pageSize": current_page_size,
+            "totalPages": total_pages,
+            "hasPrev": current_page > 1 and total > 0,
+            "hasNext": current_page < total_pages,
+        }
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        _log_db_message(f"分页列出发布记录失败: {exc}", "WARNING")
+        return [], {
+            "count": 0,
+            "total": 0,
+            "page": current_page,
+            "pageSize": current_page_size,
+            "totalPages": 0,
+            "hasPrev": False,
+            "hasNext": False,
+        }
+    finally:
+        if conn:
+            conn.close()
+
+
 def fetchPublicationRecord(publication_id):
     if not isDatabaseEnabled():
         return None

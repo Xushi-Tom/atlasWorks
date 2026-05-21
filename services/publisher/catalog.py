@@ -29,6 +29,7 @@ from db import (
     isDatabaseEnabled,
     listArtifactRecords,
     listPublicationRecords,
+    listPublicationRecordsPage,
     upsertPublicationRecord,
 )
 from pagination import paginate_items, parse_pagination_args
@@ -2361,13 +2362,22 @@ def _publication_record_to_list_item(record):
         return None
 
     metadata = _safe_dict(record.get("metadata"))
-    access_payload = _build_publication_access_payload(
-        record.get("publishPath"),
-        metadata.get("publishMethod"),
-        record.get("publishType"),
-        record.get("id"),
-        metadata,
-    )
+    if any(record.get(key) for key in ("browserUrl", "accessUrl", "launchUrl", "sampleUrl")):
+        access_payload = {
+            "browserUrl": record.get("browserUrl"),
+            "accessUrl": record.get("accessUrl"),
+            "launchUrl": record.get("launchUrl"),
+            "sampleUrl": record.get("sampleUrl"),
+            "publicBaseUrl": record.get("publicBaseUrl"),
+        }
+    else:
+        access_payload = _build_publication_access_payload(
+            record.get("publishPath"),
+            metadata.get("publishMethod"),
+            record.get("publishType"),
+            record.get("id"),
+            metadata,
+        )
     return {
         "publicationId": record.get("id"),
         "artifactId": record.get("artifactId"),
@@ -2698,6 +2708,24 @@ def listPublications():
         publish_type = str(request.args.get("publishType", "")).strip().lower()
         status_filter = str(request.args.get("status", "")).strip().lower()
         include_details = str(request.args.get("includeDetails", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+        if isDatabaseEnabled() and not include_details:
+            records, pagination = listPublicationRecordsPage(
+                page=page,
+                page_size=page_size,
+                keyword=keyword,
+                publish_type=publish_type,
+                status=status_filter,
+            )
+            return jsonify({
+                "success": True,
+                "publications": [
+                    item for item in (_publication_record_to_list_item(record) for record in records)
+                    if _is_supported_publication_record(item)
+                ],
+                **pagination,
+            })
+
         publications = {}
 
         for record in listPublicationRecords(limit=1000):
