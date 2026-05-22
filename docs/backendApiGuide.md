@@ -15,6 +15,12 @@
 - `GET /api/health`
   健康检查，返回服务状态、数据库状态和基础任务统计。
 
+- `GET /api/docs`
+  在线 API Reference 页面，基于当前 Flask 路由实时生成 OpenAPI 文档。
+
+- `GET /api/openapi.json`
+  OpenAPI 3.0 JSON 规范，包含参数 schema、枚举取值和中文枚举说明。
+
 - `GET /api/system/info`
   返回系统配置、资源信息、数据库健康和任务统计。
 
@@ -52,6 +58,12 @@
 
 - `POST /api/tile/terrain`
   执行 terrain 切片任务。
+
+- `POST /api/tile/3dtiles`
+  执行 3D Tiles 构建任务，支持 `pointcloud`、`vector`、`model`、`osgb` 输入类型。
+
+- `POST /api/tile/mvt`
+  执行二维矢量切片任务，支持 MVT 与 GeoJSON 瓦片输出。
 
 - `POST /api/tile/convert`
   在 `z/x_y.ext` 与 `z/x/y.ext` 两种目录结构之间转换瓦片目录。
@@ -132,8 +144,28 @@
 - `GET /api/publications/<publicationId>`
   获取发布详情。
 
-## 当前仍未覆盖的部分
+- `PUT /api/publications/<publicationId>`
+  更新发布记录。
 
-- 还没有标准 OpenAPI/Swagger 文档
+- `PATCH /api/publications/<publicationId>/enabled`
+  切换发布启用状态。
+
+- `GET /api/geoserver/health`
+  检查 GeoServer REST 服务状态。
+
+- `POST /api/geoserver/publish`
+  将数据源影像发布到 GeoServer，可选触发 GeoWebCache 预切片。
+
+- `GET /api/geoserver/layers`
+  列出 GeoServer 图层。
+
+- `GET /api/geoserver/layers/<name>`
+  获取 GeoServer 图层详情。
+
+- `POST /api/geoserver/layers/<name>/seed`
+  触发 GeoServer 预切片。
+
+## 文档覆盖说明
+
 - 还没有接口鉴权和权限模型
-- 3D Tiles、GeoJSON、OBJ、GLB 发布链路当前未纳入范围
+- OpenAPI 文档由 `services/control/apiDocs.py` 根据当前路由生成，并补充关键接口的请求参数、枚举取值与中文说明。

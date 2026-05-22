@@ -15,6 +15,82 @@ from version import APP_VERSION
 _PATH_PARAM_PATTERN = re.compile(r"<(?:[^:>]+:)?([^>]+)>")
 _OPENAPI_PARAM_PATTERN = re.compile(r"{([^}]+)}")
 
+_ENUM_VALUE_DESCRIPTIONS = {
+    "all": "全部更新",
+    "time": "时间/时区",
+    "environment": "环境变量",
+    "config": "运行配置",
+    "system": "系统清理",
+    "network": "网络检查",
+    "datasource": "数据源目录",
+    "workspace": "工作空间/结果目录",
+    "results": "工作空间/结果目录",
+    "map": "地图切片推荐",
+    "terrain": "地形切片/发布",
+    "map_tiles": "地图切片预检查",
+    "terrain_tiles": "地形切片预检查",
+    "indexed_tiles": "索引瓦片任务",
+    "flat": "扁平结构 z/x_y.ext",
+    "nested": "嵌套结构 z/x/y.ext",
+    "EPSG:3857": "Web Mercator",
+    "EPSG:4326": "WGS84 经纬度",
+    "EPSG:4490": "CGCS2000 经纬度",
+    "png": "PNG 图片",
+    "jpeg": "JPEG 图片",
+    "tms": "TMS 瓦片坐标",
+    "google": "Google/XYZ 瓦片坐标",
+    "auto": "自动判断",
+    "gray": "单波段灰度渲染",
+    "rgb": "RGB 三波段渲染",
+    "mvt": "Mapbox Vector Tile (.pbf)",
+    "geojson": "GeoJSON 瓦片",
+    "include": "保留未命中规则的要素",
+    "exclude": "排除未命中规则的要素",
+    "conservative": "保守层级策略",
+    "balanced": "均衡层级策略",
+    "aggressive": "激进层级策略",
+    "queued": "排队中",
+    "running": "执行中",
+    "completed": "已完成",
+    "failed": "失败",
+    "stopped": "已停止",
+    "pointcloud": "点云",
+    "vector": "矢量面/建筑",
+    "model": "OBJ 模型",
+    "osgb": "OSGB 模型",
+    "b3dm": "Batched 3D Model",
+    "glb": "GLB",
+    "meters": "字段值按米解释",
+    "floors": "字段值按楼层解释",
+    "manual": "手动经纬度锚点",
+    "artifact": "按产物发布",
+    "task": "按任务发布",
+    "imagery": "影像",
+    "electronic-map": "电子地图",
+    "3dtiles": "3D Tiles",
+    "xyz": "XYZ 静态瓦片",
+    "wmts": "WMTS",
+    "geojson-tile": "GeoJSON 静态瓦片",
+    "cesium-terrain": "Cesium Terrain",
+    "quantized-mesh": "Quantized Mesh 地形",
+    "3d-tiles": "3D Tiles",
+    "geoserver-wmts": "GeoServer WMTS",
+    "geoserver-wms": "GeoServer WMS",
+    "wms": "WMS",
+    "wfs": "WFS",
+    "static-download": "静态下载",
+    "private": "私有",
+    "internal": "内部",
+    "public": "公开",
+    "enabled": "已启用",
+    "disabled": "未启用",
+    "published": "已发布（兼容）",
+    "active": "激活（兼容）",
+    "draft": "草稿",
+    "image/png": "PNG 瓦片",
+    "image/jpeg": "JPEG 瓦片",
+}
+
 
 _OPERATION_OVERRIDES = {
     ("/api/health", "get"): {
@@ -105,7 +181,7 @@ _OPERATION_OVERRIDES = {
                 "schema": {"type": "string"},
                 "description": "本地相对路径，或 URL 编码后的 http/https 远程地址。",
             },
-            {"name": "tileType", "in": "query", "schema": {"type": "string"}, "description": "推荐配置类型，可选 map/terrain。"},
+            {"name": "tileType", "in": "query", "schema": {"type": "string", "enum": ["map", "terrain"]}, "description": "推荐配置类型。"},
             {"name": "minZoom", "in": "query", "schema": {"type": "integer", "minimum": 0}, "description": "用于推荐配置的最小层级。"},
             {"name": "maxZoom", "in": "query", "schema": {"type": "integer", "minimum": 0}, "description": "用于推荐配置的最大层级。"},
         ],
@@ -218,6 +294,31 @@ _OPERATION_OVERRIDES = {
                 },
             },
         },
+    },
+    ("/api/dataSources/{subpath}", "get"): {
+        "summary": "浏览数据源子目录",
+        "parameters": [
+            {"name": "subpath", "in": "path", "required": True, "schema": {"type": "string"}, "description": "数据源子目录相对路径。"},
+            {"name": "bounds", "in": "query", "schema": {"type": "string"}, "description": "可选空间范围，格式 west,south,east,north。"},
+            {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码。"},
+            {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 100, "minimum": 1, "maximum": 500}, "description": "每页条数。"},
+        ],
+    },
+    ("/api/results", "get"): {
+        "summary": "浏览目录",
+        "parameters": [
+            {"name": "type", "in": "query", "schema": {"type": "string", "enum": ["results", "datasource"]}, "description": "浏览根目录类型；默认 results。"},
+            {"name": "path", "in": "query", "schema": {"type": "string"}, "description": "相对目录路径。"},
+            {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码。"},
+            {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 100, "minimum": 1, "maximum": 500}, "description": "每页条数。"},
+        ],
+    },
+    ("/api/fileDetails", "get"): {
+        "summary": "文件详情",
+        "parameters": [
+            {"name": "type", "in": "query", "schema": {"type": "string", "enum": ["datasource", "results"]}, "description": "文件所在根目录。"},
+            {"name": "path", "in": "query", "required": True, "schema": {"type": "string"}, "description": "文件相对路径。"},
+        ],
     },
     ("/api/tile/convert", "post"): {
         "summary": "瓦片结构转换",
@@ -529,6 +630,55 @@ _OPERATION_OVERRIDES = {
             },
         },
     },
+    ("/api/tile/3dtiles", "post"): {
+        "summary": "创建 3D Tiles 任务",
+        "description": "支持 pointcloud、vector、model、osgb 四类输入。pointcloud/vector/osgb 可用 folderPaths + filePatterns 或 sourcePath；OBJ 模型需要手动 longitude/latitude。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/Tiles3DRequest"},
+                    "examples": {
+                        "pointcloud": {
+                            "summary": "点云生成 3D Tiles",
+                            "value": {
+                                "dataType": "pointcloud",
+                                "folderPaths": ["pointcloud/demo"],
+                                "filePatterns": ["*.las", "*.laz"],
+                                "outputPath": "3dtiles/pointcloud-demo",
+                                "crs": "EPSG:3857",
+                                "jobs": 4,
+                            },
+                        },
+                        "obj_model": {
+                            "summary": "OBJ 模型手动定位",
+                            "value": {
+                                "dataType": "model",
+                                "sourcePath": "models/demo.obj",
+                                "outputPath": "3dtiles/model-demo",
+                                "longitude": 121.4737,
+                                "latitude": 31.2304,
+                                "height": 0,
+                                "scale": 1,
+                                "rotationZ": 0,
+                                "contentFormat": "b3dm",
+                            },
+                        },
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "任务已启动或参数校验失败；失败时 success=false 且包含 errors。",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskCreate"},
+                    }
+                },
+            }
+        },
+    },
     ("/api/tile/indexedTiles", "post"): {
         "summary": "创建地图切片任务（返回 taskId）",
         "description": "filePatterns 支持通配符、txt、以及 http/https 网络地址。",
@@ -729,6 +879,40 @@ _OPERATION_OVERRIDES = {
             },
         },
     },
+    ("/api/tile/cache", "get"): {
+        "summary": "瓦片缓存列表",
+        "responses": {
+            "200": {
+                "description": "返回 tilesDir 下可识别的缓存/瓦片目录。",
+                "content": {
+                    "application/json": {
+                        "schema": {"type": "object", "additionalProperties": True},
+                    }
+                },
+            }
+        },
+    },
+    ("/api/tile/cache/detail", "get"): {
+        "summary": "瓦片缓存详情",
+        "parameters": [
+            {"name": "path", "in": "query", "required": True, "schema": {"type": "string"}, "description": "缓存目录相对路径。"},
+        ],
+    },
+    ("/api/tile/cache/delete", "post"): {
+        "summary": "删除瓦片缓存",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/TileCacheDeleteRequest"},
+                    "examples": {
+                        "delete_dir": {"value": {"path": "map/demo"}},
+                        "delete_zoom_levels": {"value": {"path": "map/demo", "zoomLevels": [8, 9]}},
+                    },
+                }
+            },
+        },
+    },
     ("/api/tasks", "get"): {
         "summary": "任务列表",
         "parameters": [
@@ -770,6 +954,85 @@ _OPERATION_OVERRIDES = {
                 },
             }
         },
+    },
+    ("/api/geoserver/health", "get"): {
+        "summary": "GeoServer 健康检查",
+    },
+    ("/api/geoserver/publish", "post"): {
+        "summary": "发布影像到 GeoServer",
+        "description": "将数据源中的 GeoTIFF 文件、单文件目录、或多 GeoTIFF 目录发布为 GeoServer 图层。目录内多个 GeoTIFF 会按文件分别发布。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/GeoserverPublishRequest"},
+                    "examples": {
+                        "single_geotiff": {
+                            "value": {
+                                "sourcePath": "imagery/demo.tif",
+                                "alias": "demo_imagery",
+                                "workspace": "atlasworks",
+                                "targetCrs": "EPSG:3857",
+                                "styleName": "raster",
+                                "tileFormat": "image/png",
+                                "seedEnabled": False,
+                                "overwrite": True,
+                            }
+                        }
+                    },
+                }
+            },
+        },
+    },
+    ("/api/geoserver/layers", "get"): {
+        "summary": "GeoServer 图层列表",
+        "parameters": [
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间；默认读取配置 geoserverWorkspace。"},
+        ],
+    },
+    ("/api/geoserver/layers/{name}", "get"): {
+        "summary": "GeoServer 图层详情",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层/Store 名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+    },
+    ("/api/geoserver/layers/{name}", "delete"): {
+        "summary": "删除 GeoServer 图层",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层/Store 名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+    },
+    ("/api/geoserver/layers/{name}/seed", "post"): {
+        "summary": "触发 GeoServer 预切片",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/GeoserverSeedRequest"},
+                    "example": {"minZoom": 0, "maxZoom": 16, "format": "image/png", "threadCount": 2},
+                }
+            },
+        },
+    },
+    ("/api/geoserver/layers/{name}/seed", "get"): {
+        "summary": "GeoServer 预切片状态",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+    },
+    ("/api/geoserver/layers/{name}/seed/cancel", "post"): {
+        "summary": "取消 GeoServer 预切片",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
     },
     ("/api/tasks/{taskId}", "get"): {
         "summary": "任务详情",
@@ -1598,6 +1861,20 @@ _GENERIC_JSON_REQUEST_EXAMPLES = {
 }
 
 
+_GENERIC_JSON_REQUEST_SCHEMAS = {
+    ("/api/dataSources/split", "post"): {"$ref": "#/components/schemas/DatasourceSplitRequest"},
+    ("/api/datasources/createFolder", "post"): {"$ref": "#/components/schemas/CreateFolderRequest"},
+    ("/api/preflight", "post"): {"$ref": "#/components/schemas/PreflightRequest"},
+    ("/api/files/extract", "post"): {"$ref": "#/components/schemas/ExtractArchiveRequest"},
+    ("/api/config/recommend", "post"): {"$ref": "#/components/schemas/RecommendConfigRequest"},
+    ("/api/container/update", "post"): {"$ref": "#/components/schemas/ContainerUpdateRequest"},
+    ("/api/workspace/createFolder", "post"): {"$ref": "#/components/schemas/CreateFolderRequest"},
+    ("/api/workspace/folder/{folderPath}/rename", "put"): {"$ref": "#/components/schemas/RenameRequest"},
+    ("/api/workspace/file/{filePath}/rename", "put"): {"$ref": "#/components/schemas/RenameRequest"},
+    ("/api/workspace/move", "put"): {"$ref": "#/components/schemas/WorkspaceMoveRequest"},
+}
+
+
 _MULTIPART_REQUESTS = {
     ("/api/upload/file", "post"): {
         "required": True,
@@ -1672,7 +1949,7 @@ def _tag_for_path(path):
         return "切片任务"
     if normalized_path.startswith("/api/task"):
         return "任务管理"
-    if normalized_path.startswith("/api/publication") or normalized_path.startswith("/api/artifact"):
+    if normalized_path.startswith("/api/publication") or normalized_path.startswith("/api/artifact") or normalized_path.startswith("/api/geoserver"):
         return "发布管理"
     if normalized_path.startswith("/api/workspace") or normalized_path.startswith("/api/results") or normalized_path.startswith("/api/filedetails"):
         return "工作空间"
@@ -1808,14 +2085,15 @@ def _build_paths():
                 generic_key = (raw_openapi_path, method)
 
             if generic_key:
+                generic_schema = _GENERIC_JSON_REQUEST_SCHEMAS.get(generic_key) or {
+                    "type": "object",
+                    "additionalProperties": True,
+                }
                 operation["requestBody"] = {
                     "required": True,
                     "content": {
                         "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "additionalProperties": True,
-                            },
+                            "schema": generic_schema,
                             "example": _GENERIC_JSON_REQUEST_EXAMPLES[generic_key],
                         }
                     },
@@ -1841,18 +2119,33 @@ def _enum_value_to_text(value):
     return str(value)
 
 
+def _enum_value_label(value):
+    text = _enum_value_to_text(value)
+    description = _ENUM_VALUE_DESCRIPTIONS.get(value)
+    if description is None:
+        description = _ENUM_VALUE_DESCRIPTIONS.get(text)
+    return f"{text}={description}" if description else text
+
+
 def _annotate_enum_descriptions(node):
     if isinstance(node, dict):
         enum_values = node.get("enum")
         if isinstance(enum_values, list) and enum_values:
-            enum_texts = [_enum_value_to_text(item) for item in enum_values]
+            enum_texts = [_enum_value_label(item) for item in enum_values]
             description = node.get("description")
             if isinstance(description, str) and description.strip():
                 desc_lower = description.lower()
-                if not all(text.lower() in desc_lower for text in enum_texts):
+                raw_enum_texts = [_enum_value_to_text(item) for item in enum_values]
+                if not all(text.lower() in desc_lower for text in raw_enum_texts):
                     node["description"] = f"{description.rstrip()} 可选值：{', '.join(enum_texts)}。"
             else:
                 node["description"] = f"可选值：{', '.join(enum_texts)}。"
+            enum_descriptions = []
+            for item in enum_values:
+                item_text = _enum_value_to_text(item)
+                enum_descriptions.append(_ENUM_VALUE_DESCRIPTIONS.get(item, _ENUM_VALUE_DESCRIPTIONS.get(item_text, "")))
+            if any(enum_descriptions):
+                node["x-enumDescriptions"] = enum_descriptions
 
         for value in node.values():
             _annotate_enum_descriptions(value)
@@ -1903,11 +2196,88 @@ def _openapi_spec():
                 "DatasourceResolveRequest": {
                     "type": "object",
                     "properties": {
-                        "folderPaths": {"type": "array", "items": {"type": "string"}},
-                        "filePatterns": {"type": "array", "items": {"type": "string"}},
-                        "maxFiles": {"type": "integer", "minimum": 1},
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组；为空时从数据源根目录匹配。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "文件通配符、txt 清单或 http/https 网络地址数组。"},
+                        "maxFiles": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "最多返回/扫描的文件数量。"},
                     },
                     "required": ["filePatterns"],
+                },
+                "DatasourceSplitRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourceFile": {"type": "string", "description": "数据源中的 TIF 相对路径。"},
+                        "outputPath": {"type": "string", "description": "拆分输出目录，相对 dataSourceDir。"},
+                        "tileSize": {"type": "integer", "minimum": 256, "default": 4096, "description": "拆分窗口像素大小。"},
+                        "overlap": {"type": "integer", "minimum": 0, "default": 0, "description": "相邻块重叠像素。"},
+                    },
+                    "required": ["sourceFile"],
+                    "additionalProperties": True,
+                },
+                "CreateFolderRequest": {
+                    "type": "object",
+                    "properties": {
+                        "folderPath": {"type": "string", "description": "待创建文件夹的相对路径。"},
+                    },
+                    "required": ["folderPath"],
+                },
+                "RenameRequest": {
+                    "type": "object",
+                    "properties": {
+                        "newName": {"type": "string", "description": "新的文件或文件夹名称，不包含上级路径。"},
+                    },
+                    "required": ["newName"],
+                },
+                "WorkspaceMoveRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourcePath": {"type": "string", "description": "源文件或文件夹相对路径。"},
+                        "targetPath": {"type": "string", "description": "目标相对路径。"},
+                    },
+                    "required": ["sourcePath", "targetPath"],
+                },
+                "ExtractArchiveRequest": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "待解压压缩包相对路径，支持 zip、tar 系列和 7z。"},
+                        "targetType": {"type": "string", "enum": ["datasource", "workspace"], "default": "datasource", "description": "压缩包所在根目录。"},
+                        "overwrite": {"type": "boolean", "default": False, "description": "目标文件存在时是否覆盖。"},
+                        "extractFolderName": {"type": "string", "description": "可选；解压到压缩包所在目录下的单级子文件夹。"},
+                    },
+                    "required": ["path"],
+                },
+                "PreflightRequest": {
+                    "type": "object",
+                    "properties": {
+                        "jobType": {"type": "string", "enum": ["map_tiles", "terrain", "terrain_tiles"], "default": "map_tiles", "description": "预检查任务类型。"},
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "文件匹配模式数组。"},
+                        "outputPath": {"type": "string", "description": "计划输出目录，用于检测覆盖风险。"},
+                        "maxFiles": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50, "description": "最多扫描文件数。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "maximum": 30, "default": 0},
+                        "maxZoom": {"type": "integer", "minimum": 0, "maximum": 30, "default": 18},
+                        "heightBand": {"description": "地形任务高程波段，可传数字或空值。"},
+                    },
+                    "required": ["filePatterns"],
+                },
+                "RecommendConfigRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourceFile": {"type": "string", "description": "数据源中的 TIF 相对路径。"},
+                        "tileType": {"type": "string", "enum": ["map", "terrain"], "default": "map", "description": "推荐配置类型。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "description": "用户期望最小层级。"},
+                        "maxZoom": {"type": "integer", "minimum": 0, "description": "用户期望最大层级。"},
+                    },
+                    "required": ["sourceFile"],
+                },
+                "ContainerUpdateRequest": {
+                    "type": "object",
+                    "properties": {
+                        "updateType": {"type": "string", "enum": ["all", "time", "environment", "config", "system", "network"], "default": "all", "description": "容器信息更新范围。"},
+                        "timezone": {"type": "string", "description": "设置进程时区，例如 Asia/Shanghai。"},
+                        "environment": {"type": "object", "additionalProperties": {"type": "string"}, "description": "需要写入进程环境变量的键值。"},
+                        "config": {"type": "object", "additionalProperties": True, "description": "允许覆盖的运行配置项。"},
+                    },
+                    "additionalProperties": True,
                 },
                 "GeoBounds": {
                     "type": "object",
@@ -1985,13 +2355,21 @@ def _openapi_spec():
                 "TileConvertRequest": {
                     "type": "object",
                     "properties": {
-                        "sourcePath": {"type": "string"},
-                        "targetPath": {"type": "string"},
-                        "sourceFormat": {"type": "string", "enum": ["flat", "nested"]},
-                        "targetFormat": {"type": "string", "enum": ["flat", "nested"]},
-                        "overwrite": {"type": "boolean"},
+                        "sourcePath": {"type": "string", "description": "源瓦片目录，相对 tilesDir。"},
+                        "targetPath": {"type": "string", "description": "目标瓦片目录，相对 tilesDir。"},
+                        "sourceFormat": {"type": "string", "enum": ["flat", "nested"], "description": "源目录结构。"},
+                        "targetFormat": {"type": "string", "enum": ["flat", "nested"], "description": "目标目录结构。"},
+                        "overwrite": {"type": "boolean", "default": False, "description": "目标目录存在时是否覆盖写入。"},
                     },
                     "required": ["sourcePath", "targetPath", "sourceFormat", "targetFormat"],
+                },
+                "TileCacheDeleteRequest": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "缓存目录相对路径。"},
+                        "zoomLevels": {"type": "array", "items": {"type": "integer", "minimum": 0}, "description": "可选；只删除指定层级目录。"},
+                    },
+                    "required": ["path"],
                 },
                 "TileConvertData": {
                     "type": "object",
@@ -2144,26 +2522,30 @@ def _openapi_spec():
                 "IndexedTilesRequest": {
                     "type": "object",
                     "properties": {
-                        "folderPaths": {"type": "array", "items": {"type": "string"}},
-                        "filePatterns": {"type": "array", "items": {"type": "string"}},
-                        "outputPath": {"type": "string"},
-                        "minZoom": {"type": "integer", "minimum": 0},
-                        "maxZoom": {"type": "integer", "minimum": 0},
-                        "tileSize": {"type": "integer", "minimum": 64},
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "TIF 文件通配符、txt 清单或 http/https 网络地址数组。"},
+                        "outputPath": {"description": "输出目录；可传字符串或路径片段数组，不传时服务端自动生成。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "default": 0},
+                        "maxZoom": {"type": "integer", "minimum": 0, "default": 12},
+                        "tileSize": {"type": "integer", "minimum": 64, "default": 256},
                         "projection": {
                             "type": "string",
                             "enum": ["EPSG:3857", "EPSG:4326", "EPSG:4490"],
                             "description": "常用投影枚举；后端也支持传其他投影字符串。",
                         },
-                        "imageFormat": {"type": "string", "enum": ["png", "jpeg"], "example": "png"},
-                        "tileScheme": {"type": "string", "enum": ["tms", "google"], "example": "tms"},
-                        "redBand": {"type": "integer"},
-                        "greenBand": {"type": "integer"},
-                        "blueBand": {"type": "integer"},
-                        "nodataValue": {"type": "number"},
-                        "transparencyThreshold": {"type": "number", "minimum": 0, "maximum": 1},
-                        "enableIncrementalUpdate": {"type": "boolean"},
-                        "skipNodataTiles": {"type": "boolean"},
+                        "imageFormat": {"type": "string", "enum": ["png", "jpeg"], "default": "png"},
+                        "tileScheme": {"type": "string", "enum": ["tms", "google"], "default": "tms"},
+                        "wmsConcurrency": {"type": "integer", "minimum": 1, "maximum": 16, "default": 4, "description": "GeoServer WMS 渲染并发数；threads 是兼容别名。"},
+                        "threads": {"type": "integer", "minimum": 1, "maximum": 16, "description": "wmsConcurrency 的兼容别名。"},
+                        "transparentBackground": {"type": "boolean", "default": True, "description": "PNG 输出是否使用透明背景。"},
+                        "renderMode": {"type": "string", "enum": ["auto", "gray", "rgb"], "default": "auto", "description": "栅格渲染模式。"},
+                        "redBand": {"type": "integer", "minimum": 1, "default": 1},
+                        "greenBand": {"type": "integer", "minimum": 1, "default": 2},
+                        "blueBand": {"type": "integer", "minimum": 1, "default": 3},
+                        "nodataValue": {"description": "NoData 值，可传数字或空值。"},
+                        "transparencyThreshold": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1},
+                        "enableIncrementalUpdate": {"type": "boolean", "default": False},
+                        "skipNodataTiles": {"type": "boolean", "default": False, "description": "是否跳过透明/nodata 瓦片；仅 PNG 输出生效。"},
                     },
                     "required": ["filePatterns", "outputPath"],
                 },
@@ -2200,27 +2582,92 @@ def _openapi_spec():
                 "TerrainTilesRequest": {
                     "type": "object",
                     "properties": {
-                        "folderPaths": {"type": "array", "items": {"type": "string"}},
-                        "filePatterns": {"type": "array", "items": {"type": "string"}},
-                        "outputPath": {"type": "string"},
-                        "startZoom": {"type": "integer", "minimum": 0},
-                        "endZoom": {"type": "integer", "minimum": 0},
-                        "maxTriangles": {"type": "integer", "minimum": 1024},
-                        "bounds": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
-                        "threads": {"type": "integer", "minimum": 1},
-                        "maxMemory": {"type": "string"},
-                        "compression": {"type": "boolean"},
-                        "decompress": {"type": "boolean"},
-                        "autoZoom": {"type": "boolean"},
-                        "zoomStrategy": {"type": "string", "enum": ["conservative", "balanced", "aggressive"], "example": "conservative"},
-                        "mergeTerrains": {"type": "boolean"},
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "TIF 文件通配符、txt 清单或 http/https 网络地址数组。"},
+                        "outputPath": {"description": "输出目录；可传字符串或路径片段数组，不传时服务端自动生成。"},
+                        "startZoom": {"type": "integer", "minimum": 0, "default": 0},
+                        "endZoom": {"type": "integer", "minimum": 8, "default": 8, "description": "地形切片最大层级，后端要求至少为 8。"},
+                        "maxTriangles": {"type": "integer", "minimum": 1024, "default": 32768},
+                        "bounds": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "输出范围 [west, south, east, north]。"},
+                        "threads": {"type": "integer", "minimum": 1, "default": 4},
+                        "maxMemory": {"type": "string", "default": "8m", "description": "ctb-tile 内存参数，如 8m、4g。"},
+                        "compression": {"type": "boolean", "default": True, "description": "是否生成压缩 terrain。"},
+                        "decompress": {"type": "boolean", "default": True, "description": "完成后是否解压 terrain。"},
+                        "autoZoom": {"type": "boolean", "default": False},
+                        "zoomStrategy": {"type": "string", "enum": ["conservative", "balanced", "aggressive"], "default": "conservative"},
+                        "mergeTerrains": {"type": "boolean", "default": False, "description": "多文件处理后是否尝试合并地形目录。"},
+                        "taskId": {"type": "string", "description": "可选；自定义任务 ID。"},
                     },
                     "required": ["filePatterns", "outputPath"],
+                },
+                "Tiles3DRequest": {
+                    "type": "object",
+                    "properties": {
+                        "dataType": {"type": "string", "enum": ["pointcloud", "vector", "model", "osgb"], "description": "3D Tiles 输入类型。"},
+                        "sourcePath": {"type": "string", "description": "单个源文件或目录相对路径；可替代 folderPaths + filePatterns。"},
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "源文件匹配模式数组。"},
+                        "outputPath": {"type": "string", "description": "输出目录，相对 tilesDir。"},
+                        "jobs": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4, "description": "并行作业数。"},
+                        "crs": {"type": "string", "description": "点云/矢量源坐标系，如 EPSG:3857。"},
+                        "heightField": {"type": "string", "description": "矢量拉伸高度字段。"},
+                        "defaultHeight": {"type": "number", "default": 30, "description": "矢量默认高度（米）。"},
+                        "vectorHeightMode": {"type": "string", "enum": ["meters", "floors"], "default": "meters", "description": "矢量高度字段解释方式。"},
+                        "floorHeightMeters": {"type": "number", "minimum": 0.1, "default": 3, "description": "楼层模式下单层高度。"},
+                        "contentFormat": {"type": "string", "enum": ["b3dm", "glb"], "default": "b3dm", "description": "vector/model/osgb 输出内容格式。"},
+                        "anchorMode": {"type": "string", "enum": ["manual", "auto"], "default": "manual", "description": "OSGB 锚点模式；model 固定需要手动经纬度。"},
+                        "longitude": {"type": "number", "description": "模型/OSGB 手动锚点经度。"},
+                        "latitude": {"type": "number", "description": "模型/OSGB 手动锚点纬度。"},
+                        "height": {"type": "number", "default": 0, "description": "模型贴地高度（米）。"},
+                        "scale": {"type": "number", "default": 1, "description": "模型缩放。"},
+                        "rotationZ": {"type": "number", "default": 0, "description": "模型绕 Z 轴旋转角度。"},
+                        "enablePyramid": {"type": "boolean", "default": False, "description": "vector/model/osgb 是否构建空间金字塔。"},
+                        "pyramidLeafSize": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 8},
+                        "pyramidMaxDepth": {"type": "integer", "minimum": 1, "maximum": 12, "default": 4},
+                        "taskId": {"type": "string", "description": "可选；自定义任务 ID。"},
+                    },
+                    "required": ["dataType"],
+                    "anyOf": [
+                        {"required": ["sourcePath"]},
+                        {"required": ["filePatterns"]},
+                    ],
                 },
                 "TaskStatus": {
                     "type": "string",
                     "enum": ["queued", "running", "completed", "failed", "stopped"],
                     "description": "任务运行状态。映射：queued=排队中，running=执行中，completed=已完成，failed=失败，stopped=已停止。",
+                },
+                "GeoserverPublishRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourcePath": {"type": "string", "description": "数据源中的 GeoTIFF 文件或目录相对路径；path 是兼容别名。"},
+                        "path": {"type": "string", "description": "sourcePath 的兼容别名。"},
+                        "alias": {"type": "string", "description": "发布图层/Store 名称；优先级高于 layerName/storeName。"},
+                        "layerName": {"type": "string", "description": "发布图层名称别名。"},
+                        "storeName": {"type": "string", "description": "发布 Store 名称别名。"},
+                        "workspace": {"type": "string", "default": "atlasworks", "description": "GeoServer 工作空间。"},
+                        "targetCrs": {"type": "string", "default": "EPSG:3857", "description": "目标坐标系；projection 是兼容别名。"},
+                        "projection": {"type": "string", "description": "targetCrs 的兼容别名。"},
+                        "styleName": {"type": "string", "default": "raster", "description": "发布后设置的默认样式。"},
+                        "tileFormat": {"type": "string", "enum": ["image/png", "image/jpeg"], "default": "image/png", "description": "预切片输出格式。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "default": 0, "description": "预切片最小层级。"},
+                        "maxZoom": {"type": "integer", "minimum": 0, "default": 16, "description": "预切片最大层级。"},
+                        "seedEnabled": {"type": "boolean", "default": False, "description": "发布后是否立即触发 GeoWebCache seed；seed 是兼容别名。"},
+                        "seed": {"type": "boolean", "description": "seedEnabled 的兼容别名。"},
+                        "overwrite": {"type": "boolean", "default": True, "description": "是否先删除同名 Store/图层后发布。"},
+                        "nodataValue": {"description": "NoData 值，用于灰度/样式配置，可为空。"},
+                    },
+                    "required": ["sourcePath"],
+                    "additionalProperties": True,
+                },
+                "GeoserverSeedRequest": {
+                    "type": "object",
+                    "properties": {
+                        "minZoom": {"type": "integer", "minimum": 0, "default": 0},
+                        "maxZoom": {"type": "integer", "minimum": 0, "default": 16},
+                        "format": {"type": "string", "enum": ["image/png", "image/jpeg"], "default": "image/png"},
+                        "threadCount": {"type": "integer", "minimum": 1, "default": 1},
+                    },
                 },
                 "TaskCreateData": {
                     "type": "object",
@@ -2672,7 +3119,6 @@ def _openapi_spec():
         },
     }
     _annotate_enum_descriptions(spec)
-    _strip_enum_definitions(spec)
     return spec
 
 
