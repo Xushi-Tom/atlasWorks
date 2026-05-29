@@ -15,9 +15,121 @@ from flask import jsonify, request
 from artifacts import finalizeTaskArtifact
 from config import config, taskLock, taskProcesses, taskStatus
 from dataSourceOps import findTifFilesInFolders
-from db import enqueueBuildJob, isDatabaseEnabled
+from db import enqueueBuildJob, fetchTaskSnapshot, isDatabaseEnabled, syncTaskSnapshot
 from taskState import appendTaskLog, createTaskRecord
 from utils import convertMemoryToBytes, convertMemoryToMb, logMessage, normalizeInt, resolveTilesOutputPath, runCommand
+
+
+def _sync_terrain_task(taskId):
+    """同步地形任务快照，保证 worker 与 API 进程共享最新状态。"""
+    with taskLock:
+        snapshot = taskStatus.get(taskId)
+    if snapshot:
+        syncTaskSnapshot(taskId, snapshot)
+
+
+def _task_was_stopped(taskId):
+    """检查任务是否已停止，兼容本进程内存状态与数据库状态。"""
+    if not taskId:
+        return False
+
+    with taskLock:
+        current = taskStatus.get(taskId)
+        if str((current or {}).get("status", "")).lower() == "stopped":
+            return True
+
+    persistedTask = fetchTaskSnapshot(taskId)
+    if str((persistedTask or {}).get("status", "")).lower() != "stopped":
+        return False
+
+    with taskLock:
+        current = taskStatus.get(taskId)
+        if current:
+            current["status"] = "stopped"
+            current["message"] = "任务已停止"
+            current["currentStage"] = "已停止"
+            current["endTime"] = current.get("endTime") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return True
+
+
+def _raise_if_stopped(taskId):
+    """在关键阶段主动中断地形任务。"""
+    if _task_was_stopped(taskId):
+        raise RuntimeError("任务已停止")
+
+
+def _mark_terrain_task_stopped(taskId):
+    """写入地形任务停止状态，避免后续逻辑覆盖为完成。"""
+    with taskLock:
+        currentTask = taskStatus.get(taskId, {})
+        taskStatus[taskId] = createTaskRecord(
+            task_id=taskId,
+            status="stopped",
+            progress=currentTask.get("progress", 0),
+            message="地形切片任务已停止",
+            start_time=currentTask.get("startTime", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            current_stage="已停止",
+            process_log=currentTask.get("processLog", []),
+            result=currentTask.get("result", {}),
+            files=currentTask.get("files"),
+            stats=currentTask.get("stats"),
+        )
+        appendTaskLog(taskStatus[taskId], "任务停止", "stopped", "任务已停止", currentTask.get("progress", 0))
+    _sync_terrain_task(taskId)
+
+
+def _runTerrainCommand(cmd, taskId, cwd=None, env=None):
+    """执行 CTB 命令并轮询停止状态，确保远程停止可以终止子进程。"""
+    previousEntry = None
+    process = None
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env or os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        with taskLock:
+            previousEntry = taskProcesses.get(taskId)
+            taskProcesses[taskId] = process
+
+        while True:
+            try:
+                stdout, stderr = process.communicate(timeout=1)
+                return {
+                    "success": process.returncode == 0,
+                    "returncode": process.returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                }
+            except subprocess.TimeoutExpired:
+                if _task_was_stopped(taskId):
+                    process.terminate()
+                    try:
+                        stdout, stderr = process.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        stdout, stderr = process.communicate()
+                    return {
+                        "success": False,
+                        "stopped": True,
+                        "returncode": process.returncode,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "error": "任务已停止",
+                    }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    finally:
+        with taskLock:
+            if taskProcesses.get(taskId) is process:
+                if previousEntry is not None:
+                    taskProcesses[taskId] = previousEntry
+                else:
+                    taskProcesses.pop(taskId, None)
 
 
 def decompressTerrainFiles(terrainDir: str) -> bool:
@@ -112,6 +224,7 @@ def analyzeTiffGeoContinuity(tifFiles, taskId):
         geoInfoList = []
 
         for index, tifFile in enumerate(tifFiles):
+            _raise_if_stopped(taskId)
             try:
                 result = subprocess.run(
                     ["gdalinfo", "-json", tifFile],
@@ -232,6 +345,8 @@ def analyzeTiffGeoContinuity(tifFiles, taskId):
             "geoInfo": geoInfoList,
         }
     except Exception as exc:
+        if str(exc) == "任务已停止":
+            raise
         logMessage(f"地理连续性分析失败: {exc}", "WARNING")
         return {"continuous": False, "error": str(exc)}
 
@@ -254,6 +369,7 @@ def processSingleTerrainFile(
 ):
     """处理单个地形文件。"""
     try:
+        _raise_if_stopped(taskId)
         sourcePath = fileInfo["fullPath"]
         filename = fileInfo["filename"]
         logMessage(f"开始处理地形文件: {filename}")
@@ -300,7 +416,9 @@ def processSingleTerrainFile(
         env["OMP_NUM_THREADS"] = str(threadCount)
 
         logMessage(f"执行CTB命令: {' '.join(cmd)}")
-        result = runCommand(cmd, env=env)
+        result = _runTerrainCommand(cmd, taskId, env=env)
+        if result.get("stopped"):
+            return {"success": False, "stopped": True, "error": "任务已停止", "filename": filename}
         if not result["success"]:
             return {
                 "success": False,
@@ -326,7 +444,10 @@ def processSingleTerrainFile(
             "-v",
             sourcePath,
         ]
-        layerResult = runCommand(layerCmd, env=env)
+        _raise_if_stopped(taskId)
+        layerResult = _runTerrainCommand(layerCmd, taskId, env=env)
+        if layerResult.get("stopped"):
+            return {"success": False, "stopped": True, "error": "任务已停止", "filename": filename}
         if layerResult["success"]:
             logMessage(f"CTB生成layer.json成功: {filename}")
             updateCtbLayerJsonBounds(outputPath, bounds)
@@ -337,10 +458,12 @@ def processSingleTerrainFile(
             )
 
         if decompressOutput:
+            _raise_if_stopped(taskId)
             logMessage(f"开始解压terrain文件: {filename}")
             decompressTerrainFiles(outputPath)
             logMessage(f"terrain文件解压完成: {filename}")
 
+        _raise_if_stopped(taskId)
         terrainCount = 0
         for root, _, files in os.walk(outputPath):
             terrainCount += len([file for file in files if file.endswith(".terrain")])
@@ -505,10 +628,14 @@ def createTerrainTiles():
                 logMessage(f"顺序处理模式：依次处理{len(tifFiles)}个文件")
                 for index, fileInfo in enumerate(tifFiles):
                     try:
+                        taskStopped = False
                         with taskLock:
                             if taskId in taskStatus and taskStatus[taskId].get("status") == "stopped":
-                                logMessage(f"地形瓦片任务 {taskId} 已被停止，退出处理", "INFO")
-                                return
+                                taskStopped = True
+                        if taskStopped:
+                            logMessage(f"地形瓦片任务 {taskId} 已被停止，退出处理", "INFO")
+                            _mark_terrain_task_stopped(taskId)
+                            return
 
                         with taskLock:
                             taskStatus[taskId]["files"]["current"] = fileInfo["filename"]
@@ -539,6 +666,11 @@ def createTerrainTiles():
                             taskId,
                             index,
                         )
+
+                        if result.get("stopped") or _task_was_stopped(taskId):
+                            logMessage(f"地形瓦片任务 {taskId} 已被停止，退出处理", "INFO")
+                            _mark_terrain_task_stopped(taskId)
+                            return
 
                         if result["success"]:
                             completedFiles.append(
@@ -586,9 +718,14 @@ def createTerrainTiles():
                                 }
                             )
                     except Exception as exc:
+                        if str(exc) == "任务已停止" or _task_was_stopped(taskId):
+                            logMessage(f"地形瓦片任务 {taskId} 已被停止，退出处理", "INFO")
+                            _mark_terrain_task_stopped(taskId)
+                            return
                         failedFiles.append({"filename": fileInfo["filename"], "error": str(exc)})
                         logMessage(f"顺序处理文件失败 {fileInfo['filename']}: {exc}", "ERROR")
 
+                _raise_if_stopped(taskId)
                 totalTerrainFiles = sum(fileInfo.get("terrainFiles", 0) for fileInfo in completedFiles)
                 with taskLock:
                     existingLog = taskStatus[taskId].get("processLog", [])
@@ -714,24 +851,35 @@ def createTerrainTiles():
                 )
                 logMessage(f"地形切片任务完成: {taskId}")
             except Exception as exc:
+                stopped = str(exc) == "任务已停止" or _task_was_stopped(taskId)
                 with taskLock:
                     current_task = taskStatus.get(taskId, {})
                     taskStatus[taskId] = createTaskRecord(
                         task_id=taskId,
-                        status="failed",
+                        status="stopped" if stopped else "failed",
                         progress=current_task.get("progress", 0),
-                        message=f"地形切片失败: {exc}",
+                        message="地形切片任务已停止" if stopped else f"地形切片失败: {exc}",
                         start_time=current_task.get("startTime", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                         end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        current_stage="失败",
+                        current_stage="已停止" if stopped else "失败",
                         process_log=current_task.get("processLog", []),
                         result=current_task.get("result", {}),
                         files=current_task.get("files", {"total": len(tifFiles), "completed": 0, "failed": 0, "current": None}),
                         stats=current_task.get("stats"),
-                        error=str(exc),
+                        error=None if stopped else str(exc),
                     )
-                    appendTaskLog(taskStatus[taskId], "异常退出", "failed", str(exc), current_task.get("progress", 0))
-                logMessage(f"地形切片失败: {taskId} - {exc}", "ERROR")
+                    appendTaskLog(
+                        taskStatus[taskId],
+                        "任务停止" if stopped else "异常退出",
+                        "stopped" if stopped else "failed",
+                        "任务已停止" if stopped else str(exc),
+                        current_task.get("progress", 0),
+                    )
+                _sync_terrain_task(taskId)
+                logMessage(
+                    f"地形切片任务{'停止' if stopped else '失败'}: {taskId} - {exc}",
+                    "WARNING" if stopped else "ERROR",
+                )
 
         shouldQueue = (
             not workerRun

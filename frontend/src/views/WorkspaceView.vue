@@ -466,21 +466,26 @@ onMounted(async () => {
         </ResizableDrawer>
 
         <ResizableDrawer v-model="uploadVisible" title="上传到工作空间当前目录" :width="520" :min-width="420" :max-width="760" destroy-on-close @closed="closeUploadModal">
-            <el-form label-width="100px">
-                <el-form-item label="覆盖同名">
+            <div class="upload-panel">
+                <div class="upload-option-row">
+                    <div>
+                        <div class="upload-option-title">覆盖同名</div>
+                        <div class="upload-option-desc">开启后，同名文件会被新上传文件替换。</div>
+                    </div>
                     <el-switch v-model="uploadState.overwrite" />
-                </el-form-item>
-                <el-form-item>
-                    <el-button type="primary" @click="triggerSingleUpload">选择单文件</el-button>
-                </el-form-item>
+                </div>
+
+                <button class="upload-file-button" type="button" @click="triggerSingleUpload">
+                    <span class="upload-file-button__title">选择单文件</span>
+                    <span class="upload-file-button__desc">支持压缩包、影像、模型、地形和 GeoJSON</span>
+                </button>
                 <input ref="singleInput" hidden type="file" accept=".zip,.tar,.tgz,.tar.gz,.7z,.json,.png,.jpg,.jpeg,.terrain,.b3dm,.glb,.gltf,.geojson,.tif,.tiff" @change="handleSingleUpload">
-                <el-alert
-                    :title="uploadResult || '文件会直接上传到当前目录，压缩包上传后可在列表中单独执行解压。'"
-                    type="info"
-                    :closable="false"
-                    show-icon
-                />
-            </el-form>
+
+                <div class="upload-tip" :class="{ 'is-result': uploadResult }">
+                    <span class="upload-tip__icon">i</span>
+                    <span>{{ uploadResult || '文件会直接上传到当前目录，压缩包上传后可在列表中单独执行解压。' }}</span>
+                </div>
+            </div>
         </ResizableDrawer>
 
         <ResizableDrawer v-model="folderVisible" title="新建工作空间文件夹" :width="520" :min-width="420" :max-width="760" destroy-on-close @closed="closeFolderModal">
@@ -536,6 +541,102 @@ onMounted(async () => {
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.upload-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 2px;
+}
+
+.upload-option-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 14px 16px;
+    border: 1px solid var(--tf-border);
+    border-radius: 12px;
+    background: var(--tf-surface-soft);
+}
+
+.upload-option-title {
+    color: var(--tf-text-primary);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.upload-option-desc {
+    margin-top: 4px;
+    color: var(--tf-text-muted);
+    font-size: 12px;
+}
+
+.upload-file-button {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 18px 20px;
+    border: 1px dashed rgba(88, 166, 255, 0.65);
+    border-radius: 14px;
+    background: rgba(88, 166, 255, 0.1);
+    color: var(--tf-text-primary);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.upload-file-button:hover {
+    border-color: var(--tf-accent);
+    background: rgba(88, 166, 255, 0.18);
+    transform: translateY(-1px);
+}
+
+.upload-file-button__title {
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.upload-file-button__desc {
+    color: var(--tf-text-secondary);
+    font-size: 12px;
+}
+
+.upload-tip {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 13px 14px;
+    border: 1px solid var(--tf-border);
+    border-radius: 12px;
+    color: var(--tf-text-secondary);
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.upload-tip.is-result {
+    border-color: rgba(88, 166, 255, 0.45);
+    color: var(--tf-text-primary);
+    background: rgba(88, 166, 255, 0.08);
+}
+
+.upload-tip__icon {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18);
+    color: var(--tf-text-primary);
+    font-size: 12px;
+    font-weight: 800;
+    font-style: italic;
 }
 
 .browser-name-button {

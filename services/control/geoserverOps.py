@@ -474,6 +474,8 @@ def _seed_request_payload(workspace, layerName, seed_type="seed", zoomStart=0, z
     )
     if seed_type not in {"kill_all", "kill_thread"}:
         payload += (
+            # ARM 版 GeoServer/GWC 可能同时存在多套 EPSG:3857 GridSubset，必须显式指定网格集。
+            "<gridSetId>EPSG:900913</gridSetId>"
             "<srs><number>3857</number></srs>"
             f"<zoomStart>{int(zoomStart)}</zoomStart>"
             f"<zoomStop>{int(zoomStop)}</zoomStop>"
