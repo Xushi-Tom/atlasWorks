@@ -206,6 +206,41 @@ function resolveInteractiveUrl(url) {
         .replace(/%7D/ig, '}');
 }
 
+/**
+ * 根据 URL 中的端口判断地址来源后端，用于在 UI 中给用户展示服务标签。
+ * - nginx：静态瓦片服务（ATLASWORKS_NGINX_HOST_PORT，默认 18080）
+ * - publisher：发布 API 服务（ATLASWORKS_PUBLISHER_HOST_PORT，默认 18001）
+ * - api：主 API 服务（ATLASWORKS_HOST_PORT，默认 18000）
+ * - geoserver：GeoServer 服务（默认 18083）
+ */
+function getUrlBackend(url) {
+    const value = String(url || '').trim();
+    if (!value) return '';
+    const portMatch = value.match(/^https?:\/\/[^/:]+:(\d+)/i);
+    if (!portMatch) return '';
+    const port = Number(portMatch[1]);
+    // GeoServer 对外端口（默认 18083）
+    if (port === 18083 || port === 8080) return 'geoserver';
+    // Nginx 静态瓦片端口（默认 18080）
+    if (port === 18080) return 'nginx';
+    // 发布服务端口（默认 18001）
+    if (port === 18001) return 'publisher';
+    // 主 API 端口（默认 18000）
+    if (port === 18000) return 'api';
+    return '';
+}
+
+const BACKEND_LABEL = {
+    nginx: 'Nginx 静态',
+    publisher: '发布服务',
+    api: 'API 服务',
+    geoserver: 'GeoServer'
+};
+
+function getEndpointBackendLabel(url) {
+    return BACKEND_LABEL[getUrlBackend(url)] || '';
+}
+
 function toPreviewPublication(item) {
     if (!item) return null;
     const vectorPublication = item.vectorPublication ? {
@@ -858,6 +893,7 @@ function getPublicationGuide(item) {
             label: '浏览器预览',
             url: normalizeDisplayUrl(item.browserUrl),
             href: resolveInteractiveUrl(item.browserUrl),
+            backend: getEndpointBackendLabel(item.browserUrl),
             description: '直接在浏览器打开，用于查看已发布内容或入口文件。'
         });
     }
@@ -898,6 +934,7 @@ function getPublicationGuide(item) {
                 label: 'TileJSON',
                 url: normalizeDisplayUrl(item.launchUrl),
                 href: resolveInteractiveUrl(item.launchUrl),
+                backend: getEndpointBackendLabel(item.launchUrl),
                 description: vectorKind === 'mvt'
                     ? '矢量发布入口。MapLibre 优先使用这个地址。'
                     : '矢量瓦片描述文件，可用于查看层级、范围和模板地址。'
@@ -909,6 +946,7 @@ function getPublicationGuide(item) {
                 label: 'XYZ 模板',
                 url: normalizeDisplayUrl(item.accessUrl),
                 href: resolveInteractiveUrl(item.accessUrl),
+                backend: getEndpointBackendLabel(item.accessUrl),
                 description: vectorKind === 'mvt'
                     ? '按 {z}/{x}/{y} 请求 PBF 瓦片。OpenLayers 常直接使用这个地址。'
                     : '按 {z}/{x}/{y} 请求 GeoJSON 瓦片，适合调试或小数据量使用。'
@@ -920,6 +958,7 @@ function getPublicationGuide(item) {
                 label: '示例瓦片',
                 url: normalizeDisplayUrl(item.sampleUrl),
                 href: resolveInteractiveUrl(item.sampleUrl),
+                backend: getEndpointBackendLabel(item.sampleUrl),
                 description: '用于直接验证某一级某一块瓦片是否可访问。'
             });
         }
@@ -948,6 +987,7 @@ function getPublicationGuide(item) {
                 label: 'Capabilities',
                 url: normalizeDisplayUrl(item.launchUrl),
                 href: resolveInteractiveUrl(item.launchUrl),
+                backend: getEndpointBackendLabel(item.launchUrl),
                 description: '地图服务元数据入口，GIS 客户端一般先读取这个地址。'
             });
         }
@@ -957,6 +997,7 @@ function getPublicationGuide(item) {
                 label: '示例瓦片',
                 url: normalizeDisplayUrl(item.sampleUrl),
                 href: resolveInteractiveUrl(item.sampleUrl),
+                backend: getEndpointBackendLabel(item.sampleUrl),
                 description: '用于直接验证服务是否能稳定返回瓦片。'
             });
         }
@@ -966,6 +1007,7 @@ function getPublicationGuide(item) {
                 label: '服务地址',
                 url: normalizeDisplayUrl(item.accessUrl),
                 href: resolveInteractiveUrl(item.accessUrl),
+                backend: getEndpointBackendLabel(item.accessUrl),
                 description: '服务访问入口。'
             });
         }
@@ -996,6 +1038,7 @@ function getPublicationGuide(item) {
                 label: '程序入口',
                 url: normalizeDisplayUrl(item.launchUrl),
                 href: resolveInteractiveUrl(item.launchUrl),
+                backend: getEndpointBackendLabel(item.launchUrl),
                 description: '给客户端或前端程序使用的入口地址。'
             });
         }
@@ -1005,6 +1048,7 @@ function getPublicationGuide(item) {
                 label: '访问地址',
                 url: normalizeDisplayUrl(item.accessUrl),
                 href: resolveInteractiveUrl(item.accessUrl),
+                backend: getEndpointBackendLabel(item.accessUrl),
                 description: '这是当前发布记录的主要访问地址。'
             });
         }
@@ -1014,6 +1058,7 @@ function getPublicationGuide(item) {
                 label: '示例地址',
                 url: normalizeDisplayUrl(item.sampleUrl),
                 href: resolveInteractiveUrl(item.sampleUrl),
+                backend: getEndpointBackendLabel(item.sampleUrl),
                 description: '用于快速验证发布内容。'
             });
         }
@@ -1902,6 +1947,7 @@ function applyFilters() {
                             >
                                 <div class="detail-endpoint-head">
                                     <span class="detail-endpoint-label">{{ endpoint.label }}</span>
+                                    <span v-if="endpoint.backend" class="detail-endpoint-backend">{{ endpoint.backend }}</span>
                                     <el-button size="small" text @click="copyPublicationUrl(endpoint.url)">复制</el-button>
                                 </div>
                                 <a class="detail-endpoint-url" :href="endpoint.href || endpoint.url" target="_blank" rel="noreferrer">{{ endpoint.url }}</a>
@@ -2810,6 +2856,23 @@ function applyFilters() {
     font-size: 14px;
     font-weight: 600;
     color: var(--tf-text-primary);
+}
+
+.detail-endpoint-backend {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 18px;
+    border-radius: 20px;
+    background: var(--tf-surface-soft);
+    color: var(--tf-text-muted);
+    border: 1px solid var(--tf-border);
+    margin-right: auto;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    user-select: none;
 }
 
 .detail-endpoint-url {

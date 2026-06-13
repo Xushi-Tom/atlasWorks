@@ -55,7 +55,8 @@ const currentLabel = computed(() => {
 
 const docsUrl = computed(() => {
     const loc = window.location;
-    const port = '18000';
+    // 动态取当前浏览器端口，避免与实际访问端口不一致
+    const port = loc.port || (loc.protocol === 'https:' ? '443' : '80');
     return `${loc.protocol}//${loc.hostname}:${port}/api/docs`;
 });
 </script>

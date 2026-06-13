@@ -79,8 +79,18 @@ def _mime_from_extension(extension):
         ".pnts": "application/octet-stream",
         ".i3dm": "application/octet-stream",
         ".cmpt": "application/octet-stream",
+        ".terrain": "application/vnd.quantized-mesh",
     }
     return mapping.get(ext)
+
+
+def _is_gzip_file(full_path):
+    """检查文件头是否为 gzip，避免已解压的 terrain 被错误标记编码。"""
+    try:
+        with open(full_path, "rb") as file_obj:
+            return file_obj.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
 
 
 def _is_mbtiles_publish_method(publish_method):
@@ -2994,9 +3004,15 @@ def _send_published_entry(full_path, normalized_path, url_builder=None):
     parent_dir = os.path.dirname(full_path)
     filename = os.path.basename(full_path)
     mimetype = _mime_from_extension(os.path.splitext(filename)[1])
-    if mimetype:
-        return send_from_directory(parent_dir, filename, mimetype=mimetype)
-    return send_from_directory(parent_dir, filename)
+    
+    response = send_from_directory(parent_dir, filename, mimetype=mimetype) if mimetype else send_from_directory(parent_dir, filename)
+    extension = os.path.splitext(filename)[1].lower()
+    if extension in {".terrain", ".pbf"}:
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        if extension == ".pbf" or _is_gzip_file(full_path):
+            response.headers["Content-Encoding"] = "gzip"
+        
+    return response
 
 
 def _resolve_publication_relative_path(base_full_path, relative_path):
@@ -3044,8 +3060,14 @@ def _resolve_publication_asset_path(publication, relative_path=""):
 
 def servePublishedPath(relative_path=""):
     try:
-        redirect_url = _build_nginx_published_url(relative_path)
-        return redirect(redirect_url, code=307)
+        normalized_relative_path, full_path = _resolve_tiles_path(relative_path)
+        if not os.path.exists(full_path):
+            return jsonify({"error": "目标发布资源不存在"}), 404
+        return _send_published_entry(
+            full_path, 
+            normalized_relative_path, 
+            lambda p: f"{_public_base_url()}/published/{p}" if p else f"{_public_base_url()}/published/"
+        )
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     except Exception as exc:
@@ -3063,7 +3085,11 @@ def servePublicationAsset(publication_id=None, relative_path=""):
         if not os.path.exists(full_path):
             return jsonify({"error": "目标发布资源不存在"}), 404
 
-        return redirect(_build_nginx_published_url(normalized_relative_path), code=307)
+        return _send_published_entry(
+            full_path, 
+            normalized_relative_path, 
+            lambda p: f"{_public_base_url()}/publication-assets/{publication_id}/{p}" if p else f"{_public_base_url()}/publication-assets/{publication_id}"
+        )
     except FileNotFoundError as exc:
         return jsonify({"success": False, "error": str(exc)}), 404
     except ValueError as exc:

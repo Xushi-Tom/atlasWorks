@@ -19,7 +19,7 @@ npm run build
 
 2. 镜像打包
 cd /d D:\map\atlasWorks
-docker build --pull=false --progress=plain -t atlasworks:release-20260506 -f deploy/docker/Dockerfile .
+docker build --pull=false --progress=plain -t atlasworks:release-20260521 -f deploy/docker/Dockerfile .
 
 
 3. 导出镜像
@@ -49,3 +49,6 @@ docker compose -f docker-compose.external-db.yml down
 
 内置 PostgreSQL 15 版停止：
 docker compose -f docker-compose.pg15.yml down
+
+touch services/.buildstamp && docker build --pull=false --progress=plain -t atlasworks:release-20260521 -f deploy/docker/Dockerfile . && rm -f services/.buildstamp
+ATLASWORKS_IMAGE=atlasworks:release-20260521 docker compose -f docker-compose.external-db.yml up -d --no-build --force-recreate

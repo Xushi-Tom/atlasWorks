@@ -30,17 +30,27 @@ RUN printf "deb %s bullseye main contrib non-free\n" "${APT_MIRROR}" > /etc/apt/
     ca-certificates \
     cmake \
     curl \
+    dnsutils \
     gdal-bin \
     git \
     gnupg \
     gunicorn \
+    iproute2 \
+    iputils-ping \
+    jq \
+    less \
     libgdal-dev \
     libgl1 \
     libglu1-mesa \
     libsqlite3-dev \
+    lsof \
+    nano \
+    net-tools \
+    netcat-openbsd \
     zlib1g-dev \
     openscenegraph \
     p7zip-full \
+    procps \
     python3 \
     python3-dev \
     python3-gdal \
@@ -48,7 +58,10 @@ RUN printf "deb %s bullseye main contrib non-free\n" "${APT_MIRROR}" > /etc/apt/
     python3-pil \
     python3-pip \
     python3-setuptools \
+    telnet \
     tzdata \
+    unzip \
+    vim \
     wget \
     && apt-get -f install -y \
     && apt-get clean \

@@ -6,7 +6,7 @@ services:
   # 服务名：AtlasWorks API 控制面
   atlasworks-api:
     # API 服务镜像名称与版本
-    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-2026610.1}
     platform: linux/amd64
     # 构建配置
     build:
@@ -59,16 +59,16 @@ services:
       # 每个 API Web 进程的线程数
       - ATLASWORKS_THREADS=4
       # 发布地址完整覆盖（为空则按其他规则计算）
-      - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLIC_BASE_URL:-}
+      - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLIC_BASE_URL:-http://100.107.2.36:18000}
       # 发布地址主机名/IP（默认写死，可按需覆盖）
-      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-localhost}
+      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-100.107.2.36}
       # 发布地址解析模式（request_host/auto 等）
       - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
       # 发布地址端口
       - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLIC_BASE_PORT:-18000}
-      # Nginx 静态发布对外地址；为空时按发布主机和 18080 生成
+      # Nginx 静态瓦片服务对外地址（与发布 API 服务 18001 端口不同）；为空时按发布主机和 18080 生成
       - ATLASWORKS_NGINX_PUBLIC_BASE_URL=${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
-      # Nginx 静态发布对外端口
+      # Nginx 静态瓦片服务对外端口（对应 atlasworks-nginx 容器，默认 18080）
       - ATLASWORKS_NGINX_PUBLIC_BASE_PORT=${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
       # GeoServer REST 内网地址
       - ATLASWORKS_GEOSERVER_BASE_URL=${ATLASWORKS_GEOSERVER_BASE_URL:-http://atlasworks-geoserver:8080/geoserver}
@@ -146,7 +146,7 @@ services:
 
   # 服务名：二维矢量切片 Worker，执行 MVT / GeoJSON 金字塔切片
   atlasworks-vector-worker:
-    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260529.7}
     platform: linux/amd64
     build:
       context: .
@@ -227,7 +227,7 @@ services:
 
   # 服务名：影像切片 Worker，执行 indexed/map 栅格切片队列任务
   atlasworks-raster-worker:
-    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260529.7}
     platform: linux/amd64
     container_name: atlasworks-raster-worker
     restart: unless-stopped
@@ -293,7 +293,7 @@ services:
 
   # 服务名：地形切片 Worker，执行 terrain 切片队列任务
   atlasworks-terrain-worker:
-    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260529.7}
     platform: linux/amd64
     container_name: atlasworks-terrain-worker
     restart: unless-stopped
@@ -348,7 +348,7 @@ services:
 
   # 服务名：3D Tiles Worker，执行 3D Tiles 转换队列任务
   atlasworks-3dtiles-worker:
-    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260529.7}
     platform: linux/amd64
     container_name: atlasworks-3dtiles-worker
     restart: unless-stopped
@@ -403,7 +403,7 @@ services:
 
   # 服务名：发布服务，负责发布记录、静态发布资源、WMTS 等访问
   atlasworks-publisher:
-    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260506}
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260529.7}
     platform: linux/amd64
     build:
       context: .
@@ -433,16 +433,16 @@ services:
       # 发布服务容器内部监听端口
       - PORT=18001
       # 发布访问地址完整覆盖；为空时按主机、端口和请求信息自动计算
-      - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_URL:-}
+      - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_URL:-http://100.107.2.36:18001}
       # 生成发布访问地址时使用的主机 IP 或域名
-      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-localhost}
+      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-100.107.2.36}
       # 发布访问地址解析模式，request_host 表示优先使用请求 Host
       - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
       # 生成发布访问地址时使用的端口
       - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_PORT:-18001}
-      # Nginx 静态发布对外地址；为空时按发布主机和 18080 生成
+      # Nginx 静态瓦片服务对外地址（与发布 API 服务 18001 端口不同）；为空时按发布主机和 18080 生成
       - ATLASWORKS_NGINX_PUBLIC_BASE_URL=${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
-      # Nginx 静态发布对外端口
+      # Nginx 静态瓦片服务对外端口（对应 atlasworks-nginx 容器，默认 18080）
       - ATLASWORKS_NGINX_PUBLIC_BASE_PORT=${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
       # GeoServer REST 内网地址
       - ATLASWORKS_GEOSERVER_BASE_URL=${ATLASWORKS_GEOSERVER_BASE_URL:-http://atlasworks-geoserver:8080/geoserver}
@@ -501,7 +501,7 @@ services:
     # Nginx 静态发布最大内存
     mem_limit: ${ATLASWORKS_NGINX_MEM_LIMIT:-512m}
     ports:
-      # Nginx 静态发布对外端口
+      # Nginx 静态瓦片对外端口，对应 /published/ 路径的 tiles 目录发布
       - "${ATLASWORKS_NGINX_HOST_PORT:-18080}:80"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health || exit 1"]

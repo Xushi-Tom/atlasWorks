@@ -644,6 +644,25 @@ async function focusViewer(Cesium, viewer, config, duration = 0) {
 }
 
 async function addWorldBaseLayer(Cesium, viewer) {
+    await addFallbackWorldBaseLayer(Cesium, viewer);
+
+    const localBasemapUrl = getStaticAssetUrl('basemap/global-imagery/{z}/{x}/{y}.jpeg');
+    const localProvider = new Cesium.UrlTemplateImageryProvider({
+        url: localBasemapUrl,
+        tilingScheme: new Cesium.WebMercatorTilingScheme(),
+        minimumLevel: 0,
+        maximumLevel: 7,
+        credit: 'AtlasWorks Basemap'
+    });
+
+    localProvider.errorEvent.addEventListener(error => {
+        console.warn('Local basemap tile failed:', error);
+    });
+    viewer.imageryLayers.addImageryProvider(localProvider);
+    return 'AtlasWorks 本地全球底图 + 全球兜底底图';
+}
+
+async function addFallbackWorldBaseLayer(Cesium, viewer) {
     try {
         const provider = await Cesium.TileMapServiceImageryProvider.fromUrl(
             Cesium.buildModuleUrl('Assets/Textures/NaturalEarthII')
@@ -666,6 +685,17 @@ async function addWorldBaseLayer(Cesium, viewer) {
         viewer.imageryLayers.addImageryProvider(provider);
         return 'OpenStreetMap 全球底图';
     }
+}
+
+async function ensureWorldBaseLayer(Cesium, viewer) {
+    if (viewer.imageryLayers.length > 0) return;
+    try {
+        await addWorldBaseLayer(Cesium, viewer);
+    } catch (localError) {
+        console.warn('AtlasWorks local basemap failed, fallback to Cesium/OSM:', localError);
+        await addFallbackWorldBaseLayer(Cesium, viewer);
+    }
+    viewer.scene.requestRender();
 }
 
 async function renderImageryPreview(Cesium, viewer, config) {
@@ -731,6 +761,8 @@ async function renderWmsImageryPreview(Cesium, viewer, config) {
 
 async function renderTerrainPreview(Cesium, viewer, config) {
     viewer.terrainProvider = await Cesium.CesiumTerrainProvider.fromUrl(config.url);
+    // 地形 provider 切换后确保影像底图仍然挂载，避免只剩黑色地球轮廓。
+    await ensureWorldBaseLayer(Cesium, viewer);
     await focusViewer(Cesium, viewer, config);
 }
 
@@ -934,7 +966,7 @@ async function renderPreview() {
 
             viewerInstance = viewer;
             activeCesium = Cesium;
-            await addWorldBaseLayer(Cesium, viewer);
+            await ensureWorldBaseLayer(Cesium, viewer);
             setDefaultCamera(Cesium, viewer);
 
             if (previewConfig.value.mode === 'wmts-imagery') {
