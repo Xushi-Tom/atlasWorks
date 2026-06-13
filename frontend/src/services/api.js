@@ -94,6 +94,13 @@ class AtlasWorksApi {
         });
     }
 
+    async patch(url, data = {}) {
+        return this.request(url, {
+            method: 'PATCH',
+            body: JSON.stringify(data)
+        });
+    }
+
     async delete(url) {
         return this.request(url, { method: 'DELETE' });
     }
@@ -114,11 +121,14 @@ class AtlasWorksApi {
         return this.get('/api/system/info');
     }
 
-    async browseDatasources(path = '', bounds = '') {
+    async browseDatasources(path = '', options = {}) {
         const normalized = normalizeRelativePath(path);
         const endpoint = normalized ? `/api/datasources/${encodePathSegments(normalized)}` : '/api/datasources';
+        const normalizedOptions = typeof options === 'string' ? { bounds: options } : (options || {});
         const params = {};
-        if (bounds) params.bounds = bounds;
+        if (normalizedOptions.bounds) params.bounds = normalizedOptions.bounds;
+        if (normalizedOptions.page) params.page = normalizedOptions.page;
+        if (normalizedOptions.pageSize) params.pageSize = normalizedOptions.pageSize;
         return this.get(endpoint, params);
     }
 
@@ -147,13 +157,15 @@ class AtlasWorksApi {
         return this.upload('/api/upload/file', formData);
     }
 
-    async uploadZipArchive(file, targetPath = '', overwrite = false, stripTopLevel = true, targetType = 'datasource') {
+    async uploadZipArchive(file, targetPath = '', overwrite = false, stripTopLevel = true, targetType = 'datasource', extractFolderName = '') {
         const formData = new FormData();
         formData.append('file', file);
         if (targetPath) formData.append('targetPath', targetPath);
         formData.append('overwrite', overwrite ? '1' : '0');
         formData.append('stripTopLevel', stripTopLevel ? '1' : '0');
         formData.append('targetType', targetType);
+        const folderName = String(extractFolderName || '').trim();
+        if (folderName) formData.append('extractFolderName', folderName);
         return this.upload('/api/upload/zip', formData);
     }
 
@@ -169,10 +181,13 @@ class AtlasWorksApi {
         return this.upload('/api/upload/folder', formData);
     }
 
-    async browseResults(path = '') {
+    async browseResults(path = '', options = {}) {
+        const normalizedOptions = options || {};
         return this.get('/api/results', {
             type: 'results',
-            path: normalizeRelativePath(path)
+            path: normalizeRelativePath(path),
+            page: normalizedOptions.page,
+            pageSize: normalizedOptions.pageSize
         });
     }
 
@@ -215,12 +230,15 @@ class AtlasWorksApi {
         return this.delete(`/api/workspace/file/${encodePathSegments(filePath)}`);
     }
 
-    async extractArchive(path, targetType = 'datasource', overwrite = false) {
-        return this.post('/api/files/extract', {
+    async extractArchive(path, targetType = 'datasource', overwrite = false, extractFolderName = '') {
+        const payload = {
             path: normalizeRelativePath(path),
             targetType,
             overwrite
-        });
+        };
+        const folderName = String(extractFolderName || '').trim();
+        if (folderName) payload.extractFolderName = folderName;
+        return this.post('/api/files/extract', payload);
     }
 
     async getAllTasks(params = {}) {
@@ -251,8 +269,66 @@ class AtlasWorksApi {
         return this.post('/api/tile/indexedTiles', params);
     }
 
+    async geoserverPublish(params) {
+        return this.post('/api/geoserver/publish', params);
+    }
+
+    async geoserverListLayers(params = {}) {
+        return this.get('/api/geoserver/layers', params);
+    }
+
+    async geoserverGetLayer(name, params = {}) {
+        return this.get(`/api/geoserver/layers/${encodeURIComponent(name)}`, params);
+    }
+
+    async geoserverDeleteLayer(name, params = {}) {
+        const target = new URL(`${this.baseURL}/api/geoserver/layers/${encodeURIComponent(name)}`);
+        Object.entries(params || {}).forEach(([key, value]) => {
+            if (value !== undefined && value !== null && value !== '') {
+                target.searchParams.append(key, value);
+            }
+        });
+        return this.request(target.toString(), { method: 'DELETE' });
+    }
+
+    async geoserverSeedLayer(name, params = {}) {
+        const workspace = params.workspace;
+        const payload = { ...params };
+        delete payload.workspace;
+        const target = new URL(`${this.baseURL}/api/geoserver/layers/${encodeURIComponent(name)}/seed`);
+        if (workspace) target.searchParams.append('workspace', workspace);
+        return this.request(target.toString(), {
+            method: 'POST',
+            body: JSON.stringify(payload),
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
+
+    async geoserverSeedStatus(name, params = {}) {
+        return this.get(`/api/geoserver/layers/${encodeURIComponent(name)}/seed`, params);
+    }
+
+    async geoserverCancelSeed(name, params = {}) {
+        const workspace = params.workspace;
+        const target = new URL(`${this.baseURL}/api/geoserver/layers/${encodeURIComponent(name)}/seed/cancel`);
+        if (workspace) target.searchParams.append('workspace', workspace);
+        return this.request(target.toString(), { method: 'POST' });
+    }
+
+    async geoserverHealth() {
+        return this.get('/api/geoserver/health');
+    }
+
     async createTerrainTiles(params) {
         return this.post('/api/tile/terrain', params);
+    }
+
+    async create3DTiles(params) {
+        return this.post('/api/tile/3dtiles', params);
+    }
+
+    async createVectorTiles(params) {
+        return this.post('/api/tile/mvt', params);
     }
 
     async recommendConfig(params) {
@@ -307,6 +383,29 @@ class AtlasWorksApi {
         return this.post('/api/tile/convert', params);
     }
 
+    async getTileCacheInfo() {
+        return this.get('/api/tile/cache');
+    }
+
+    async getTileCacheDetail(path) {
+        return this.get('/api/tile/cache/detail', {
+            path: normalizeRelativePath(path)
+        });
+    }
+
+    async deleteTileCache(path) {
+        return this.post('/api/tile/cache/delete', {
+            path: normalizeRelativePath(path)
+        });
+    }
+
+    async deleteTileCacheZoomLevels(path, zoomLevels = []) {
+        return this.post('/api/tile/cache/delete', {
+            path: normalizeRelativePath(path),
+            zoomLevels
+        });
+    }
+
     async listArtifacts(params = {}) {
         return this.get('/api/artifacts', params);
     }
@@ -323,8 +422,16 @@ class AtlasWorksApi {
         return this.get(`/api/publications/${encodeURIComponent(publicationId)}`);
     }
 
+    async getPublicationSeedStatus(publicationId) {
+        return this.get(`/api/publications/${encodeURIComponent(publicationId)}/seed-status`);
+    }
+
     async updatePublication(publicationId, params) {
         return this.put(`/api/publications/${encodeURIComponent(publicationId)}`, params);
+    }
+
+    async togglePublicationEnabled(publicationId, enabled) {
+        return this.patch(`/api/publications/${encodeURIComponent(publicationId)}/enabled`, { enabled });
     }
 
     async deletePublication(publicationId) {
@@ -333,10 +440,6 @@ class AtlasWorksApi {
 
     async getRoutes(params = {}) {
         return this.get('/api/routes', params);
-    }
-
-    async getCacheInfo() {
-        return this.get('/api/cache/info');
     }
 
     async updateContainer(params = {}) {

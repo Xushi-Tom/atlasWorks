@@ -4,11 +4,14 @@ frontend/dist/
 
 # Python cache
 backend/__pycache__/
+backend/static/
 **/__pycache__/
 *.py[cod]
 
 # Runtime artifacts
 runtime/
+storage/
+project-assets/
 *.zip
 *.tar
 *.tar.gz
@@ -17,3 +20,6 @@ runtime/
 # OS/editor
 .DS_Store
 Thumbs.db
+.idea/
+.claude/
+claude/

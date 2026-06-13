@@ -1,0 +1,576 @@
+# 内置 PostgreSQL 15 版：同时启动 AtlasWorks 与 atlasworks-postgres
+# 启动命令：docker compose -f docker-compose.pg15.yml up -d --no-build --force-recreate
+# 停止命令：docker compose -f docker-compose.pg15.yml down
+services:
+
+  # 服务名：内置 PostgreSQL 15 数据库
+  atlasworks-postgres:
+    # 官方 PostgreSQL 15 镜像
+    image: postgres:15
+    platform: linux/amd64
+    # 固定容器名称
+    container_name: atlasworks-postgres
+    # 重启策略：除非手动停止，否则自动重启
+    restart: unless-stopped
+    # 容器环境变量配置
+    environment:
+      # 初始化数据库名称
+      - POSTGRES_DB=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 初始化数据库用户
+      - POSTGRES_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 初始化数据库密码，生产环境务必改掉默认值
+      - POSTGRES_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      - TZ=Asia/Shanghai
+    ports:
+      # 宿主机端口:容器端口；容器内部访问 PostgreSQL 仍然使用 5432
+      - "${ATLASWORKS_POSTGRES_HOST_PORT:-25432}:5432"
+    healthcheck:
+      # 健康检查命令
+      test: ["CMD-SHELL", "pg_isready -U postgres -d atlasworks"]
+      # 检查间隔
+      interval: 10s
+      # 单次检查超时
+      timeout: 5s
+      # 失败重试次数
+      retries: 10
+    volumes:
+      # 持久化数据库数据目录
+      - ./runtime/postgres:/var/lib/postgresql/data
+      # 挂载初始化 SQL 脚本目录（只读）
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+  # 服务名：AtlasWorks API 控制面
+  atlasworks-api:
+    # API 服务镜像名称与版本
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260522}
+    platform: linux/amd64
+    # 构建配置
+    build:
+      # 构建上下文目录
+      context: .
+      # 构建使用的 Dockerfile 路径
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        # 基础镜像，默认只使用 amd64/x86_64
+        BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye}
+        # Debian 普通软件源，内网或离线环境可替换
+        APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
+        # Debian security 软件源，内网或离线环境可替换
+        APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
+    # 固定容器名称
+    container_name: atlasworks-api
+    # 重启策略：除非手动停止，否则自动重启
+    restart: unless-stopped
+    # API 容器 CPU 上限
+    cpus: ${ATLASWORKS_API_CPUS:-4.0}
+    # API 容器最大内存
+    mem_limit: ${ATLASWORKS_API_MEM_LIMIT:-8g}
+    # API 容器内存软预留
+    mem_reservation: ${ATLASWORKS_API_MEM_RESERVATION:-2g}
+    # /dev/shm 大小，部分 geospatial 库处理大文件时会用到
+    shm_size: ${ATLASWORKS_API_SHM_SIZE:-1g}
+    # API 容器最大进程数
+    pids_limit: ${ATLASWORKS_API_PIDS_LIMIT:-1024}
+    ulimits:
+      # 最大打开文件数
+      nofile:
+        soft: ${ATLASWORKS_API_NOFILE_SOFT:-65535}
+        hard: ${ATLASWORKS_API_NOFILE_HARD:-65535}
+    # 依赖服务配置
+    depends_on:
+      atlasworks-postgres:
+        condition: service_healthy
+    # 容器环境变量配置
+    environment:
+      # 容器时区
+      - TZ=Asia/Shanghai
+      # API 监听地址
+      - HOST=0.0.0.0
+      # API 容器内部监听端口
+      - PORT=18000
+      # API Web 进程数，内部参数，不是切片 Worker 容器数量
+      - ATLASWORKS_WORKERS=1
+      # 每个 API Web 进程的线程数
+      - ATLASWORKS_THREADS=4
+      # 发布地址完整覆盖（为空则按其他规则计算）
+      - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLIC_BASE_URL:-}
+      # 发布地址主机名/IP（默认写死，可按需覆盖）
+      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-192.168.1.200}
+      # 发布地址解析模式（request_host/auto 等）
+      - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
+      # 发布地址端口
+      - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLIC_BASE_PORT:-18000}
+      # Nginx 静态瓦片服务对外地址（与发布 API 服务 18001 端口不同）；为空时按发布主机和 18080 生成
+      - ATLASWORKS_NGINX_PUBLIC_BASE_URL=${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
+      # Nginx 静态瓦片服务对外端口（对应 atlasworks-nginx 容器，默认 18080）
+      - ATLASWORKS_NGINX_PUBLIC_BASE_PORT=${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
+      # GeoServer REST 内网地址
+      - ATLASWORKS_GEOSERVER_BASE_URL=${ATLASWORKS_GEOSERVER_BASE_URL:-http://atlasworks-geoserver:8080/geoserver}
+      # GeoServer 对外访问地址
+      - ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL=${ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL:-}
+      # GeoServer 对外访问端口
+      - ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT=${ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT:-18083}
+      # GeoServer 账号密码
+      - ATLASWORKS_GEOSERVER_USERNAME=${ATLASWORKS_GEOSERVER_USERNAME:-admin}
+      - ATLASWORKS_GEOSERVER_PASSWORD=${ATLASWORKS_GEOSERVER_PASSWORD:-geoserver}
+      - ATLASWORKS_GEOSERVER_WORKSPACE=${ATLASWORKS_GEOSERVER_WORKSPACE:-atlasworks}
+      # API 文档认证用户名（可为空）
+      - ATLASWORKS_DOCS_USER=${ATLASWORKS_DOCS_USER:-}
+      # API 文档认证密码
+      - ATLASWORKS_DOCS_PASSWORD=${ATLASWORKS_DOCS_PASSWORD:-Swsj@2025}
+      # 容器内数据源目录
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 宿主机数据源目录（用于展示/记录）
+      - ATLASWORKS_DATA_SOURCE_HOST_DIR=/datas/multi-data-management/storage/tif
+      # 容器内瓦片目录
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      # 宿主机瓦片目录（用于展示/记录）
+      - ATLASWORKS_TILES_HOST_DIR=/datas/multi-data-management/storage/tiles
+      # 容器内日志目录
+      - ATLASWORKS_LOG_DIR=/app/log
+      # 宿主机日志目录（用于展示/记录）
+      - ATLASWORKS_LOG_HOST_DIR=./runtime/log
+      # 启用数据库持久化能力
+      - TF_DB_ENABLED=1
+      # 数据库主机（容器网络内建议用服务名）
+      - TF_DB_HOST=atlasworks-postgres
+      # 数据库端口
+      - TF_DB_PORT=5432
+      # 数据库名称
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时（秒）
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 数据库 SSL 模式（本地默认 disable）
+      - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
+      - TF_TASK_SYNC_ENABLED=1
+      # 任务状态同步间隔（秒）
+      - TF_TASK_SYNC_INTERVAL=2
+      # API 只负责入队，切片 worker 容器负责执行已迁移的任务
+      - ATLASWORKS_TASK_DISPATCH=worker
+    # 端口映射配置
+    ports:
+      # 主机端口映射到容器同端口
+      - "${ATLASWORKS_HOST_PORT:-18000}:18000"
+    # 健康检查配置
+    healthcheck:
+      # 健康检查命令
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18000/api/health', timeout=5)"]
+      # 检查间隔
+      interval: 15s
+      # 单次检查超时
+      timeout: 5s
+      # 失败重试次数
+      retries: 10
+      # 容器启动后的宽限期
+      start_period: 15s
+    # 数据卷挂载配置
+    volumes:
+      # 挂载宿主机数据源目录到容器
+      - "/datas/multi-data-management/storage/tif:/app/dataSource"
+      # 挂载宿主机瓦片目录到容器
+      - "/datas/multi-data-management/storage/tiles:/app/tiles"
+      # 挂载宿主机日志目录到容器
+      - ./runtime/log:/app/log·
+
+  # 服务名：二维矢量切片 Worker，执行 MVT / GeoJSON 金字塔切片
+  atlasworks-vector-worker:
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260522}
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye}
+        APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
+        APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
+    container_name: atlasworks-vector-worker
+    restart: unless-stopped
+    # 二维矢量切片 Worker CPU 上限
+    cpus: ${ATLASWORKS_WORKER_CPUS:-4.0}
+    # 二维矢量切片 Worker 最大内存
+    mem_limit: ${ATLASWORKS_WORKER_MEM_LIMIT:-8g}
+    # 二维矢量切片 Worker 内存软预留
+    mem_reservation: ${ATLASWORKS_WORKER_MEM_RESERVATION:-2g}
+    # /dev/shm 大小，矢量大文件转换时可按需加大
+    shm_size: ${ATLASWORKS_WORKER_SHM_SIZE:-1g}
+    # Worker 最大进程数
+    pids_limit: ${ATLASWORKS_WORKER_PIDS_LIMIT:-2048}
+    ulimits:
+      nofile:
+        soft: ${ATLASWORKS_WORKER_NOFILE_SOFT:-65535}
+        hard: ${ATLASWORKS_WORKER_NOFILE_HARD:-65535}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
+    environment:
+      # 固定为 worker 角色
+      - TZ=Asia/Shanghai
+      - ATLASWORKS_ROLE=worker
+      # 固定为二维矢量切片服务
+      - ATLASWORKS_TILING_SERVICE=vector
+      # Worker 容器跳过建表，由 API 负责数据库初始化
+      - ATLASWORKS_WORKER_SKIP_DB_INIT=1
+      # Worker 实例 ID，仅用于任务占用与日志标识
+      - ATLASWORKS_WORKER_ID=atlasworks-vector-worker-1
+      # Worker 轮询数据库任务队列间隔，单位秒
+      - ATLASWORKS_WORKER_POLL_INTERVAL=2
+      # 该 Worker 接收的任务类型，不建议部署时修改
+      - ATLASWORKS_WORKER_JOB_TYPES=mvt_tiles,geojson_tiles,vector_tiles
+      # 容器内数据源目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 宿主机数据源目录，仅用于页面展示和记录
+      - ATLASWORKS_DATA_SOURCE_HOST_DIR=/datas/multi-data-management/storage/tif
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      # 宿主机瓦片输出目录，仅用于页面展示和记录
+      - ATLASWORKS_TILES_HOST_DIR=/datas/multi-data-management/storage/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_LOG_DIR=/app/log
+      # 宿主机日志目录，仅用于页面展示和记录
+      - ATLASWORKS_LOG_HOST_DIR=./runtime/log
+      # 启用数据库持久化和任务队列
+      - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
+      - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
+      - TF_DB_PORT=5432
+      # 数据库名称
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
+      - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
+      - TF_TASK_SYNC_ENABLED=1
+      # Worker 直接执行已领取任务
+      - ATLASWORKS_TASK_DISPATCH=inline
+    volumes:
+      # 挂载宿主机数据源目录到容器
+      - "/datas/multi-data-management/storage/tif:/app/dataSource"
+      # 挂载宿主机瓦片目录到容器
+      - "/datas/multi-data-management/storage/tiles:/app/tiles"
+      # 挂载宿主机日志目录到容器
+      - ./runtime/log:/app/log·
+
+  # 服务名：影像切片 Worker，执行 indexed/map 栅格切片队列任务
+  atlasworks-raster-worker:
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260522}
+    platform: linux/amd64
+    container_name: atlasworks-raster-worker
+    restart: unless-stopped
+    # 影像切片 Worker CPU 上限
+    cpus: ${ATLASWORKS_RASTER_WORKER_CPUS:-4.0}
+    # 影像切片 Worker 最大内存
+    mem_limit: ${ATLASWORKS_RASTER_WORKER_MEM_LIMIT:-8g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
+    environment:
+      # 容器时区
+      - TZ=Asia/Shanghai
+      # 固定为 worker 角色
+      - ATLASWORKS_ROLE=worker
+      # 固定为影像切片服务
+      - ATLASWORKS_TILING_SERVICE=raster
+      # Worker 容器跳过建表，由 API 负责数据库初始化
+      - ATLASWORKS_WORKER_SKIP_DB_INIT=1
+      # Worker 实例 ID，用于任务占用和日志标识
+      - ATLASWORKS_WORKER_ID=atlasworks-raster-worker-1
+      # 该 Worker 接收的任务类型，不建议部署时修改
+      - ATLASWORKS_WORKER_JOB_TYPES=indexed_tiles,map_tiles
+      # 容器内数据源目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_LOG_DIR=/app/log
+      # 启用数据库持久化和任务队列
+      - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
+      - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
+      - TF_DB_PORT=5432
+      # 数据库名称
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
+      - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
+      - TF_TASK_SYNC_ENABLED=1
+    volumes:
+      # 挂载宿主机数据源目录到容器
+      - "/datas/multi-data-management/storage/tif:/app/dataSource"
+      # 挂载宿主机瓦片目录到容器
+      - "/datas/multi-data-management/storage/tiles:/app/tiles"
+      # 挂载宿主机日志目录到容器
+      - ./runtime/log:/app/log·
+
+  # 服务名：地形切片 Worker，执行 terrain 切片队列任务
+  atlasworks-terrain-worker:
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260522}
+    platform: linux/amd64
+    container_name: atlasworks-terrain-worker
+    restart: unless-stopped
+    # 地形切片 Worker CPU 上限
+    cpus: ${ATLASWORKS_TERRAIN_WORKER_CPUS:-4.0}
+    # 地形切片 Worker 最大内存
+    mem_limit: ${ATLASWORKS_TERRAIN_WORKER_MEM_LIMIT:-8g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
+    environment:
+      # 容器时区
+      - TZ=Asia/Shanghai
+      # 固定为 worker 角色
+      - ATLASWORKS_ROLE=worker
+      # 固定为地形切片服务
+      - ATLASWORKS_TILING_SERVICE=terrain
+      # Worker 容器跳过建表，由 API 负责数据库初始化
+      - ATLASWORKS_WORKER_SKIP_DB_INIT=1
+      # Worker 实例 ID，用于任务占用和日志标识
+      - ATLASWORKS_WORKER_ID=atlasworks-terrain-worker-1
+      # 该 Worker 接收的任务类型，不建议部署时修改
+      - ATLASWORKS_WORKER_JOB_TYPES=terrain_tiles,terrain
+      # 容器内数据源目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_LOG_DIR=/app/log
+      # 启用数据库持久化和任务队列
+      - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
+      - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
+      - TF_DB_PORT=5432
+      # 数据库名称
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
+      - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
+      - TF_TASK_SYNC_ENABLED=1
+    volumes:
+      # 挂载宿主机数据源目录到容器
+      - "/datas/multi-data-management/storage/tif:/app/dataSource"
+      # 挂载宿主机瓦片目录到容器
+      - "/datas/multi-data-management/storage/tiles:/app/tiles"
+      # 挂载宿主机日志目录到容器
+      - ./runtime/log:/app/log·
+
+  # 服务名：3D Tiles Worker，执行 3D Tiles 转换队列任务
+  atlasworks-3dtiles-worker:
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260522}
+    platform: linux/amd64
+    container_name: atlasworks-3dtiles-worker
+    restart: unless-stopped
+    # 3D Tiles Worker CPU 上限
+    cpus: ${ATLASWORKS_3DTILES_WORKER_CPUS:-4.0}
+    # 3D Tiles Worker 最大内存
+    mem_limit: ${ATLASWORKS_3DTILES_WORKER_MEM_LIMIT:-8g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
+    environment:
+      # 容器时区
+      - TZ=Asia/Shanghai
+      # 固定为 worker 角色
+      - ATLASWORKS_ROLE=worker
+      # 固定为 3D Tiles 切片服务
+      - ATLASWORKS_TILING_SERVICE=tiles3d
+      # Worker 容器跳过建表，由 API 负责数据库初始化
+      - ATLASWORKS_WORKER_SKIP_DB_INIT=1
+      # Worker 实例 ID，用于任务占用和日志标识
+      - ATLASWORKS_WORKER_ID=atlasworks-3dtiles-worker-1
+      # 该 Worker 接收的任务类型，不建议部署时修改
+      - ATLASWORKS_WORKER_JOB_TYPES=3dtiles,3dtiles-pointcloud,3dtiles-vector,3dtiles-model,3dtiles-osgb
+      # 容器内数据源目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_LOG_DIR=/app/log
+      # 启用数据库持久化和任务队列
+      - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
+      - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
+      - TF_DB_PORT=5432
+      # 数据库名称
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
+      - TF_DB_SSLMODE=disable
+      # 启用任务状态同步线程
+      - TF_TASK_SYNC_ENABLED=1
+    volumes:
+      # 挂载宿主机数据源目录到容器
+      - "/datas/multi-data-management/storage/tif:/app/dataSource"
+      # 挂载宿主机瓦片目录到容器
+      - "/datas/multi-data-management/storage/tiles:/app/tiles"
+      # 挂载宿主机日志目录到容器
+      - ./runtime/log:/app/log·
+
+  # 服务名：发布服务，负责发布记录、静态发布资源、WMTS 等访问
+  atlasworks-publisher:
+    image: ${ATLASWORKS_IMAGE:-atlasworks:release-20260522}
+    platform: linux/amd64
+    container_name: atlasworks-publisher
+    restart: unless-stopped
+    # 发布服务 CPU 上限
+    cpus: ${ATLASWORKS_PUBLISHER_CPUS:-2.0}
+    # 发布服务最大内存
+    mem_limit: ${ATLASWORKS_PUBLISHER_MEM_LIMIT:-4g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
+      atlasworks-geoserver:
+        condition: service_healthy
+    environment:
+      # 容器时区
+      - TZ=Asia/Shanghai
+      # 固定为发布服务角色
+      - ATLASWORKS_ROLE=publisher
+      # 发布服务监听地址，容器内固定监听所有网卡
+      - HOST=0.0.0.0
+      # 发布服务容器内部监听端口
+      - PORT=18001
+      # 发布访问地址完整覆盖；为空时按主机、端口和请求信息自动计算
+      - ATLASWORKS_PUBLIC_BASE_URL=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_URL:-}
+      # 生成发布访问地址时使用的主机 IP 或域名
+      - ATLASWORKS_PUBLIC_BASE_HOST=${ATLASWORKS_PUBLIC_BASE_HOST:-192.168.1.200}
+      # 发布访问地址解析模式，request_host 表示优先使用请求 Host
+      - ATLASWORKS_PUBLIC_BASE_MODE=${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
+      # 生成发布访问地址时使用的端口
+      - ATLASWORKS_PUBLIC_BASE_PORT=${ATLASWORKS_PUBLISHER_PUBLIC_BASE_PORT:-18001}
+      # Nginx 静态瓦片服务对外地址（与发布 API 服务 18001 端口不同）；为空时按发布主机和 18080 生成
+      - ATLASWORKS_NGINX_PUBLIC_BASE_URL=${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
+      # Nginx 静态瓦片服务对外端口（对应 atlasworks-nginx 容器，默认 18080）
+      - ATLASWORKS_NGINX_PUBLIC_BASE_PORT=${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
+      # GeoServer REST 内网地址
+      - ATLASWORKS_GEOSERVER_BASE_URL=${ATLASWORKS_GEOSERVER_BASE_URL:-http://atlasworks-geoserver:8080/geoserver}
+      # GeoServer 对外地址
+      - ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL=${ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL:-}
+      - ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT=${ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT:-18083}
+      - ATLASWORKS_GEOSERVER_USERNAME=${ATLASWORKS_GEOSERVER_USERNAME:-admin}
+      - ATLASWORKS_GEOSERVER_PASSWORD=${ATLASWORKS_GEOSERVER_PASSWORD:-geoserver}
+      - ATLASWORKS_GEOSERVER_WORKSPACE=${ATLASWORKS_GEOSERVER_WORKSPACE:-atlasworks}
+      - ATLASWORKS_GEOSERVER_DATA_SOURCE_DIR=${ATLASWORKS_GEOSERVER_DATA_SOURCE_DIR:-/opt/geoserver/data_dir/dataSource}
+      # 容器内数据源目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_DATA_SOURCE_DIR=/app/dataSource
+      # 容器内瓦片输出目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_TILES_DIR=/app/tiles
+      # 容器内日志目录，需与 volumes 的容器路径一致
+      - ATLASWORKS_LOG_DIR=/app/log
+      # 启用数据库持久化
+      - TF_DB_ENABLED=1
+      # 内置数据库服务名，容器网络内固定使用 atlasworks-postgres
+      - TF_DB_HOST=atlasworks-postgres
+      # 容器网络内 PostgreSQL 端口，固定使用 5432
+      - TF_DB_PORT=5432
+      # 数据库名称
+      - TF_DB_NAME=${ATLASWORKS_DB_NAME:-atlasworks}
+      # 数据库用户
+      - TF_DB_USER=${ATLASWORKS_DB_USER:-postgres}
+      # 数据库密码
+      - TF_DB_PASSWORD=${ATLASWORKS_DB_PASSWORD:-atlasworks}
+      # 数据库连接超时时间，单位秒
+      - TF_DB_CONNECT_TIMEOUT=${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+      # 内置数据库默认不启用 SSL
+      - TF_DB_SSLMODE=disable
+      # 发布服务不执行任务状态同步
+      - TF_TASK_SYNC_ENABLED=0
+    ports:
+      - "${ATLASWORKS_PUBLISHER_HOST_PORT:-18001}:18001"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18001/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes:
+      # 挂载宿主机数据源目录到容器
+      - "/datas/multi-data-management/storage/tif:/app/dataSource"
+      # 挂载宿主机瓦片目录到容器
+      - "/datas/multi-data-management/storage/tiles:/app/tiles"
+      # 挂载宿主机日志目录到容器
+      - ./runtime/log:/app/log·
+
+  # 服务名：Nginx 静态发布后端，负责高性能发布已切好的瓦片目录
+  atlasworks-nginx:
+    image: nginx:1.27-alpine
+    platform: linux/amd64
+    container_name: atlasworks-nginx
+    restart: unless-stopped
+    # Nginx 静态发布 CPU 上限
+    cpus: ${ATLASWORKS_NGINX_CPUS:-1.0}
+    # Nginx 静态发布最大内存
+    mem_limit: ${ATLASWORKS_NGINX_MEM_LIMIT:-512m}
+    ports:
+      # Nginx 静态瓦片对外端口，对应 /published/ 路径的 tiles 目录发布
+      - "${ATLASWORKS_NGINX_HOST_PORT:-18080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      # 挂载 Nginx 发布配置
+      - ./deploy/nginx/atlasworks.conf:/etc/nginx/conf.d/default.conf:ro
+      # 挂载宿主机瓦片目录到容器
+      - "/datas/multi-data-management/storage/tiles:/srv/atlasworks/tiles:ro"
+
+  # 服务名：GeoServer 标准地图服务后端，负责 WMS/WMTS/ImageMosaic 发布
+  atlasworks-geoserver:
+    image: docker.osgeo.org/geoserver:2.26.x
+    platform: linux/amd64
+    container_name: atlasworks-geoserver
+    restart: unless-stopped
+    environment:
+      - GEOSERVER_ADMIN_USER=${ATLASWORKS_GEOSERVER_USERNAME:-admin}
+      - GEOSERVER_ADMIN_PASSWORD=${ATLASWORKS_GEOSERVER_PASSWORD:-geoserver}
+      - ENABLE_JSONP=true
+      - CORS_ENABLED=true
+      - CORS_ALLOWED_ORIGINS=*
+      - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir
+      - INITIAL_MEMORY=1G
+      - MAXIMUM_MEMORY=4G
+    ports:
+      - "${ATLASWORKS_GEOSERVER_HOST_PORT:-18083}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/geoserver/web/ || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    volumes:
+      - ./runtime/geoserver:/opt/geoserver/data_dir
+      # 挂载宿主机数据源目录到容器
+      - "/datas/multi-data-management/storage/tif:/app/dataSource"
+      - "/datas/multi-data-management/storage/tif:/opt/geoserver/data_dir/dataSource"
+      - "/datas/multi-data-management/storage/tiles:/opt/geoserver/data_dir/tiles"

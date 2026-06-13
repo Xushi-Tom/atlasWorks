@@ -402,42 +402,92 @@ body.tf-app.tf-theme-light::after {
 
 .tf-app .toast-stack {
     position: fixed;
-    top: calc(var(--tf-header-height) + 20px);
-    right: 24px;
+    top: 28px;
+    left: 50%;
+    transform: translateX(-50%);
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     z-index: 9999;
+    pointer-events: none;
 }
 
-.tf-app .toast-card {
-    min-width: 320px;
-    max-width: 520px;
+.tf-app .layui-layer-msg {
+    min-width: 280px;
+    max-width: 560px;
+    min-height: 48px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    padding: 16px 18px;
-    border-radius: 18px;
-    border: 1px solid rgba(74, 195, 255, 0.16);
-    background: rgba(10, 20, 34, 0.94);
-    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.32);
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 6px;
+    border: 1px solid rgba(74, 195, 255, 0.18);
+    background: rgba(10, 20, 34, 0.96);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
     color: var(--tf-text);
+    pointer-events: auto;
 }
 
-.tf-app .toast-card-error {
-    border-color: rgba(255, 102, 127, 0.28);
-    background: rgba(49, 14, 22, 0.96);
+.tf-app .layui-layer-msg-success {
+    border-color: rgba(47, 224, 181, 0.46);
 }
 
-.tf-app .toast-card-success {
-    border-color: rgba(47, 224, 181, 0.24);
-    background: rgba(11, 34, 30, 0.96);
+.tf-app .layui-layer-msg-warning {
+    border-color: rgba(255, 191, 71, 0.42);
 }
 
-.tf-app .toast-card-warning {
-    border-color: rgba(255, 191, 71, 0.24);
-    background: rgba(46, 31, 10, 0.96);
+.tf-app .layui-layer-msg-error {
+    border-color: rgba(255, 102, 127, 0.44);
+}
+
+.tf-app .layui-layer-msg__icon {
+    width: 18px;
+    flex: 0 0 18px;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.tf-app .layui-layer-msg-success .layui-layer-msg__icon {
+    color: #2fe0b5;
+}
+
+.tf-app .layui-layer-msg-warning .layui-layer-msg__icon {
+    color: #ffbf47;
+}
+
+.tf-app .layui-layer-msg-error .layui-layer-msg__icon {
+    color: #ff667f;
+}
+
+.tf-app .layui-layer-msg-info .layui-layer-msg__icon {
+    color: #4ac3ff;
+}
+
+.tf-app .layui-layer-msg__content {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.tf-app .layui-layer-msg__close {
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.58);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0;
+    flex: 0 0 auto;
+}
+
+.tf-app .layui-layer-msg__close:hover {
+    color: rgba(255, 255, 255, 0.86);
 }
 
 .tf-app .product-header {
@@ -2386,6 +2436,11 @@ body.tf-app.tf-theme-light .directory-path-text {
     padding: 18px 22px;
     align-items: center;
     gap: 14px;
+}
+
+.tf-app .section-header-workbench.section-header-compact {
+    justify-content: flex-end;
+    padding: 14px 22px;
 }
 
 .tf-app .section-header-actions {

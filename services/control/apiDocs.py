@@ -1,0 +1,3333 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import copy
+import json
+import re
+
+from flask import Response, current_app, jsonify, request
+
+from api_response import normalize_envelope
+from config import config
+from version import APP_VERSION
+
+
+_PATH_PARAM_PATTERN = re.compile(r"<(?:[^:>]+:)?([^>]+)>")
+_OPENAPI_PARAM_PATTERN = re.compile(r"{([^}]+)}")
+
+_ENUM_VALUE_DESCRIPTIONS = {
+    "all": "全部更新",
+    "time": "时间/时区",
+    "environment": "环境变量",
+    "config": "运行配置",
+    "system": "系统清理",
+    "network": "网络检查",
+    "datasource": "数据源目录",
+    "workspace": "工作空间/结果目录",
+    "results": "工作空间/结果目录",
+    "map": "地图切片推荐",
+    "terrain": "地形切片/发布",
+    "map_tiles": "地图切片预检查",
+    "terrain_tiles": "地形切片预检查",
+    "indexed_tiles": "索引瓦片任务",
+    "flat": "扁平结构 z/x_y.ext",
+    "nested": "嵌套结构 z/x/y.ext",
+    "EPSG:3857": "Web Mercator",
+    "EPSG:4326": "WGS84 经纬度",
+    "EPSG:4490": "CGCS2000 经纬度",
+    "png": "PNG 图片",
+    "jpeg": "JPEG 图片",
+    "tms": "TMS 瓦片坐标",
+    "google": "Google/XYZ 瓦片坐标",
+    "auto": "自动判断",
+    "gray": "单波段灰度渲染",
+    "rgb": "RGB 三波段渲染",
+    "mvt": "Mapbox Vector Tile (.pbf)",
+    "geojson": "GeoJSON 瓦片",
+    "include": "保留未命中规则的要素",
+    "exclude": "排除未命中规则的要素",
+    "conservative": "保守层级策略",
+    "balanced": "均衡层级策略",
+    "aggressive": "激进层级策略",
+    "queued": "排队中",
+    "running": "执行中",
+    "completed": "已完成",
+    "failed": "失败",
+    "stopped": "已停止",
+    "pointcloud": "点云",
+    "vector": "矢量面/建筑",
+    "model": "OBJ 模型",
+    "osgb": "OSGB 模型",
+    "b3dm": "Batched 3D Model",
+    "glb": "GLB",
+    "meters": "字段值按米解释",
+    "floors": "字段值按楼层解释",
+    "manual": "手动经纬度锚点",
+    "artifact": "按产物发布",
+    "task": "按任务发布",
+    "imagery": "影像",
+    "electronic-map": "电子地图",
+    "3dtiles": "3D Tiles",
+    "xyz": "XYZ 静态瓦片",
+    "wmts": "WMTS",
+    "geojson-tile": "GeoJSON 静态瓦片",
+    "cesium-terrain": "Cesium Terrain",
+    "quantized-mesh": "Quantized Mesh 地形",
+    "3d-tiles": "3D Tiles",
+    "geoserver-wmts": "GeoServer WMTS",
+    "geoserver-wms": "GeoServer WMS",
+    "wms": "WMS",
+    "wfs": "WFS",
+    "static-download": "静态下载",
+    "private": "私有",
+    "internal": "内部",
+    "public": "公开",
+    "enabled": "已启用",
+    "disabled": "未启用",
+    "published": "已发布（兼容）",
+    "active": "激活（兼容）",
+    "draft": "草稿",
+    "image/png": "PNG 瓦片",
+    "image/jpeg": "JPEG 瓦片",
+}
+
+
+_OPERATION_OVERRIDES = {
+    ("/api/health", "get"): {
+        "summary": "健康检查",
+        "responses": {
+            "200": {
+                "description": "服务健康状态",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "ok": {
+                                "summary": "健康响应",
+                                "value": {
+                                    "status": "healthy",
+                                    "timestamp": "2026-03-25 00:30:00",
+                                    "version": APP_VERSION,
+                                    "database": {"enabled": True, "status": "healthy", "connected": True},
+                                    "tasks": {"inMemoryTotal": 2, "running": 1, "queued": 0},
+                                    "catalog": {"artifacts": 5, "publications": 3, "taskEvents": 18},
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    },
+    ("/api/system/info", "get"): {
+        "summary": "系统信息",
+        "responses": {
+            "200": {
+                "description": "系统配置、资源与任务统计",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "system_info": {
+                                "summary": "系统信息示例",
+                                "value": {
+                                    "timestamp": "2026-03-25T00:30:00",
+                                    "version": APP_VERSION,
+                                    "config": {
+                                        "dataSourceDir": "/app/dataSource",
+                                        "tilesDir": "/app/tiles",
+                                        "publicBaseMode": "container_ip",
+                                        "publicBaseUrl": "",
+                                    },
+                                    "database": {"enabled": True, "status": "healthy"},
+                                    "tasks": {"total": 12, "running": 1, "completed": 9, "failed": 2},
+                                    "catalog": {"artifacts": 8, "publications": 4, "taskEvents": 53},
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    },
+    ("/api/dataSources", "get"): {
+        "summary": "获取数据源列表",
+        "responses": {
+            "200": {
+                "description": "返回当前目录下的数据源文件与子目录",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "datasource_list": {
+                                "summary": "数据源列表",
+                                "value": {
+                                    "success": True,
+                                    "currentPath": "",
+                                    "folders": [{"name": "20260325", "path": "20260325"}],
+                                    "files": [{"name": "sample.tif", "path": "sample.tif", "extension": ".tif"}],
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    },
+    ("/api/dataSources/info/{filename}", "get"): {
+        "summary": "数据源文件详情",
+        "parameters": [
+            {
+                "name": "filename",
+                "in": "path",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "本地相对路径，或 URL 编码后的 http/https 远程地址。",
+            },
+            {"name": "tileType", "in": "query", "schema": {"type": "string", "enum": ["map", "terrain"]}, "description": "推荐配置类型。"},
+            {"name": "minZoom", "in": "query", "schema": {"type": "integer", "minimum": 0}, "description": "用于推荐配置的最小层级。"},
+            {"name": "maxZoom", "in": "query", "schema": {"type": "integer", "minimum": 0}, "description": "用于推荐配置的最大层级。"},
+        ],
+        "responses": {
+            "200": {
+                "description": "返回文件元数据、范围、波段和分辨率信息",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeDataSourceFileDetail"},
+                        "examples": {
+                            "file_detail": {
+                                "value": {
+                                    "name": "sample.tif",
+                                    "path": "20260325/sample.tif",
+                                    "format": "tif",
+                                    "size": 24536621,
+                                    "sizeFormatted": "23.4 MB",
+                                    "metadata": {
+                                        "driver": "GTiff",
+                                        "rasterSize": {"width": 4096, "height": 4096},
+                                        "pixelSize": {"x": 0.00028, "y": 0.00028},
+                                        "bandCount": 3,
+                                        "bounds": {"west": 120.0, "south": 30.0, "east": 121.0, "north": 31.0},
+                                        "dataType": "Byte",
+                                    },
+                                    "geoBounds": {"west": 120.0, "south": 30.0, "east": 121.0, "north": 31.0},
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            "403": {
+                "description": "路径不允许访问",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"forbidden": {"value": {"error": "路径不允许访问"}}},
+                    }
+                },
+            },
+            "404": {
+                "description": "文件不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "文件不存在"}}},
+                    }
+                },
+            },
+        },
+    },
+    ("/api/dataSources/resolve", "post"): {
+        "summary": "解析数据源文件",
+        "description": "支持本地模式匹配，也支持在 filePatterns 里直接传 http/https 地址。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/DatasourceResolveRequest"},
+                    "examples": {
+                        "remote_tif": {
+                            "summary": "直接传网络 TIF 地址",
+                            "value": {
+                                "folderPaths": [],
+                                "filePatterns": ["https://example.com/demo/remote.tif"],
+                                "maxFiles": 200,
+                            },
+                        },
+                        "remote_txt": {
+                            "summary": "传网络 txt 清单地址",
+                            "value": {
+                                "folderPaths": [],
+                                "filePatterns": ["https://example.com/demo/input-list.txt"],
+                                "maxFiles": 200,
+                            },
+                        },
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "解析成功，返回匹配结果与波段摘要",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "resolved": {
+                                "summary": "解析成功",
+                                "value": {
+                                    "success": True,
+                                    "totalMatched": 2,
+                                    "files": ["20260325/a_3f3c2d2f.tif", "20260325/b_8af31e4b.tif"],
+                                    "truncated": False,
+                                    "bandSummary": {"commonBandCount": 3, "minBandCount": 3, "maxBandCount": 4},
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "bad_request": {"value": {"success": False, "error": "缺少参数: filePatterns"}}
+                        }
+                    }
+                },
+            },
+        },
+    },
+    ("/api/dataSources/{subpath}", "get"): {
+        "summary": "浏览数据源子目录",
+        "parameters": [
+            {"name": "subpath", "in": "path", "required": True, "schema": {"type": "string"}, "description": "数据源子目录相对路径。"},
+            {"name": "bounds", "in": "query", "schema": {"type": "string"}, "description": "可选空间范围，格式 west,south,east,north。"},
+            {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码。"},
+            {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 100, "minimum": 1, "maximum": 500}, "description": "每页条数。"},
+        ],
+    },
+    ("/api/results", "get"): {
+        "summary": "浏览目录",
+        "parameters": [
+            {"name": "type", "in": "query", "schema": {"type": "string", "enum": ["results", "datasource"]}, "description": "浏览根目录类型；默认 results。"},
+            {"name": "path", "in": "query", "schema": {"type": "string"}, "description": "相对目录路径。"},
+            {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码。"},
+            {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 100, "minimum": 1, "maximum": 500}, "description": "每页条数。"},
+        ],
+    },
+    ("/api/fileDetails", "get"): {
+        "summary": "文件详情",
+        "parameters": [
+            {"name": "type", "in": "query", "schema": {"type": "string", "enum": ["datasource", "results"]}, "description": "文件所在根目录。"},
+            {"name": "path", "in": "query", "required": True, "schema": {"type": "string"}, "description": "文件相对路径。"},
+        ],
+    },
+    ("/api/tile/convert", "post"): {
+        "summary": "瓦片结构转换",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/TileConvertRequest"},
+                    "examples": {
+                        "convert": {
+                            "value": {
+                                "sourcePath": "demo/source",
+                                "targetPath": "demo/converted",
+                                "sourceFormat": "nested",
+                                "targetFormat": "flat",
+                                "overwrite": False,
+                            }
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "转换任务已启动",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTileConvert"},
+                        "examples": {
+                            "started": {
+                                "value": {
+                                    "success": True,
+                                    "message": "瓦片格式转换任务已启动",
+                                    "taskId": "tileConvert1774351000",
+                                    "statusUrl": "/api/tasks/tileConvert1774351000",
+                                    "sourcePath": "demo/source",
+                                    "targetPath": "demo/converted",
+                                    "sourceFormat": "nested",
+                                    "targetFormat": "flat",
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"bad_request": {"value": {"error": "缺少参数: sourcePath"}}},
+                    }
+                },
+            },
+            "403": {
+                "description": "路径不允许访问",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"forbidden": {"value": {"error": "路径不允许访问"}}},
+                    }
+                },
+            },
+            "404": {
+                "description": "源目录不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "源目录不存在: /app/tiles/demo/source"}}},
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tiles/nodata/scan", "post"): {
+        "summary": "扫描透明瓦片",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/NodataScanRequest"},
+                    "examples": {
+                        "scan": {
+                            "value": {
+                                "tilesPath": "测试切片-20260321/0327",
+                                "transparencyThreshold": 0.1,
+                                "includeDetails": True,
+                            }
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "扫描完成",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeNodataScan"},
+                        "examples": {
+                            "scan_result": {
+                                "value": {
+                                    "success": True,
+                                    "message": "扫描完成",
+                                    "summary": {
+                                        "totalChecked": 320,
+                                        "nodataTiles": 18,
+                                        "validTiles": 302,
+                                        "errors": 0,
+                                        "nodataPercentage": 5.63,
+                                        "transparencyThreshold": 0.1,
+                                    },
+                                    "zoomLevelStats": {"8": {"total": 120, "nodata": 8}},
+                                    "nodataFiles": ["8/120/88.png"],
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"bad_request": {"value": {"error": "缺少瓦片目录路径参数 tilesPath"}}},
+                    }
+                },
+            },
+            "404": {
+                "description": "瓦片目录不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "瓦片目录不存在"}}},
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tiles/nodata/delete", "post"): {
+        "summary": "删除透明瓦片",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/NodataDeleteRequest"},
+                    "examples": {
+                        "delete": {
+                            "value": {
+                                "tilesPath": "测试切片-20260321/0327",
+                                "transparencyThreshold": 0.1,
+                                "includeDetails": True,
+                            }
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "删除完成",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeNodataDelete"},
+                        "examples": {
+                            "delete_result": {
+                                "value": {
+                                    "success": True,
+                                    "message": "删除完成",
+                                    "summary": {
+                                        "total_checked": 320,
+                                        "deleted_count": 18,
+                                        "error_count": 0,
+                                        "cleaned_dirs": 3,
+                                        "transparency_threshold": 0.1,
+                                    },
+                                    "deleted_files": ["8/120/88.png"],
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误或删除失败",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"bad_request": {"value": {"error": "缺少瓦片目录路径参数 tilesPath"}}},
+                    }
+                },
+            },
+        },
+    },
+    ("/api/terrain/layer", "post"): {
+        "summary": "修复 layer.json",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/TerrainLayerRequest"},
+                    "examples": {
+                        "update_layer": {
+                            "value": {
+                                "terrainPath": ["terrain", "demo"],
+                                "bounds": [120.0, 30.0, 121.0, 31.0],
+                            }
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "更新成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTerrainLayer"},
+                        "examples": {
+                            "updated": {
+                                "value": {
+                                    "message": "layer.json更新成功",
+                                    "terrainPathArray": ["terrain", "demo"],
+                                    "terrainDir": "terrain/demo",
+                                    "bounds": [120.0, 30.0, 121.0, 31.0],
+                                    "layerFile": "/app/tiles/terrain/demo/layer.json",
+                                    "method": "ctb-tile",
+                                    "detectedLevels": {"minZoom": 0, "maxZoom": 12, "availableLevels": [0, 1, 2]},
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"bad_request": {"value": {"error": "缺少参数: terrainPath"}}},
+                    }
+                },
+            },
+            "404": {
+                "description": "地形目录不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "地形目录不存在"}}},
+                    }
+                },
+            },
+        },
+    },
+    ("/api/terrain/decompress", "post"): {
+        "summary": "解压地形瓦片",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/TerrainDecompressRequest"},
+                    "examples": {
+                        "decompress": {
+                            "value": {
+                                "terrainPath": ["terrain", "demo"],
+                            }
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "解压成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTerrainDecompress"},
+                        "examples": {
+                            "ok": {
+                                "value": {
+                                    "message": "地形瓦片解压成功",
+                                    "terrainPathArray": ["terrain", "demo"],
+                                    "terrainDir": "terrain/demo",
+                                    "terrainPath": "/app/tiles/terrain/demo",
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"bad_request": {"value": {"error": "缺少参数: terrainPath"}}},
+                    }
+                },
+            },
+            "404": {
+                "description": "地形目录不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "地形目录不存在"}}},
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tile/3dtiles", "post"): {
+        "summary": "创建 3D Tiles 任务",
+        "description": "支持 pointcloud、vector、model、osgb 四类输入。pointcloud/vector/osgb 可用 folderPaths + filePatterns 或 sourcePath；OBJ 模型需要手动 longitude/latitude。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/Tiles3DRequest"},
+                    "examples": {
+                        "pointcloud": {
+                            "summary": "点云生成 3D Tiles",
+                            "value": {
+                                "dataType": "pointcloud",
+                                "folderPaths": ["pointcloud/demo"],
+                                "filePatterns": ["*.las", "*.laz"],
+                                "outputPath": "3dtiles/pointcloud-demo",
+                                "crs": "EPSG:3857",
+                                "jobs": 4,
+                            },
+                        },
+                        "obj_model": {
+                            "summary": "OBJ 模型手动定位",
+                            "value": {
+                                "dataType": "model",
+                                "sourcePath": "models/demo.obj",
+                                "outputPath": "3dtiles/model-demo",
+                                "longitude": 121.4737,
+                                "latitude": 31.2304,
+                                "height": 0,
+                                "scale": 1,
+                                "rotationZ": 0,
+                                "contentFormat": "b3dm",
+                            },
+                        },
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "任务已启动或参数校验失败；失败时 success=false 且包含 errors。",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskCreate"},
+                    }
+                },
+            }
+        },
+    },
+    ("/api/tile/indexedTiles", "post"): {
+        "summary": "创建地图切片任务（返回 taskId）",
+        "description": "filePatterns 支持通配符、txt、以及 http/https 网络地址。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/IndexedTilesRequest"},
+                    "examples": {
+                        "remote_source": {
+                            "summary": "网络地址切片（地图）",
+                            "value": {
+                                "folderPaths": [],
+                                "filePatterns": ["https://example.com/imagery/aoi_20260324.tif"],
+                                "outputPath": "map/remote-demo",
+                                "minZoom": 0,
+                                "maxZoom": 16,
+                                "tileSize": 256,
+                                "projection": "EPSG:3857",
+                                "imageFormat": "png",
+                                "tileScheme": "tms",
+                                "redBand": 1,
+                                "greenBand": 2,
+                                "blueBand": 3,
+                            },
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "任务创建成功，响应中包含 taskId 与 statusUrl",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskCreate"},
+                        "examples": {
+                            "task_started": {
+                                "value": {
+                                    "success": True,
+                                    "taskId": "indexedTiles1774342374",
+                                    "status": "queued",
+                                    "message": "地图切片任务已启动",
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {
+                            "invalid": {"value": {"success": False, "message": "缺少参数: outputPath"}}
+                        }
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tile/mvt", "post"): {
+        "summary": "创建二维矢量切片任务",
+        "description": "输入支持 .geojson/.json/.shp/.gpkg，输出为静态 MVT(.pbf) 或 GeoJSON 瓦片目录结构。GeoJSON 瓦片可选 levelField + levelRules，按用户指定字段在不同 zoom 上筛选要素；不传 levelField 时不做行政区层级过滤。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/VectorTilesRequest"},
+                    "examples": {
+                        "vector_sources": {
+                            "summary": "GeoJSON / SHP 生成 MVT",
+                            "value": {
+                                "folderPaths": ["20260422/vector"],
+                                "filePatterns": ["*.geojson", "*.shp"],
+                                "outputPath": "mvt/demo-buildings",
+                                "minZoom": 0,
+                                "maxZoom": 14,
+                                "datasetName": "atlasworks_buildings",
+                                "tileFormat": "mvt",
+                                "overwrite": False,
+                            },
+                        },
+                        "geojson_level_rules": {
+                            "summary": "GeoJSON 瓦片按自定义层级字段过滤",
+                            "value": {
+                                "folderPaths": ["admin-demo"],
+                                "filePatterns": ["admin_multilevel.geojson"],
+                                "outputPath": "admin-demo/geojson-tiles",
+                                "minZoom": 0,
+                                "maxZoom": 8,
+                                "datasetName": "admin_demo",
+                                "tileFormat": "geojson",
+                                "levelField": "level",
+                                "levelRules": [
+                                    {"values": ["country"], "minZoom": 0, "maxZoom": 2},
+                                    {"values": ["province"], "minZoom": 3, "maxZoom": 4},
+                                    {"values": ["city"], "minZoom": 5, "maxZoom": 6},
+                                    {"values": ["district"], "minZoom": 7, "maxZoom": 8},
+                                ],
+                                "unmatchedPolicy": "include",
+                                "overwrite": False,
+                            },
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "任务创建成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskCreate"},
+                        "examples": {
+                            "task_started": {
+                                "value": {
+                                    "success": True,
+                                    "taskId": "mvt1774351000",
+                                    "status": "running",
+                                    "message": "MVT 切片任务已启动",
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {
+                            "invalid": {"value": {"error": "缺少参数: filePatterns"}}
+                        }
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tile/terrain", "post"): {
+        "summary": "创建地形切片任务",
+        "description": "filePatterns 支持通配符、txt、以及 http/https 网络地址。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/TerrainTilesRequest"},
+                    "examples": {
+                        "remote_source": {
+                            "summary": "网络地址切片（地形）",
+                            "value": {
+                                "folderPaths": [],
+                                "filePatterns": ["https://example.com/terrain/dem_30m.tif"],
+                                "outputPath": "terrain/remote-demo",
+                                "startZoom": 0,
+                                "endZoom": 12,
+                                "threads": 4,
+                                "maxMemory": "8g",
+                                "compression": True,
+                                "decompress": True,
+                            },
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "任务创建成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskCreate"},
+                        "examples": {
+                            "task_started": {
+                                "value": {
+                                    "success": True,
+                                    "taskId": "terrain1774349999",
+                                    "status": "queued",
+                                    "message": "地形切片任务已启动",
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {
+                            "invalid": {"value": {"error": "缺少参数: filePatterns"}}
+                        }
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tile/cache", "get"): {
+        "summary": "瓦片缓存列表",
+        "responses": {
+            "200": {
+                "description": "返回 tilesDir 下可识别的缓存/瓦片目录。",
+                "content": {
+                    "application/json": {
+                        "schema": {"type": "object", "additionalProperties": True},
+                    }
+                },
+            }
+        },
+    },
+    ("/api/tile/cache/detail", "get"): {
+        "summary": "瓦片缓存详情",
+        "parameters": [
+            {"name": "path", "in": "query", "required": True, "schema": {"type": "string"}, "description": "缓存目录相对路径。"},
+        ],
+    },
+    ("/api/tile/cache/delete", "post"): {
+        "summary": "删除瓦片缓存",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/TileCacheDeleteRequest"},
+                    "examples": {
+                        "delete_dir": {"value": {"path": "map/demo"}},
+                        "delete_zoom_levels": {"value": {"path": "map/demo", "zoomLevels": [8, 9]}},
+                    },
+                }
+            },
+        },
+    },
+    ("/api/tasks", "get"): {
+        "summary": "任务列表",
+        "parameters": [
+            {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码"},
+            {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 10, "minimum": 1, "maximum": 500}, "description": "每页条数"},
+            {"name": "keyword", "in": "query", "schema": {"type": "string"}, "description": "按任务 ID、状态、阶段、消息和输出信息模糊搜索"},
+            {"name": "status", "in": "query", "schema": {"$ref": "#/components/schemas/TaskStatus"}, "description": "按任务状态过滤"},
+            {"name": "dateFrom", "in": "query", "schema": {"type": "string", "format": "date"}, "description": "开始日期，按任务开始时间过滤"},
+            {"name": "dateTo", "in": "query", "schema": {"type": "string", "format": "date"}, "description": "结束日期，按任务开始时间过滤"},
+        ],
+        "responses": {
+            "200": {
+                "description": "返回任务状态快照",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskList"},
+                        "examples": {
+                            "tasks": {
+                                "value": {
+                                    "count": 1,
+                                    "total": 12,
+                                    "page": 1,
+                                    "pageSize": 10,
+                                    "totalPages": 2,
+                                    "hasPrev": False,
+                                    "hasNext": True,
+                                    "tasks": {
+                                        "indexedTiles1774342374": {
+                                            "taskId": "indexedTiles1774342374",
+                                            "status": "completed",
+                                            "progress": 100,
+                                            "currentStage": "done",
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    },
+    ("/api/geoserver/health", "get"): {
+        "summary": "GeoServer 健康检查",
+    },
+    ("/api/geoserver/publish", "post"): {
+        "summary": "发布影像到 GeoServer",
+        "description": "将数据源中的 GeoTIFF 文件、单文件目录、或多 GeoTIFF 目录发布为 GeoServer 图层。目录内多个 GeoTIFF 会按文件分别发布。",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/GeoserverPublishRequest"},
+                    "examples": {
+                        "single_geotiff": {
+                            "value": {
+                                "sourcePath": "imagery/demo.tif",
+                                "alias": "demo_imagery",
+                                "workspace": "atlasworks",
+                                "targetCrs": "EPSG:3857",
+                                "styleName": "raster",
+                                "tileFormat": "image/png",
+                                "seedEnabled": False,
+                                "overwrite": True,
+                            }
+                        }
+                    },
+                }
+            },
+        },
+    },
+    ("/api/geoserver/layers", "get"): {
+        "summary": "GeoServer 图层列表",
+        "parameters": [
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间；默认读取配置 geoserverWorkspace。"},
+        ],
+    },
+    ("/api/geoserver/layers/{name}", "get"): {
+        "summary": "GeoServer 图层详情",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层/Store 名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+    },
+    ("/api/geoserver/layers/{name}", "delete"): {
+        "summary": "删除 GeoServer 图层",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层/Store 名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+    },
+    ("/api/geoserver/layers/{name}/seed", "post"): {
+        "summary": "触发 GeoServer 预切片",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/GeoserverSeedRequest"},
+                    "example": {"minZoom": 0, "maxZoom": 16, "format": "image/png", "threadCount": 2},
+                }
+            },
+        },
+    },
+    ("/api/geoserver/layers/{name}/seed", "get"): {
+        "summary": "GeoServer 预切片状态",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+    },
+    ("/api/geoserver/layers/{name}/seed/cancel", "post"): {
+        "summary": "取消 GeoServer 预切片",
+        "parameters": [
+            {"name": "name", "in": "path", "required": True, "schema": {"type": "string"}, "description": "图层名称。"},
+            {"name": "workspace", "in": "query", "schema": {"type": "string"}, "description": "GeoServer 工作空间。"},
+        ],
+    },
+    ("/api/tasks/{taskId}", "get"): {
+        "summary": "任务详情",
+        "responses": {
+            "200": {
+                "description": "返回指定任务详情",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskDetail"},
+                        "examples": {
+                            "task_detail": {
+                                "value": {
+                                    "taskId": "indexedTiles1774342374",
+                                    "status": "running",
+                                    "progress": 58,
+                                    "currentStage": "tile-build",
+                                    "message": "切片处理中",
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "404": {
+                "description": "任务不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "任务不存在"}}}
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tasks/{taskId}/events", "get"): {
+        "summary": "任务事件流",
+        "responses": {
+            "200": {
+                "description": "返回任务事件列表",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskEvents"},
+                        "examples": {
+                            "events": {
+                                "value": {
+                                    "success": True,
+                                    "events": [
+                                        {"eventType": "task.started", "eventAt": "2026-03-25T00:30:00", "details": {"stage": "prepare"}},
+                                        {"eventType": "task.progress", "eventAt": "2026-03-25T00:31:00", "details": {"progress": 35}},
+                                    ],
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "404": {
+                "description": "任务不存在或暂无事件",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "任务不存在或暂无事件"}}}
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tasks/{taskId}", "delete"): {
+        "summary": "删除任务",
+        "description": "删除指定任务记录；如果任务仍在运行，会先尝试停止。",
+        "responses": {
+            "200": {
+                "description": "删除成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskDelete"},
+                        "examples": {
+                            "deleted": {
+                                "value": {
+                                    "success": True,
+                                    "taskId": "indexedTiles1774342374",
+                                    "deletedFromMemory": True,
+                                    "deletedFromDatabase": True,
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "404": {
+                "description": "任务不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "任务不存在"}}}
+                    }
+                },
+            },
+        },
+    },
+    ("/api/tasks/cleanup", "post"): {
+        "summary": "清理任务",
+        "responses": {
+            "200": {
+                "description": "清理完成",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskCleanup"},
+                        "examples": {
+                            "cleaned": {
+                                "value": {
+                                    "success": True,
+                                    "message": "任务清理完成",
+                                    "remainingTasks": 0,
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    },
+    ("/api/tasks/{taskId}/stop", "post"): {
+        "summary": "停止任务",
+        "responses": {
+            "200": {
+                "description": "停止成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeTaskStop"},
+                        "examples": {
+                            "stopped": {
+                                "value": {
+                                    "success": True,
+                                    "message": "任务已停止",
+                                    "taskId": "indexedTiles1774342374",
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            "404": {
+                "description": "任务不存在或无法停止",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "任务不存在或无法停止"}}}
+                    }
+                },
+            },
+        },
+    },
+    ("/api/publications", "get"): {
+        "summary": "发布列表",
+        "parameters": [
+            {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码"},
+            {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 10, "minimum": 1, "maximum": 200}, "description": "每页条数"},
+            {"name": "keyword", "in": "query", "schema": {"type": "string"}, "description": "按发布 ID、别名、路径、任务和发布方式模糊搜索"},
+            {"name": "publishType", "in": "query", "schema": {"type": "string", "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "vector"]}, "description": "按发布类型过滤"},
+            {"name": "status", "in": "query", "schema": {"$ref": "#/components/schemas/PublicationStatus"}, "description": "按发布状态过滤"},
+        ],
+        "responses": {
+            "200": {
+                "description": "返回发布记录列表",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopePublicationList"},
+                        "examples": {
+                            "publication_list": {
+                                "value": {
+                                    "count": 1,
+                                    "total": 5,
+                                    "page": 1,
+                                    "pageSize": 10,
+                                    "totalPages": 1,
+                                    "hasPrev": False,
+                                    "hasNext": False,
+                                    "publications": [
+                                        {
+                                            "publicationId": "publication-0324-test",
+                                            "artifactId": "artifact-indexedTiles1774342374",
+                                            "publishType": "imagery",
+                                            "publishMethod": "wmts",
+                                            "publishPath": "demo/output",
+                                            "alias": "0324-test",
+                                            "status": "enabled",
+                                            "visibility": "private",
+                                            "enabled": True,
+                                            "note": "记录来源、用途和版本说明",
+                                            "publishedAt": "2026-04-01T10:21:35",
+                                            "createdAt": "2026-04-01T10:21:35",
+                                            "updatedAt": "2026-04-01T10:21:35",
+                                            "accessUrl": "http://172.20.0.3:18001/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
+                                        }
+                                    ],
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    },
+    ("/api/publications", "post"): {
+        "summary": "创建发布",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/PublicationUpsertRequest"},
+                    "examples": {
+                        "01_create_from_task": {
+                            "summary": "按任务创建发布",
+                            "value": {
+                                "sourceMode": "task",
+                                "taskId": "indexedTiles1774342374",
+                                "alias": "0324-task-publish",
+                                "publicationId": "publication-0324-task-publish",
+                                "publishType": "imagery",
+                                "publishMethod": "wmts",
+                                "enabled": True,
+                                "visibility": "private",
+                                "note": "记录来源、用途和版本说明",
+                                "customMetadata": {
+                                    "version": "2026.04",
+                                    "department": "cartography"
+                                },
+                            },
+                        },
+                        "02_create_from_artifact": {
+                            "summary": "按产物创建发布",
+                            "value": {
+                                "sourceMode": "artifact",
+                                "artifactId": "artifact-indexedTiles1774342374",
+                                "alias": "0324-test",
+                                "publishType": "imagery",
+                                "publishMethod": "xyz",
+                                "enabled": True,
+                                "visibility": "private",
+                                "note": "地图切片发布示例",
+                            },
+                        },
+                        "03_create_from_manual_workspace": {
+                            "summary": "按手动目录创建发布",
+                            "value": {
+                                "sourceMode": "manual",
+                                "workspacePath": "测试切片-20260321/0327",
+                                "publishPath": "测试切片-20260321/0327",
+                                "alias": "imagery-release-v1",
+                                "publicationId": "publication-imagery-release-v1",
+                                "publishType": "imagery",
+                                "publishMethod": "wmts",
+                                "enabled": True,
+                                "visibility": "internal",
+                                "note": "记录来源、用途和版本说明",
+                                "customMetadata": {
+                                    "owner": "ops-team",
+                                    "ticket": "AW-1248"
+                                }
+                            },
+                        },
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "创建成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopePublicationMutation"},
+                        "examples": {
+                            "created": {
+                                "value": {
+                                    "success": True,
+                                    "publication": {
+                                        "publicationId": "publication-0324-test",
+                                        "artifactId": "artifact-indexedTiles1774342374",
+                                        "publishType": "imagery",
+                                        "publishMethod": "wmts",
+                                        "publishPath": "demo/output",
+                                        "alias": "0324-test",
+                                        "status": "enabled",
+                                        "visibility": "private",
+                                        "enabled": True,
+                                        "note": "记录来源、用途和版本说明",
+                                        "publishedAt": "2026-04-01T10:21:35",
+                                        "createdAt": "2026-04-01T10:21:35",
+                                        "updatedAt": "2026-04-01T10:21:35",
+                                        "accessUrl": "http://172.20.0.3:18001/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "400": {
+                "description": "参数错误",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"invalid": {"value": {"error": "缺少参数: taskId、artifactId、workspacePath 或 sourcePath"}}}
+                    }
+                },
+            },
+        },
+    },
+    ("/api/publications/{publicationId}", "get"): {
+        "summary": "发布详情",
+        "responses": {
+            "200": {
+                "description": "返回发布详情",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopePublicationDetail"},
+                        "examples": {
+                            "publication_detail": {
+                                "value": {
+                                    "success": True,
+                                    "publication": {
+                                        "publicationId": "publication-0324-test",
+                                        "artifactId": "artifact-indexedTiles1774342374",
+                                        "alias": "0324-test",
+                                        "publishType": "imagery",
+                                        "publishMethod": "wmts",
+                                        "publishPath": "demo/output",
+                                        "status": "enabled",
+                                        "visibility": "private",
+                                        "enabled": True,
+                                        "note": "记录来源、用途和版本说明",
+                                        "publishedAt": "2026-04-01T10:21:35",
+                                        "createdAt": "2026-04-01T10:21:35",
+                                        "updatedAt": "2026-04-01T10:21:35",
+                                        "browserUrl": "http://172.20.0.3:18080/published/demo/output",
+                                        "accessUrl": "http://172.20.0.3:18001/publication-assets/publication-0324-test/{z}/{x}/{y}.png",
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "404": {
+                "description": "发布不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "发布记录不存在"}}}
+                    }
+                },
+            },
+        },
+    },
+    ("/api/publications/{publicationId}", "put"): {
+        "summary": "更新发布",
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/PublicationUpsertRequest"},
+                    "examples": {
+                        "update_publication": {
+                            "summary": "更新发布方式或启用状态",
+                            "value": {
+                                "sourceMode": "task",
+                                "taskId": "indexedTiles1774342374",
+                                "alias": "0324-test",
+                                "publicationId": "publication-0324-test",
+                                "publishType": "imagery",
+                                "publishMethod": "wmts",
+                                "enabled": False,
+                                "visibility": "private",
+                                "note": "临时关闭外部访问",
+                                "customMetadata": {
+                                    "reason": "maintenance"
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "更新成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopePublicationMutation"},
+                        "examples": {
+                            "updated": {
+                                "value": {
+                                    "success": True,
+                                    "publication": {
+                                        "publicationId": "publication-0324-test",
+                                        "artifactId": "artifact-indexedTiles1774342374",
+                                        "publishType": "imagery",
+                                        "publishMethod": "wmts",
+                                        "publishPath": "demo/output",
+                                        "alias": "0324-test",
+                                        "status": "disabled",
+                                        "visibility": "private",
+                                        "enabled": False,
+                                        "note": "临时关闭外部访问",
+                                        "publishedAt": "2026-04-01T10:25:08",
+                                        "createdAt": "2026-04-01T10:21:35",
+                                        "updatedAt": "2026-04-01T10:25:08",
+                                        "accessUrl": "http://172.20.0.3:8000/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=publication-0324-test&STYLE=default&TILEMATRIXSET=GoogleMapsCompatible&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png",
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "404": {
+                "description": "发布不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "发布记录不存在"}}}
+                    }
+                },
+            },
+        },
+    },
+    ("/api/publications/{publicationId}", "delete"): {
+        "summary": "删除发布",
+        "description": "删除指定发布记录及其描述文件。",
+        "responses": {
+            "200": {
+                "description": "删除成功",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopePublicationDelete"},
+                        "examples": {
+                            "deleted": {
+                                "value": {
+                                    "success": True,
+                                    "publicationId": "publication-0324-test",
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            "404": {
+                "description": "发布不存在",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/ApiEnvelopeError"},
+                        "examples": {"not_found": {"value": {"error": "发布记录不存在"}}}
+                    }
+                },
+            },
+        },
+    },
+    ("/api/artifacts", "get"): {
+        "summary": "产物列表",
+        "parameters": [
+            {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码"},
+            {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 10, "minimum": 1, "maximum": 200}, "description": "每页条数"},
+            {"name": "artifactType", "in": "query", "schema": {"type": "string"}, "description": "按产物类型过滤"},
+            {"name": "keyword", "in": "query", "schema": {"type": "string"}, "description": "按产物 ID、类型、格式、输出路径模糊搜索"},
+        ],
+        "responses": {
+            "200": {
+                "description": "返回产物列表",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "artifacts": {
+                                "value": {
+                                    "count": 1,
+                                    "total": 5,
+                                    "page": 1,
+                                    "pageSize": 10,
+                                    "totalPages": 1,
+                                    "hasPrev": False,
+                                    "hasNext": False,
+                                    "artifacts": [
+                                        {
+                                            "artifactId": "artifact-indexedTiles1774342374",
+                                            "artifactType": "imagery",
+                                            "outputPath": "/app/tiles/demo/output",
+                                        }
+                                    ],
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    },
+    ("/api/routes", "get"): {
+        "summary": "接口清单",
+        "parameters": [
+            {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "页码"},
+            {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 10, "minimum": 1, "maximum": 200}, "description": "每页条数"},
+            {"name": "keyword", "in": "query", "schema": {"type": "string"}, "description": "按路径、分类、说明和方法模糊搜索"},
+        ],
+        "responses": {
+            "200": {
+                "description": "返回接口清单和分页结果",
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "routes": {
+                                "value": {
+                                    "count": 2,
+                                    "total": 53,
+                                    "page": 2,
+                                    "pageSize": 10,
+                                    "totalPages": 6,
+                                    "hasPrev": True,
+                                    "hasNext": True,
+                                    "categories": ["任务管理", "发布管理"],
+                                    "routes": [
+                                        {"path": "/api/tasks", "methods": ["GET"], "category": "任务管理", "description": "获取任务列表"},
+                                        {"path": "/api/publications", "methods": ["GET", "POST"], "category": "发布管理", "description": "管理发布记录"},
+                                    ],
+                                    "stats": {
+                                        "totalRoutes": 53,
+                                    },
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    },
+}
+
+
+_PATH_DOCS = {
+    "/api/health": {
+        "summary": "健康检查",
+        "description": "返回服务健康状态、数据库连接情况、运行中的任务数量和基础目录统计。",
+    },
+    "/api/system/info": {
+        "summary": "系统信息",
+        "description": "返回运行配置、系统资源、任务统计以及数据库健康状态。",
+    },
+    "/api/dataSources": {
+        "summary": "浏览数据源目录",
+        "description": "浏览数据源根目录或子目录，返回子目录和文件清单。",
+    },
+    "/api/dataSources/{subpath}": {
+        "summary": "浏览数据源子目录",
+        "description": "浏览指定数据源子目录，返回子目录和文件清单。",
+    },
+    "/api/dataSources/info/{filename}": {
+        "summary": "数据源文件详情",
+        "description": "读取单个数据源文件的元数据、空间范围、波段信息和推荐配置。支持本地文件，也支持 URL 编码后的 http/https 地址（仅临时下载解析）。",
+    },
+    "/api/dataSources/raw/{filename}": {
+        "summary": "预览数据源图片",
+        "description": "直接返回数据源目录中的 PNG/JPG/JPEG 文件内容。",
+    },
+    "/api/dataSources/workspace": {
+        "summary": "数据源挂载信息",
+        "description": "返回数据源目录的容器内路径、宿主机挂载路径和目录状态。",
+    },
+    "/api/dataSources/resolve": {
+        "summary": "解析数据源文件",
+        "description": "根据目录和文件模式解析待处理的栅格文件，支持 HTTP/HTTPS 地址。",
+    },
+    "/api/dataSources/split": {
+        "summary": "拆分大文件",
+        "description": "将超大栅格按像素窗口拆分为多个小 TIF 文件，返回异步任务信息。",
+    },
+    "/api/datasources/createFolder": {
+        "summary": "创建数据源文件夹",
+        "description": "在数据源目录下创建新的文件夹。",
+    },
+    "/api/datasources/folder/{folderPath}": {
+        "summary": "删除数据源文件夹",
+        "description": "删除指定数据源文件夹及其内容。",
+    },
+    "/api/datasources/file/{filePath}": {
+        "summary": "删除数据源文件",
+        "description": "删除指定的数据源文件。",
+    },
+    "/api/preflight": {
+        "summary": "构建预检查",
+        "description": "在正式切片前检查输入文件、输出目录、工具链和资源估算。",
+    },
+    "/api/upload/file": {
+        "summary": "上传单文件",
+        "description": "以 multipart/form-data 上传单个文件到数据源目录或工作空间。",
+    },
+    "/api/upload/zip": {
+        "summary": "上传 ZIP 并解压",
+        "description": "上传 ZIP 到目标目录并在服务端安全解压。",
+    },
+    "/api/upload/folder": {
+        "summary": "上传文件夹",
+        "description": "通过 multipart/form-data 批量上传文件并保留相对路径结构。",
+    },
+    "/api/files/extract": {
+        "summary": "解压现有压缩包",
+        "description": "解压数据源或工作空间中已存在的 zip、tar、7z 文件。",
+    },
+    "/api/results": {
+        "summary": "浏览目录",
+        "description": "按目录层级浏览结果目录或数据源目录。",
+    },
+    "/api/fileDetails": {
+        "summary": "文件详情",
+        "description": "读取结果目录或数据源中的单个文件详情。",
+    },
+    "/api/workspace/raw/{filename}": {
+        "summary": "预览工作空间图片",
+        "description": "直接返回工作空间中的 PNG/JPG/JPEG 文件内容。",
+    },
+    "/api/tile/terrain": {
+        "summary": "创建地形切片任务",
+        "description": "创建地形切片异步任务，支持自动缩放、压缩、解压和多结果合并。",
+    },
+    "/api/tile/indexedTiles": {
+        "summary": "创建地图切片任务",
+        "description": "创建基于空间索引的地图切片异步任务，支持网络源文件和多进程。",
+    },
+    "/api/tile/mvt": {
+        "summary": "创建二维矢量切片任务",
+        "description": "创建静态二维矢量瓦片目录，支持 MVT(.pbf) 与 GeoJSON 瓦片输出。",
+    },
+    "/api/tile/convert": {
+        "summary": "瓦片结构转换",
+        "description": "在 flat 和 nested 两种瓦片目录结构之间转换。",
+    },
+    "/api/tasks": {
+        "summary": "任务列表",
+        "description": "返回当前内存与数据库快照中的任务列表，支持 page、pageSize、keyword、status、dateFrom、dateTo 分页筛选。",
+    },
+    "/api/tasks/{taskId}": {
+        "summary": "任务详情",
+        "description": "读取任务状态、阶段、统计信息和结果概要；删除时可移除任务记录。",
+    },
+    "/api/tasks/{taskId}/events": {
+        "summary": "任务事件流",
+        "description": "返回任务事件流；数据库不可用时回退到 processLog。",
+    },
+    "/api/tasks/cleanup": {
+        "summary": "清理任务",
+        "description": "清理历史任务记录，降低内存和快照数量。",
+    },
+    "/api/tasks/{taskId}/stop": {
+        "summary": "停止任务",
+        "description": "停止指定任务并更新其状态。",
+    },
+    "/api/artifacts": {
+        "summary": "产物列表",
+        "description": "列出数据库和 manifest 中可见的构建产物，支持 page、pageSize、artifactType、keyword 分页筛选。",
+    },
+    "/api/artifacts/{artifactId}": {
+        "summary": "产物详情",
+        "description": "读取指定产物的元数据、输出目录和访问地址。",
+    },
+    "/api/artifacts/{artifactId}/manifest": {
+        "summary": "产物 Manifest",
+        "description": "返回指定产物的 manifest.json 内容。",
+    },
+    "/api/publications": {
+        "summary": "发布记录",
+        "description": "列出或创建发布记录，为产物生成对外访问配置；列表查询支持 page、pageSize、keyword、publishType、status 分页筛选。",
+    },
+    "/api/publications/{publicationId}": {
+        "summary": "发布详情",
+        "description": "读取、更新或删除指定的发布记录。",
+    },
+    "/publication-assets/{publicationId}/{relative_path}": {
+        "summary": "发布资源适配入口",
+        "description": "按 publicationId 做轻量路径换算后重定向到静态发布后端，兼容 XYZ/TMS。",
+    },
+    "/published": {
+        "summary": "发布目录入口",
+        "description": "将发布目录入口重定向到静态发布后端。",
+    },
+    "/published/{relative_path}": {
+        "summary": "访问发布资源",
+        "description": "将已发布目录资源重定向到静态发布后端。",
+    },
+    "/wmts": {
+        "summary": "WMTS 服务",
+        "description": "提供 WMTS GetCapabilities 与 GetTile 访问能力。",
+    },
+    "/api/config/recommend": {
+        "summary": "推荐切片配置",
+        "description": "根据源文件大小和系统资源返回推荐切片配置。",
+    },
+    "/api/container/update": {
+        "summary": "更新容器信息",
+        "description": "更新容器时间、环境变量及基础系统状态。",
+    },
+    "/api/routes": {
+        "summary": "接口清单",
+        "description": "返回后端维护的接口清单、分类和统计信息，支持 page、pageSize、keyword 分页筛选。",
+    },
+    "/api/workspace/createFolder": {
+        "summary": "创建工作空间文件夹",
+        "description": "在工作空间目录中创建新文件夹。",
+    },
+    "/api/workspace/folder/{folderPath}": {
+        "summary": "删除工作空间文件夹",
+        "description": "删除指定工作空间文件夹及其内容。",
+    },
+    "/api/workspace/folder/{folderPath}/rename": {
+        "summary": "重命名工作空间文件夹",
+        "description": "重命名指定的工作空间文件夹。",
+    },
+    "/api/workspace/file/{filePath}": {
+        "summary": "删除工作空间文件",
+        "description": "删除指定工作空间文件。",
+    },
+    "/api/workspace/file/{filePath}/rename": {
+        "summary": "重命名工作空间文件",
+        "description": "重命名指定的工作空间文件。",
+    },
+    "/api/workspace/move": {
+        "summary": "移动工作空间项目",
+        "description": "移动工作空间中的文件或文件夹到新路径。",
+    },
+    "/api/workspace/info": {
+        "summary": "工作空间统计",
+        "description": "返回工作空间总大小、文件数和目录数。",
+    },
+    "/api/tiles/nodata/scan": {
+        "summary": "扫描透明瓦片",
+        "description": "扫描指定瓦片目录中透明或 nodata 的 PNG 瓦片。",
+    },
+    "/api/tiles/nodata/delete": {
+        "summary": "删除透明瓦片",
+        "description": "删除达到透明阈值的 PNG 瓦片并清理空目录。",
+    },
+    "/api/terrain/layer": {
+        "summary": "修复 layer.json",
+        "description": "更新或重建地形目录中的 layer.json 元数据。",
+    },
+    "/api/terrain/decompress": {
+        "summary": "解压地形瓦片",
+        "description": "将地形目录中的压缩 terrain 文件解压为可直接访问的文件。",
+    },
+}
+
+
+_DOC_HIDDEN_PATHS = {
+    "/api/dataSources/resolve",
+}
+
+
+_GENERIC_JSON_REQUEST_EXAMPLES = {
+    ("/api/dataSources/split", "post"): {
+        "sourceFile": "20260327/large.tif",
+        "outputPath": "split/demo",
+        "tileSize": 4096,
+        "overlap": 0,
+    },
+    ("/api/datasources/createFolder", "post"): {
+        "folderPath": "20260327/new-folder",
+    },
+    ("/api/preflight", "post"): {
+        "jobType": "map_tiles",
+        "folderPaths": [],
+        "filePatterns": ["20260327/*.tif"],
+        "outputPath": "preflight/demo",
+        "minZoom": 0,
+        "maxZoom": 16,
+    },
+    ("/api/tile/convert", "post"): {
+        "sourcePath": "demo/source",
+        "targetPath": "demo/converted",
+        "sourceFormat": "nested",
+        "targetFormat": "flat",
+        "overwrite": False,
+    },
+    ("/api/files/extract", "post"): {
+        "path": "imports/demo.zip",
+        "targetType": "datasource",
+        "overwrite": False,
+        "extractFolderName": "demo-extracted",
+    },
+    ("/api/config/recommend", "post"): {
+        "sourceFile": "20260327/demo.tif",
+        "tileType": "map",
+        "minZoom": 0,
+        "maxZoom": 16,
+    },
+    ("/api/container/update", "post"): {
+        "updateType": "environment",
+        "environment": {"GDAL_CACHEMAX": "512"},
+    },
+    ("/api/workspace/createFolder", "post"): {
+        "folderPath": "demo/output",
+    },
+    ("/api/workspace/folder/{folderPath}/rename", "put"): {
+        "newName": "renamed-folder",
+    },
+    ("/api/workspace/file/{filePath}/rename", "put"): {
+        "newName": "renamed.png",
+    },
+    ("/api/workspace/move", "put"): {
+        "sourcePath": "demo/a.png",
+        "targetPath": "archive/demo/a.png",
+    },
+    ("/api/tiles/nodata/scan", "post"): {
+        "tilesPath": "测试切片-20260321/0327",
+        "transparencyThreshold": 0.1,
+        "includeDetails": True,
+    },
+    ("/api/tiles/nodata/delete", "post"): {
+        "tilesPath": "测试切片-20260321/0327",
+        "transparencyThreshold": 0.1,
+        "includeDetails": True,
+    },
+    ("/api/terrain/layer", "post"): {
+        "terrainPath": ["terrain", "demo"],
+        "bounds": [120.0, 30.0, 121.0, 31.0],
+    },
+    ("/api/terrain/decompress", "post"): {
+        "terrainPath": ["terrain", "demo"],
+    },
+}
+
+
+_GENERIC_JSON_REQUEST_SCHEMAS = {
+    ("/api/dataSources/split", "post"): {"$ref": "#/components/schemas/DatasourceSplitRequest"},
+    ("/api/datasources/createFolder", "post"): {"$ref": "#/components/schemas/CreateFolderRequest"},
+    ("/api/preflight", "post"): {"$ref": "#/components/schemas/PreflightRequest"},
+    ("/api/files/extract", "post"): {"$ref": "#/components/schemas/ExtractArchiveRequest"},
+    ("/api/config/recommend", "post"): {"$ref": "#/components/schemas/RecommendConfigRequest"},
+    ("/api/container/update", "post"): {"$ref": "#/components/schemas/ContainerUpdateRequest"},
+    ("/api/workspace/createFolder", "post"): {"$ref": "#/components/schemas/CreateFolderRequest"},
+    ("/api/workspace/folder/{folderPath}/rename", "put"): {"$ref": "#/components/schemas/RenameRequest"},
+    ("/api/workspace/file/{filePath}/rename", "put"): {"$ref": "#/components/schemas/RenameRequest"},
+    ("/api/workspace/move", "put"): {"$ref": "#/components/schemas/WorkspaceMoveRequest"},
+}
+
+
+_MULTIPART_REQUESTS = {
+    ("/api/upload/file", "post"): {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "file": {"type": "string", "format": "binary"},
+                        "targetPath": {"type": "string"},
+                        "targetType": {"type": "string", "enum": ["datasource", "workspace"]},
+                        "overwrite": {"type": "string", "description": "0/1 或 true/false"},
+                    },
+                    "required": ["file"],
+                }
+            }
+        },
+    },
+    ("/api/upload/zip", "post"): {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "file": {"type": "string", "format": "binary"},
+                        "targetPath": {"type": "string"},
+                        "targetType": {"type": "string", "enum": ["datasource", "workspace"]},
+                        "overwrite": {"type": "string"},
+                        "stripTopLevel": {"type": "string"},
+                        "extractFolderName": {"type": "string", "description": "可选；解压后的目标子文件夹名称"},
+                    },
+                    "required": ["file"],
+                }
+            }
+        },
+    },
+    ("/api/upload/folder", "post"): {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "binary"},
+                        },
+                        "paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "targetPath": {"type": "string"},
+                        "targetType": {"type": "string", "enum": ["datasource", "workspace"]},
+                        "overwrite": {"type": "string"},
+                    },
+                    "required": ["files"],
+                }
+            }
+        },
+    },
+}
+
+
+def _tag_for_path(path):
+    normalized_path = str(path or "").lower()
+    if normalized_path.startswith("/api/health") or normalized_path.startswith("/api/system") or normalized_path.startswith("/api/container"):
+        return "系统"
+    if normalized_path.startswith("/api/datasource") or normalized_path.startswith("/api/upload") or normalized_path.startswith("/api/files/extract") or normalized_path.startswith("/api/preflight"):
+        return "数据源"
+    if normalized_path.startswith("/api/tile") or normalized_path.startswith("/api/terrain") or normalized_path.startswith("/api/tiles"):
+        return "切片任务"
+    if normalized_path.startswith("/api/task"):
+        return "任务管理"
+    if normalized_path.startswith("/api/publication") or normalized_path.startswith("/api/artifact") or normalized_path.startswith("/api/geoserver"):
+        return "发布管理"
+    if normalized_path.startswith("/api/workspace") or normalized_path.startswith("/api/results") or normalized_path.startswith("/api/filedetails"):
+        return "工作空间"
+    if normalized_path.startswith("/api/config"):
+        return "配置"
+    if normalized_path.startswith("/api/docs") or normalized_path.startswith("/api/openapi") or normalized_path.startswith("/api/routes"):
+        return "接口文档"
+    return "其他"
+
+
+def _canonical_doc_path(path):
+    normalized_path = str(path or "")
+    alias_prefixes = {
+        "/api/datasources/info/": "/api/dataSources/info/",
+        "/api/datasources/raw/": "/api/dataSources/raw/",
+        "/api/datasources/workspace": "/api/dataSources/workspace",
+        "/api/datasources/resolve": "/api/dataSources/resolve",
+        "/api/datasources/split": "/api/dataSources/split",
+        "/api/datasources": "/api/dataSources",
+    }
+    for alias_prefix, canonical_prefix in alias_prefixes.items():
+        if normalized_path == alias_prefix or normalized_path.startswith(alias_prefix):
+            return canonical_prefix + normalized_path[len(alias_prefix):]
+    return normalized_path
+
+
+def _flask_path_to_openapi(path):
+    return _PATH_PARAM_PATTERN.sub(lambda match: "{" + match.group(1) + "}", str(path or ""))
+
+
+def _build_path_parameters(openapi_path):
+    parameters = []
+    for name in _OPENAPI_PARAM_PATTERN.findall(openapi_path):
+        parameters.append(
+            {
+                "name": name,
+                "in": "path",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": f"Path parameter: {name}",
+            }
+        )
+    return parameters
+
+
+def _merge_operation(base_operation, override_operation):
+    merged = dict(base_operation)
+    for key, value in (override_operation or {}).items():
+        merged[key] = value
+    return merged
+
+
+def _wrap_operation_response_examples(operation):
+    wrapped = copy.deepcopy(operation)
+    responses = wrapped.get("responses")
+    if not isinstance(responses, dict):
+        return wrapped
+
+    for status_code, response_spec in responses.items():
+        if not isinstance(response_spec, dict):
+            continue
+        content = response_spec.get("content")
+        if not isinstance(content, dict):
+            continue
+        json_content = content.get("application/json")
+        if not isinstance(json_content, dict):
+            continue
+        examples = json_content.get("examples")
+        if not isinstance(examples, dict):
+            continue
+
+        try:
+            status_value = int(status_code)
+        except (TypeError, ValueError):
+            status_value = 200
+
+        for example_name, example_spec in examples.items():
+            if not isinstance(example_spec, dict) or "value" not in example_spec:
+                continue
+            examples[example_name]["value"] = normalize_envelope(example_spec["value"], status_value)
+
+    return wrapped
+
+
+def _build_paths():
+    paths = {}
+
+    for rule in current_app.url_map.iter_rules():
+        route_path = str(rule.rule or "")
+        if route_path.startswith("/static"):
+            continue
+        if route_path in {"/", "/console"}:
+            continue
+        if not (route_path.startswith("/api/") or route_path.startswith("/published") or route_path.startswith("/publication-assets") or route_path.startswith("/wmts")):
+            continue
+
+        raw_openapi_path = _flask_path_to_openapi(route_path)
+        openapi_path = _canonical_doc_path(raw_openapi_path)
+        if openapi_path in _DOC_HIDDEN_PATHS:
+            continue
+        methods = sorted(method.lower() for method in (rule.methods or set()) if method not in {"HEAD", "OPTIONS"})
+        if not methods:
+            continue
+
+        path_item = paths.setdefault(openapi_path, {})
+        for method in methods:
+            if method in path_item:
+                continue
+
+            operation = {
+                "tags": [_tag_for_path(openapi_path)],
+                "summary": rule.endpoint.replace("_", " "),
+                "operationId": f"{rule.endpoint}_{method}",
+                "responses": {
+                    "200": {"description": "Success"},
+                },
+            }
+
+            path_parameters = _build_path_parameters(openapi_path)
+            if path_parameters:
+                operation["parameters"] = path_parameters
+
+            doc_path = openapi_path
+            path_doc = _PATH_DOCS.get(doc_path) or _PATH_DOCS.get(raw_openapi_path)
+            if path_doc:
+                operation["summary"] = path_doc.get("summary", operation["summary"])
+                operation["description"] = path_doc.get("description", operation.get("description"))
+
+            generic_key = None
+            if (doc_path, method) in _GENERIC_JSON_REQUEST_EXAMPLES:
+                generic_key = (doc_path, method)
+            elif (raw_openapi_path, method) in _GENERIC_JSON_REQUEST_EXAMPLES:
+                generic_key = (raw_openapi_path, method)
+
+            if generic_key:
+                generic_schema = _GENERIC_JSON_REQUEST_SCHEMAS.get(generic_key) or {
+                    "type": "object",
+                    "additionalProperties": True,
+                }
+                operation["requestBody"] = {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": generic_schema,
+                            "example": _GENERIC_JSON_REQUEST_EXAMPLES[generic_key],
+                        }
+                    },
+                }
+
+            multipart_request = _MULTIPART_REQUESTS.get((doc_path, method)) or _MULTIPART_REQUESTS.get((raw_openapi_path, method))
+            if multipart_request:
+                operation["requestBody"] = multipart_request
+
+            override = _OPERATION_OVERRIDES.get((doc_path, method)) or _OPERATION_OVERRIDES.get((raw_openapi_path, method))
+            operation = _merge_operation(operation, override)
+            operation = _wrap_operation_response_examples(operation)
+            path_item[method] = operation
+
+    return dict(sorted(paths.items(), key=lambda item: item[0]))
+
+
+def _enum_value_to_text(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    return str(value)
+
+
+def _enum_value_label(value):
+    text = _enum_value_to_text(value)
+    description = _ENUM_VALUE_DESCRIPTIONS.get(value)
+    if description is None:
+        description = _ENUM_VALUE_DESCRIPTIONS.get(text)
+    return f"{text}={description}" if description else text
+
+
+def _annotate_enum_descriptions(node):
+    if isinstance(node, dict):
+        enum_values = node.get("enum")
+        if isinstance(enum_values, list) and enum_values:
+            enum_texts = [_enum_value_label(item) for item in enum_values]
+            description = node.get("description")
+            if isinstance(description, str) and description.strip():
+                desc_lower = description.lower()
+                raw_enum_texts = [_enum_value_to_text(item) for item in enum_values]
+                if not all(text.lower() in desc_lower for text in raw_enum_texts):
+                    node["description"] = f"{description.rstrip()} 可选值：{', '.join(enum_texts)}。"
+            else:
+                node["description"] = f"可选值：{', '.join(enum_texts)}。"
+            enum_descriptions = []
+            for item in enum_values:
+                item_text = _enum_value_to_text(item)
+                enum_descriptions.append(_ENUM_VALUE_DESCRIPTIONS.get(item, _ENUM_VALUE_DESCRIPTIONS.get(item_text, "")))
+            if any(enum_descriptions):
+                node["x-enumDescriptions"] = enum_descriptions
+
+        for value in node.values():
+            _annotate_enum_descriptions(value)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _annotate_enum_descriptions(item)
+
+
+def _strip_enum_definitions(node):
+    if isinstance(node, dict):
+        node.pop("enum", None)
+        for value in node.values():
+            _strip_enum_definitions(value)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _strip_enum_definitions(item)
+
+
+def _openapi_spec():
+    server_url = request.host_url.rstrip("/")
+    spec = {
+        "openapi": "3.0.3",
+        "info": {
+            "title": "AtlasWorks API",
+            "version": APP_VERSION,
+            "description": (
+                "AtlasWorks 瓦片生产与发布接口文档。"
+                "已自动暴露当前服务中全部 API 路由。"
+            ),
+        },
+        "servers": [{"url": server_url}],
+        "tags": [
+            {"name": "系统", "description": "系统与健康状态"},
+            {"name": "数据源", "description": "数据源解析与预处理"},
+            {"name": "切片任务", "description": "地图/地形切片任务"},
+            {"name": "任务管理", "description": "任务管理"},
+            {"name": "发布管理", "description": "发布与产物管理"},
+            {"name": "工作空间", "description": "工作空间与文件管理"},
+            {"name": "配置", "description": "配置与缓存相关接口"},
+            {"name": "接口文档", "description": "接口文档相关接口"},
+            {"name": "其他", "description": "其他接口"},
+        ],
+        "paths": _build_paths(),
+        "components": {
+            "schemas": {
+                "DatasourceResolveRequest": {
+                    "type": "object",
+                    "properties": {
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组；为空时从数据源根目录匹配。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "文件通配符、txt 清单或 http/https 网络地址数组。"},
+                        "maxFiles": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "最多返回/扫描的文件数量。"},
+                    },
+                    "required": ["filePatterns"],
+                },
+                "DatasourceSplitRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourceFile": {"type": "string", "description": "数据源中的 TIF 相对路径。"},
+                        "outputPath": {"type": "string", "description": "拆分输出目录，相对 dataSourceDir。"},
+                        "tileSize": {"type": "integer", "minimum": 256, "default": 4096, "description": "拆分窗口像素大小。"},
+                        "overlap": {"type": "integer", "minimum": 0, "default": 0, "description": "相邻块重叠像素。"},
+                    },
+                    "required": ["sourceFile"],
+                    "additionalProperties": True,
+                },
+                "CreateFolderRequest": {
+                    "type": "object",
+                    "properties": {
+                        "folderPath": {"type": "string", "description": "待创建文件夹的相对路径。"},
+                    },
+                    "required": ["folderPath"],
+                },
+                "RenameRequest": {
+                    "type": "object",
+                    "properties": {
+                        "newName": {"type": "string", "description": "新的文件或文件夹名称，不包含上级路径。"},
+                    },
+                    "required": ["newName"],
+                },
+                "WorkspaceMoveRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourcePath": {"type": "string", "description": "源文件或文件夹相对路径。"},
+                        "targetPath": {"type": "string", "description": "目标相对路径。"},
+                    },
+                    "required": ["sourcePath", "targetPath"],
+                },
+                "ExtractArchiveRequest": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "待解压压缩包相对路径，支持 zip、tar 系列和 7z。"},
+                        "targetType": {"type": "string", "enum": ["datasource", "workspace"], "default": "datasource", "description": "压缩包所在根目录。"},
+                        "overwrite": {"type": "boolean", "default": False, "description": "目标文件存在时是否覆盖。"},
+                        "extractFolderName": {"type": "string", "description": "可选；解压到压缩包所在目录下的单级子文件夹。"},
+                    },
+                    "required": ["path"],
+                },
+                "PreflightRequest": {
+                    "type": "object",
+                    "properties": {
+                        "jobType": {"type": "string", "enum": ["map_tiles", "terrain", "terrain_tiles"], "default": "map_tiles", "description": "预检查任务类型。"},
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "文件匹配模式数组。"},
+                        "outputPath": {"type": "string", "description": "计划输出目录，用于检测覆盖风险。"},
+                        "maxFiles": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50, "description": "最多扫描文件数。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "maximum": 30, "default": 0},
+                        "maxZoom": {"type": "integer", "minimum": 0, "maximum": 30, "default": 18},
+                        "heightBand": {"description": "地形任务高程波段，可传数字或空值。"},
+                    },
+                    "required": ["filePatterns"],
+                },
+                "RecommendConfigRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourceFile": {"type": "string", "description": "数据源中的 TIF 相对路径。"},
+                        "tileType": {"type": "string", "enum": ["map", "terrain"], "default": "map", "description": "推荐配置类型。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "description": "用户期望最小层级。"},
+                        "maxZoom": {"type": "integer", "minimum": 0, "description": "用户期望最大层级。"},
+                    },
+                    "required": ["sourceFile"],
+                },
+                "ContainerUpdateRequest": {
+                    "type": "object",
+                    "properties": {
+                        "updateType": {"type": "string", "enum": ["all", "time", "environment", "config", "system", "network"], "default": "all", "description": "容器信息更新范围。"},
+                        "timezone": {"type": "string", "description": "设置进程时区，例如 Asia/Shanghai。"},
+                        "environment": {"type": "object", "additionalProperties": {"type": "string"}, "description": "需要写入进程环境变量的键值。"},
+                        "config": {"type": "object", "additionalProperties": True, "description": "允许覆盖的运行配置项。"},
+                    },
+                    "additionalProperties": True,
+                },
+                "GeoBounds": {
+                    "type": "object",
+                    "properties": {
+                        "west": {"type": "number"},
+                        "south": {"type": "number"},
+                        "east": {"type": "number"},
+                        "north": {"type": "number"},
+                    },
+                    "additionalProperties": True,
+                },
+                "DataSourceFileMetadata": {
+                    "type": "object",
+                    "properties": {
+                        "driver": {"type": "string"},
+                        "driverLongName": {"type": "string"},
+                        "rasterSize": {
+                            "type": "object",
+                            "properties": {
+                                "width": {"type": "integer"},
+                                "height": {"type": "integer"},
+                            },
+                            "additionalProperties": True,
+                        },
+                        "pixelSize": {
+                            "type": "object",
+                            "properties": {
+                                "x": {"type": "number"},
+                                "y": {"type": "number"},
+                            },
+                            "additionalProperties": True,
+                        },
+                        "bandCount": {"type": "integer"},
+                        "dataType": {"type": "string"},
+                        "bandDataTypes": {"type": "array", "items": {"type": "string"}},
+                        "nodata": {"description": "NoData 值，可能是单值或数组。"},
+                        "compression": {"type": "string"},
+                        "bounds": {"$ref": "#/components/schemas/GeoBounds"},
+                        "srs": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                "DataSourceFileDetailData": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "path": {"type": "string"},
+                        "fullPath": {"type": "string"},
+                        "format": {"type": "string"},
+                        "size": {"type": "integer"},
+                        "sizeFormatted": {"type": "string"},
+                        "lastModified": {"type": "string"},
+                        "modifiedTime": {"type": "number"},
+                        "type": {"type": "string"},
+                        "extension": {"type": "string"},
+                        "previewUrl": {"type": "string"},
+                        "geoBounds": {"$ref": "#/components/schemas/GeoBounds"},
+                        "metadata": {"$ref": "#/components/schemas/DataSourceFileMetadata"},
+                        "recommendations": {"type": "object", "additionalProperties": True},
+                    },
+                    "additionalProperties": True,
+                },
+                "ApiEnvelopeDataSourceFileDetail": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/DataSourceFileDetailData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                        "error": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "TileConvertRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourcePath": {"type": "string", "description": "源瓦片目录，相对 tilesDir。"},
+                        "targetPath": {"type": "string", "description": "目标瓦片目录，相对 tilesDir。"},
+                        "sourceFormat": {"type": "string", "enum": ["flat", "nested"], "description": "源目录结构。"},
+                        "targetFormat": {"type": "string", "enum": ["flat", "nested"], "description": "目标目录结构。"},
+                        "overwrite": {"type": "boolean", "default": False, "description": "目标目录存在时是否覆盖写入。"},
+                    },
+                    "required": ["sourcePath", "targetPath", "sourceFormat", "targetFormat"],
+                },
+                "TileCacheDeleteRequest": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "缓存目录相对路径。"},
+                        "zoomLevels": {"type": "array", "items": {"type": "integer", "minimum": 0}, "description": "可选；只删除指定层级目录。"},
+                    },
+                    "required": ["path"],
+                },
+                "TileConvertData": {
+                    "type": "object",
+                    "properties": {
+                        "taskId": {"type": "string"},
+                        "statusUrl": {"type": "string"},
+                        "sourcePath": {"type": "string"},
+                        "targetPath": {"type": "string"},
+                        "sourceFormat": {"type": "string", "enum": ["flat", "nested"]},
+                        "targetFormat": {"type": "string", "enum": ["flat", "nested"]},
+                    },
+                    "additionalProperties": True,
+                },
+                "ApiEnvelopeTileConvert": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TileConvertData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                        "error": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "NodataScanRequest": {
+                    "type": "object",
+                    "properties": {
+                        "tilesPath": {"type": "string"},
+                        "transparencyThreshold": {"type": "number", "minimum": 0, "maximum": 1},
+                        "includeDetails": {"type": "boolean"},
+                    },
+                    "required": ["tilesPath"],
+                },
+                "NodataDeleteRequest": {
+                    "type": "object",
+                    "properties": {
+                        "tilesPath": {"type": "string"},
+                        "transparencyThreshold": {"type": "number", "minimum": 0, "maximum": 1},
+                        "includeDetails": {"type": "boolean"},
+                    },
+                    "required": ["tilesPath"],
+                },
+                "NodataScanData": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "object", "additionalProperties": True},
+                        "zoomLevelStats": {"type": "object", "additionalProperties": True},
+                        "nodataFiles": {"type": "array", "items": {"type": "string"}},
+                        "note": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                "NodataDeleteData": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "object", "additionalProperties": True},
+                        "deleted_files": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "additionalProperties": True,
+                },
+                "ApiEnvelopeNodataScan": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/NodataScanData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                        "error": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopeNodataDelete": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/NodataDeleteData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                        "error": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "TerrainLayerRequest": {
+                    "type": "object",
+                    "properties": {
+                        "terrainPath": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                        "bounds": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+                        "sourceFile": {"type": "string"},
+                        "maxMemory": {"type": "string"},
+                        "threads": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["terrainPath"],
+                },
+                "TerrainLayerData": {
+                    "type": "object",
+                    "properties": {
+                        "terrainPathArray": {"type": "array", "items": {"type": "string"}},
+                        "terrainDir": {"type": "string"},
+                        "bounds": {"type": "array", "items": {"type": "number"}},
+                        "layerFile": {"type": "string"},
+                        "method": {"type": "string"},
+                        "detectedLevels": {"type": "object", "additionalProperties": True},
+                        "sourceFile": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                "ApiEnvelopeTerrainLayer": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TerrainLayerData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                        "error": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "TerrainDecompressRequest": {
+                    "type": "object",
+                    "properties": {
+                        "terrainPath": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                    },
+                    "required": ["terrainPath"],
+                },
+                "TerrainDecompressData": {
+                    "type": "object",
+                    "properties": {
+                        "terrainPathArray": {"type": "array", "items": {"type": "string"}},
+                        "terrainDir": {"type": "string"},
+                        "terrainPath": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                "ApiEnvelopeTerrainDecompress": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TerrainDecompressData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                        "error": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "IndexedTilesRequest": {
+                    "type": "object",
+                    "properties": {
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "TIF 文件通配符、txt 清单或 http/https 网络地址数组。"},
+                        "outputPath": {"description": "输出目录；可传字符串或路径片段数组，不传时服务端自动生成。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "default": 0},
+                        "maxZoom": {"type": "integer", "minimum": 0, "default": 12},
+                        "tileSize": {"type": "integer", "minimum": 64, "default": 256},
+                        "projection": {
+                            "type": "string",
+                            "enum": ["EPSG:3857", "EPSG:4326", "EPSG:4490"],
+                            "description": "常用投影枚举；后端也支持传其他投影字符串。",
+                        },
+                        "imageFormat": {"type": "string", "enum": ["png", "jpeg"], "default": "png"},
+                        "tileScheme": {"type": "string", "enum": ["tms", "google"], "default": "tms"},
+                        "wmsConcurrency": {"type": "integer", "minimum": 1, "maximum": 16, "default": 4, "description": "GeoServer WMS 渲染并发数；threads 是兼容别名。"},
+                        "threads": {"type": "integer", "minimum": 1, "maximum": 16, "description": "wmsConcurrency 的兼容别名。"},
+                        "transparentBackground": {"type": "boolean", "default": True, "description": "PNG 输出是否使用透明背景。"},
+                        "renderMode": {"type": "string", "enum": ["auto", "gray", "rgb"], "default": "auto", "description": "栅格渲染模式。"},
+                        "redBand": {"type": "integer", "minimum": 1, "default": 1},
+                        "greenBand": {"type": "integer", "minimum": 1, "default": 2},
+                        "blueBand": {"type": "integer", "minimum": 1, "default": 3},
+                        "nodataValue": {"description": "NoData 值，可传数字或空值。"},
+                        "transparencyThreshold": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1},
+                        "enableIncrementalUpdate": {"type": "boolean", "default": False},
+                        "skipNodataTiles": {"type": "boolean", "default": False, "description": "是否跳过透明/nodata 瓦片；仅 PNG 输出生效。"},
+                    },
+                    "required": ["filePatterns", "outputPath"],
+                },
+                "VectorTilesRequest": {
+                    "type": "object",
+                    "properties": {
+                        "folderPaths": {"type": "array", "items": {"type": "string"}},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}},
+                        "outputPath": {"type": "string", "description": "输出目录；不传时自动生成。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "maximum": 22},
+                        "maxZoom": {"type": "integer", "minimum": 0, "maximum": 22},
+                        "datasetName": {"type": "string", "description": "矢量瓦片数据集名称。"},
+                        "layerName": {"type": "string", "description": "兼容 datasetName 的别名字段。"},
+                        "tileFormat": {"type": "string", "enum": ["mvt", "geojson"], "description": "输出格式，mvt 生成 .pbf，geojson 生成 .geojson 瓦片。"},
+                        "levelField": {"type": "string", "description": "GeoJSON 瓦片可选层级字段名；留空时不按行政区或层级字段过滤。"},
+                        "levelRules": {
+                            "type": "array",
+                            "description": "GeoJSON 瓦片可选 zoom 过滤规则。仅在 levelField 非空时生效。",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "values": {"type": "array", "items": {"type": "string"}, "description": "该规则匹配的字段值。"},
+                                    "minZoom": {"type": "integer", "minimum": 0, "maximum": 22},
+                                    "maxZoom": {"type": "integer", "minimum": 0, "maximum": 22},
+                                },
+                                "required": ["values", "minZoom", "maxZoom"],
+                            },
+                        },
+                        "unmatchedPolicy": {"type": "string", "enum": ["include", "exclude"], "description": "GeoJSON 瓦片中没有匹配 levelRules 的要素处理方式，默认 include。"},
+                        "overwrite": {"type": "boolean", "description": "outputPath 已存在时是否覆盖。"},
+                    },
+                    "required": ["filePatterns"],
+                },
+                "TerrainTilesRequest": {
+                    "type": "object",
+                    "properties": {
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "TIF 文件通配符、txt 清单或 http/https 网络地址数组。"},
+                        "outputPath": {"description": "输出目录；可传字符串或路径片段数组，不传时服务端自动生成。"},
+                        "startZoom": {"type": "integer", "minimum": 0, "default": 0},
+                        "endZoom": {"type": "integer", "minimum": 8, "default": 8, "description": "地形切片最大层级，后端要求至少为 8。"},
+                        "maxTriangles": {"type": "integer", "minimum": 1024, "default": 32768},
+                        "bounds": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "输出范围 [west, south, east, north]。"},
+                        "threads": {"type": "integer", "minimum": 1, "default": 4},
+                        "maxMemory": {"type": "string", "default": "8m", "description": "ctb-tile 内存参数，如 8m、4g。"},
+                        "compression": {"type": "boolean", "default": True, "description": "是否生成压缩 terrain。"},
+                        "decompress": {"type": "boolean", "default": True, "description": "完成后是否解压 terrain。"},
+                        "autoZoom": {"type": "boolean", "default": False},
+                        "zoomStrategy": {"type": "string", "enum": ["conservative", "balanced", "aggressive"], "default": "conservative"},
+                        "mergeTerrains": {"type": "boolean", "default": False, "description": "多文件处理后是否尝试合并地形目录。"},
+                        "taskId": {"type": "string", "description": "可选；自定义任务 ID。"},
+                    },
+                    "required": ["filePatterns", "outputPath"],
+                },
+                "Tiles3DRequest": {
+                    "type": "object",
+                    "properties": {
+                        "dataType": {"type": "string", "enum": ["pointcloud", "vector", "model", "osgb"], "description": "3D Tiles 输入类型。"},
+                        "sourcePath": {"type": "string", "description": "单个源文件或目录相对路径；可替代 folderPaths + filePatterns。"},
+                        "folderPaths": {"type": "array", "items": {"type": "string"}, "description": "数据源目录相对路径数组。"},
+                        "filePatterns": {"type": "array", "items": {"type": "string"}, "description": "源文件匹配模式数组。"},
+                        "outputPath": {"type": "string", "description": "输出目录，相对 tilesDir。"},
+                        "jobs": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4, "description": "并行作业数。"},
+                        "crs": {"type": "string", "description": "点云/矢量源坐标系，如 EPSG:3857。"},
+                        "heightField": {"type": "string", "description": "矢量拉伸高度字段。"},
+                        "defaultHeight": {"type": "number", "default": 30, "description": "矢量默认高度（米）。"},
+                        "vectorHeightMode": {"type": "string", "enum": ["meters", "floors"], "default": "meters", "description": "矢量高度字段解释方式。"},
+                        "floorHeightMeters": {"type": "number", "minimum": 0.1, "default": 3, "description": "楼层模式下单层高度。"},
+                        "contentFormat": {"type": "string", "enum": ["b3dm", "glb"], "default": "b3dm", "description": "vector/model/osgb 输出内容格式。"},
+                        "anchorMode": {"type": "string", "enum": ["manual", "auto"], "default": "manual", "description": "OSGB 锚点模式；model 固定需要手动经纬度。"},
+                        "longitude": {"type": "number", "description": "模型/OSGB 手动锚点经度。"},
+                        "latitude": {"type": "number", "description": "模型/OSGB 手动锚点纬度。"},
+                        "height": {"type": "number", "default": 0, "description": "模型贴地高度（米）。"},
+                        "scale": {"type": "number", "default": 1, "description": "模型缩放。"},
+                        "rotationZ": {"type": "number", "default": 0, "description": "模型绕 Z 轴旋转角度。"},
+                        "enablePyramid": {"type": "boolean", "default": False, "description": "vector/model/osgb 是否构建空间金字塔。"},
+                        "pyramidLeafSize": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 8},
+                        "pyramidMaxDepth": {"type": "integer", "minimum": 1, "maximum": 12, "default": 4},
+                        "taskId": {"type": "string", "description": "可选；自定义任务 ID。"},
+                    },
+                    "required": ["dataType"],
+                    "anyOf": [
+                        {"required": ["sourcePath"]},
+                        {"required": ["filePatterns"]},
+                    ],
+                },
+                "TaskStatus": {
+                    "type": "string",
+                    "enum": ["queued", "running", "completed", "failed", "stopped"],
+                    "description": "任务运行状态。映射：queued=排队中，running=执行中，completed=已完成，failed=失败，stopped=已停止。",
+                },
+                "GeoserverPublishRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourcePath": {"type": "string", "description": "数据源中的 GeoTIFF 文件或目录相对路径；path 是兼容别名。"},
+                        "path": {"type": "string", "description": "sourcePath 的兼容别名。"},
+                        "alias": {"type": "string", "description": "发布图层/Store 名称；优先级高于 layerName/storeName。"},
+                        "layerName": {"type": "string", "description": "发布图层名称别名。"},
+                        "storeName": {"type": "string", "description": "发布 Store 名称别名。"},
+                        "workspace": {"type": "string", "default": "atlasworks", "description": "GeoServer 工作空间。"},
+                        "targetCrs": {"type": "string", "default": "EPSG:3857", "description": "目标坐标系；projection 是兼容别名。"},
+                        "projection": {"type": "string", "description": "targetCrs 的兼容别名。"},
+                        "styleName": {"type": "string", "default": "raster", "description": "发布后设置的默认样式。"},
+                        "tileFormat": {"type": "string", "enum": ["image/png", "image/jpeg"], "default": "image/png", "description": "预切片输出格式。"},
+                        "minZoom": {"type": "integer", "minimum": 0, "default": 0, "description": "预切片最小层级。"},
+                        "maxZoom": {"type": "integer", "minimum": 0, "default": 16, "description": "预切片最大层级。"},
+                        "seedEnabled": {"type": "boolean", "default": False, "description": "发布后是否立即触发 GeoWebCache seed；seed 是兼容别名。"},
+                        "seed": {"type": "boolean", "description": "seedEnabled 的兼容别名。"},
+                        "overwrite": {"type": "boolean", "default": True, "description": "是否先删除同名 Store/图层后发布。"},
+                        "nodataValue": {"description": "NoData 值，用于灰度/样式配置，可为空。"},
+                    },
+                    "required": ["sourcePath"],
+                    "additionalProperties": True,
+                },
+                "GeoserverSeedRequest": {
+                    "type": "object",
+                    "properties": {
+                        "minZoom": {"type": "integer", "minimum": 0, "default": 0},
+                        "maxZoom": {"type": "integer", "minimum": 0, "default": 16},
+                        "format": {"type": "string", "enum": ["image/png", "image/jpeg"], "default": "image/png"},
+                        "threadCount": {"type": "integer", "minimum": 1, "default": 1},
+                    },
+                },
+                "TaskCreateData": {
+                    "type": "object",
+                    "properties": {
+                        "taskId": {"type": "string"},
+                        "status": {"$ref": "#/components/schemas/TaskStatus"},
+                        "statusUrl": {"type": "string"},
+                        "message": {"type": "string"},
+                        "method": {"type": "string"},
+                        "parameters": {"type": "object", "additionalProperties": True},
+                        "indexInfo": {"type": "object", "additionalProperties": True},
+                        "processingInfo": {"type": "object", "additionalProperties": True},
+                        "errors": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "additionalProperties": True,
+                },
+                "ApiEnvelopeTaskCreate": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TaskCreateData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                        "error": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "TaskResultSummary": {
+                    "type": "object",
+                    "properties": {
+                        "completedFiles": {"type": "integer"},
+                        "failedFiles": {"type": "integer"},
+                        "totalFiles": {"type": "integer"},
+                        "totalTerrainFiles": {"type": "integer"},
+                        "outputPath": {"type": "string"},
+                        "mergedOutputPath": {"type": "string"},
+                        "deletedNodataTiles": {"type": "integer"},
+                        "method": {"type": "string"},
+                        "artifactId": {"type": "string"},
+                        "artifactType": {"type": "string"},
+                        "manifestFile": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                "TaskSummary": {
+                    "type": "object",
+                    "properties": {
+                        "taskId": {"type": "string"},
+                        "status": {"$ref": "#/components/schemas/TaskStatus"},
+                        "progress": {"type": "integer"},
+                        "message": {"type": "string"},
+                        "startTime": {"type": "string"},
+                        "endTime": {"type": "string"},
+                        "currentStage": {"type": "string"},
+                        "result": {"$ref": "#/components/schemas/TaskResultSummary"},
+                        "stats": {"type": "object", "additionalProperties": True},
+                        "files": {
+                            "description": "任务文件清单，结构随任务类型变化。",
+                        },
+                    },
+                    "additionalProperties": True,
+                },
+                "TaskListData": {
+                    "type": "object",
+                    "properties": {
+                        "tasks": {
+                            "type": "object",
+                            "additionalProperties": {"$ref": "#/components/schemas/TaskSummary"},
+                        },
+                        "count": {"type": "integer"},
+                        "total": {"type": "integer"},
+                        "page": {"type": "integer"},
+                        "pageSize": {"type": "integer"},
+                        "totalPages": {"type": "integer"},
+                        "hasPrev": {"type": "boolean"},
+                        "hasNext": {"type": "boolean"},
+                    },
+                    "additionalProperties": True,
+                },
+                "TaskDetailData": {
+                    "type": "object",
+                    "properties": {
+                        "taskId": {"type": "string"},
+                        "status": {"$ref": "#/components/schemas/TaskStatus"},
+                        "progress": {"type": "integer"},
+                        "message": {"type": "string"},
+                        "startTime": {"type": "string"},
+                        "endTime": {"type": "string"},
+                        "currentStage": {"type": "string"},
+                        "result": {"type": "object", "additionalProperties": True},
+                        "stats": {"type": "object", "additionalProperties": True},
+                        "files": {
+                            "description": "任务文件清单，结构随任务类型变化。",
+                        },
+                    },
+                    "additionalProperties": True,
+                },
+                "TaskEventRecord": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "eventType": {"type": "string"},
+                        "eventAt": {"type": "string"},
+                        "details": {"type": "object", "additionalProperties": True},
+                    },
+                    "additionalProperties": True,
+                },
+                "TaskEventsData": {
+                    "type": "object",
+                    "properties": {
+                        "taskId": {"type": "string"},
+                        "source": {"type": "string"},
+                        "count": {"type": "integer"},
+                        "events": {"type": "array", "items": {"$ref": "#/components/schemas/TaskEventRecord"}},
+                    },
+                    "additionalProperties": True,
+                },
+                "TaskDeleteData": {
+                    "type": "object",
+                    "properties": {
+                        "taskId": {"type": "string"},
+                        "deletedFromMemory": {"type": "boolean"},
+                        "deletedFromDatabase": {"type": "boolean"},
+                    },
+                    "additionalProperties": True,
+                },
+                "TaskStopData": {
+                    "type": "object",
+                    "properties": {
+                        "taskId": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                "TaskCleanupData": {
+                    "type": "object",
+                    "properties": {
+                        "remainingTasks": {"type": "integer"},
+                    },
+                    "additionalProperties": True,
+                },
+                "ApiEnvelopeTaskList": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TaskListData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopeTaskDetail": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TaskDetailData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopeTaskEvents": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TaskEventsData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopeTaskDelete": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TaskDeleteData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopeTaskStop": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TaskStopData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopeTaskCleanup": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/TaskCleanupData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "PublicationUpsertRequest": {
+                    "type": "object",
+                    "properties": {
+                        "sourceMode": {
+                            "type": "string",
+                            "enum": ["task", "manual", "artifact", "datasource"],
+                            "description": "发布来源模式。task/manual/artifact 用于已有产物；datasource 用于 GeoServer 数据源影像实时发布。",
+                            "example": "task",
+                        },
+                        "publicationId": {
+                            "type": "string",
+                            "description": "发布 ID。为空时服务端自动生成。",
+                            "example": "publication-imagery-release-v1",
+                        },
+                        "taskId": {
+                            "type": "string",
+                            "description": "任务发布时使用的任务 ID。",
+                            "example": "indexedTiles1774342374",
+                        },
+                        "artifactId": {
+                            "type": "string",
+                            "description": "按产物发布时使用的产物 ID。",
+                            "example": "artifact-indexedTiles1774342374",
+                        },
+                        "workspacePath": {
+                            "type": "string",
+                            "description": "手动目录发布时的工作空间相对路径。",
+                            "example": "测试切片-20260321/0327",
+                        },
+                        "sourcePath": {
+                            "type": "string",
+                            "description": "workspacePath 的别名字段；两者任选其一。",
+                        },
+                        "sourcePaths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "GeoServer 数据源影像发布时可传 GeoTIFF 文件或目录相对路径；服务端会发布为 WMS/WMTS/GWC 图层。",
+                        },
+                        "publishPath": {
+                            "type": "string",
+                            "description": "实际对外发布的目录相对路径；通常与 workspacePath 一致。",
+                            "example": "测试切片-20260321/0327",
+                        },
+                        "alias": {
+                            "type": "string",
+                            "description": "发布别名，对应前端“发布别名”。",
+                            "example": "imagery-release-v1",
+                        },
+                        "publishType": {
+                            "type": "string",
+                            "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "vector"],
+                            "description": "发布类型，对应前端“发布类型”。",
+                            "example": "imagery",
+                        },
+                        "publishMethod": {
+                            "type": "string",
+                            "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "geoserver-wmts", "geoserver-wms", "wms", "wfs", "static-download"],
+                            "description": "发布方式，对应前端“发布方式”。",
+                            "example": "wmts",
+                        },
+                        "visibility": {
+                            "type": "string",
+                            "enum": ["private", "internal", "public"],
+                            "description": "可见性，对应前端“可见性”。",
+                            "example": "private",
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "是否启用发布，对应前端“启用状态”。",
+                            "example": True,
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "发布说明，对应前端“发布说明”。",
+                            "example": "记录来源、用途和版本说明",
+                        },
+                        "customMetadata": {
+                            "type": "object",
+                            "description": "业务扩展字段，推荐通过扁平请求中的 customMetadata 传入。",
+                            "additionalProperties": True,
+                        },
+                    },
+                    "anyOf": [
+                        {"required": ["taskId"]},
+                        {"required": ["artifactId"]},
+                        {"required": ["workspacePath"]},
+                        {"required": ["sourcePath"]},
+                    ],
+                    "description": "创建或更新发布记录。推荐使用扁平字段：sourceMode、taskId/artifactId/workspacePath/sourcePath、alias、publicationId、publishType、publishMethod、visibility、enabled、note、customMetadata。",
+                },
+                "PublicationStatus": {
+                    "type": "string",
+                    "enum": ["enabled", "disabled", "published", "active", "draft", "failed"],
+                    "description": "发布状态。映射：enabled=已启用，disabled=未启用，published=已发布(兼容)，active=激活(兼容)，draft=草稿，failed=失败。当前系统主要写入 enabled/disabled。",
+                },
+                "PublicationSourceMode": {
+                    "type": "string",
+                    "enum": ["task", "manual", "artifact", "datasource"],
+                },
+                "PublicationPublishType": {
+                    "type": "string",
+                    "enum": ["imagery", "electronic-map", "terrain", "3dtiles", "vector"],
+                },
+                "PublicationPublishMethod": {
+                    "type": "string",
+                    "enum": ["xyz", "tms", "wmts", "mvt", "geojson-tile", "terrain", "cesium-terrain", "quantized-mesh", "3d-tiles", "geoserver-wmts", "geoserver-wms", "wms", "wfs", "static-download"],
+                },
+                "PublicationVisibility": {
+                    "type": "string",
+                    "enum": ["private", "internal", "public"],
+                },
+                "PublicationMetadata": {
+                    "type": "object",
+                    "properties": {
+                        "workspacePath": {"type": "string"},
+                        "sourcePath": {"type": "string"},
+                        "sourcePaths": {"type": "array", "items": {"type": "string"}},
+                        "taskId": {"type": "string"},
+                        "sourceMode": {"$ref": "#/components/schemas/PublicationSourceMode"},
+                        "publishMethod": {"$ref": "#/components/schemas/PublicationPublishMethod"},
+                        "visibility": {"$ref": "#/components/schemas/PublicationVisibility"},
+                        "note": {"type": "string"},
+                        "enabled": {"type": "boolean"},
+                        "customMetadata": {"type": "object", "additionalProperties": True},
+                    },
+                    "additionalProperties": True,
+                },
+                "PublicationRecord": {
+                    "type": "object",
+                    "properties": {
+                        "publicationId": {"type": "string"},
+                        "artifactId": {"type": "string"},
+                        "publishType": {"$ref": "#/components/schemas/PublicationPublishType"},
+                        "publishPath": {"type": "string"},
+                        "alias": {"type": "string"},
+                        "status": {"$ref": "#/components/schemas/PublicationStatus"},
+                        "publishMethod": {"$ref": "#/components/schemas/PublicationPublishMethod"},
+                        "visibility": {"$ref": "#/components/schemas/PublicationVisibility"},
+                        "enabled": {"type": "boolean"},
+                        "note": {"type": "string"},
+                        "customMetadata": {"type": "object", "additionalProperties": True},
+                        "metadata": {"$ref": "#/components/schemas/PublicationMetadata"},
+                        "browserUrl": {"type": "string"},
+                        "accessUrl": {"type": "string"},
+                        "launchUrl": {"type": "string"},
+                        "sampleUrl": {"type": "string"},
+                        "publicBaseUrl": {"type": "string"},
+                        "publishedAt": {"type": "string"},
+                        "createdAt": {"type": "string"},
+                        "updatedAt": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                "PublicationListData": {
+                    "type": "object",
+                    "properties": {
+                        "publications": {
+                            "type": "array",
+                            "items": {"$ref": "#/components/schemas/PublicationRecord"},
+                        },
+                        "count": {"type": "integer"},
+                        "total": {"type": "integer"},
+                        "page": {"type": "integer"},
+                        "pageSize": {"type": "integer"},
+                        "totalPages": {"type": "integer"},
+                        "hasPrev": {"type": "boolean"},
+                        "hasNext": {"type": "boolean"},
+                    },
+                    "additionalProperties": True,
+                },
+                "PublicationDetailData": {
+                    "type": "object",
+                    "properties": {
+                        "publication": {"$ref": "#/components/schemas/PublicationRecord"},
+                    },
+                    "additionalProperties": True,
+                },
+                "PublicationDeleteData": {
+                    "type": "object",
+                    "properties": {
+                        "publicationId": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
+                "ApiEnvelopePublicationList": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/PublicationListData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopePublicationDetail": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/PublicationDetailData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopePublicationMutation": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/PublicationDetailData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopePublicationDelete": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"$ref": "#/components/schemas/PublicationDeleteData"},
+                        "meta": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta"],
+                },
+                "ApiEnvelopeError": {
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean", "enum": [False]},
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "data": {"type": "object", "nullable": True, "additionalProperties": True},
+                        "meta": {"type": "object", "additionalProperties": True},
+                        "error": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["success", "code", "message", "data", "meta", "error"],
+                },
+            }
+        },
+    }
+    _annotate_enum_descriptions(spec)
+    return spec
+
+
+def _unauthorized_response():
+    return Response(
+        "Unauthorized",
+        status=401,
+        headers={"WWW-Authenticate": 'Basic realm="AtlasWorks API Docs"'},
+        mimetype="text/plain; charset=utf-8",
+    )
+
+
+def _is_docs_auth_valid():
+    expected_password = str(config.get("docsAuthPassword") or "").strip()
+    if not expected_password:
+        return True
+
+    auth = request.authorization
+    if not auth:
+        return False
+
+    expected_user = str(config.get("docsAuthUser") or "").strip()
+    if expected_user and str(auth.username or "").strip() != expected_user:
+        return False
+
+    return str(auth.password or "") == expected_password
+
+
+def _require_docs_auth():
+    if _is_docs_auth_valid():
+        return None
+    return _unauthorized_response()
+
+
+def getOpenApiSpec():
+    auth_result = _require_docs_auth()
+    if auth_result:
+        return auth_result
+    return jsonify(_openapi_spec())
+
+
+def getSwaggerUi():
+    auth_result = _require_docs_auth()
+    if auth_result:
+        return auth_result
+
+    spec_json = json.dumps(_openapi_spec(), ensure_ascii=False).replace("</", "<\\/")
+
+    html = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AtlasWorks API Reference</title>
+  <style>
+    :root {
+      color-scheme: light only;
+      --aw-bg: #f4f7fb;
+      --aw-panel: #ffffff;
+      --aw-text: #1f2d3d;
+      --aw-muted: #64748b;
+      --aw-border: #d8e2f0;
+      --aw-primary: #2563eb;
+      --aw-shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--aw-bg);
+      color: var(--aw-text);
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    .docs-shell {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    .docs-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--aw-border);
+      background: var(--aw-panel);
+      box-shadow: var(--aw-shadow);
+    }
+
+    .docs-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: #162638;
+    }
+
+    .docs-title small {
+      font-size: 12px;
+      color: var(--aw-muted);
+      font-weight: 600;
+    }
+
+    .docs-links {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+    }
+
+    .docs-links a {
+      color: var(--aw-primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .docs-links a:hover {
+      text-decoration: underline;
+    }
+
+    #api-reference {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    @media (max-width: 900px) {
+      .docs-head {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="docs-shell">
+    <header class="docs-head">
+      <div class="docs-title">
+        AtlasWorks API Reference
+        <small>Scalar UI</small>
+      </div>
+      <div class="docs-links">
+        <a href="/api/openapi.json" target="_blank" rel="noreferrer">OpenAPI JSON</a>
+      </div>
+    </header>
+    <div id="api-reference"></div>
+  </div>
+  <script src="/static/scalar-api-reference.js"></script>
+  <script>
+    window.addEventListener("DOMContentLoaded", function () {
+      const inlineSpec = """ + json.dumps(spec_json) + """;
+      Scalar.createApiReference("#api-reference", {
+        content: inlineSpec,
+        theme: "kepler",
+        forceDarkModeState: "light",
+        hideDarkModeToggle: true,
+        hideModels: true,
+        showDeveloperTools: "never",
+        hideClientButton: true,
+        showSidebar: true,
+        withDefaultFonts: false,
+        mcp: {
+          name: "AtlasWorks",
+          url: "https://mcp.example.com",
+          disabled: true
+        },
+        agent: {
+          disabled: true
+        }
+      });
+
+      const sidebarLabelMap = {
+        "Introduction": "简介",
+        "Models": "模型"
+      };
+      const localizeSidebarLabels = function () {
+        const sidebar = document.querySelector("#api-reference aside");
+        if (!sidebar) {
+          return;
+        }
+        const allNodes = sidebar.querySelectorAll("*");
+        allNodes.forEach(function (node) {
+          if (!node || node.children.length > 0) {
+            return;
+          }
+          const raw = (node.textContent || "").trim();
+          const mapped = sidebarLabelMap[raw];
+          if (mapped) {
+            node.textContent = mapped;
+          }
+        });
+      };
+
+      localizeSidebarLabels();
+      const observer = new MutationObserver(localizeSidebarLabels);
+      const root = document.getElementById("api-reference");
+      if (root) {
+        observer.observe(root, { childList: true, subtree: true });
+      }
+    });
+  </script>
+</body>
+</html>
+"""
+    return Response(html, mimetype="text/html; charset=utf-8")

@@ -1,0 +1,290 @@
+# 外部 PostgreSQL 精简版：不启动数据库容器，连接宿主机或外部 PostgreSQL。
+# 启动命令：docker compose -f docker-compose.external-db.compact.yml up -d --no-build --force-recreate
+# 停止命令：docker compose -f docker-compose.external-db.compact.yml down
+
+x-atlas-build: &atlas-build
+  context: .
+  dockerfile: deploy/docker/Dockerfile
+  args:
+    BASE_IMAGE: ${ATLASWORKS_BASE_IMAGE:-debian:bullseye}
+    APT_MIRROR: ${ATLASWORKS_APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
+    APT_SECURITY_MIRROR: ${ATLASWORKS_APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
+
+x-atlas-runtime: &atlas-runtime
+  image: ${ATLASWORKS_IMAGE:-atlasworks:release-2026610.1}
+  platform: linux/amd64
+  restart: unless-stopped
+
+x-db-env: &db-env
+  TF_DB_ENABLED: "1"
+  TF_DB_HOST: ${ATLASWORKS_DB_HOST:-host.docker.internal}
+  TF_DB_PORT: ${ATLASWORKS_DB_PORT:-5432}
+  TF_DB_NAME: ${ATLASWORKS_DB_NAME:-atlasworks}
+  TF_DB_USER: ${ATLASWORKS_DB_USER:-postgres}
+  TF_DB_PASSWORD: ${ATLASWORKS_DB_PASSWORD:-Su19960624Xhi}
+  TF_DB_CONNECT_TIMEOUT: ${ATLASWORKS_DB_CONNECT_TIMEOUT:-3}
+  TF_DB_SSLMODE: ${ATLASWORKS_DB_SSLMODE:-disable}
+
+x-host-paths:
+  data-source: &host-data-source ${ATLASWORKS_DATA_SOURCE_HOST_DIR:-D:/TIF}
+  tiles: &host-tiles ${ATLASWORKS_TILES_HOST_DIR:-D:/tiles}
+  log: &host-log ./runtime/log
+  geoserver-data: &host-geoserver-data ./runtime/geoserver
+  nginx-conf: &host-nginx-conf ./deploy/nginx/atlasworks.conf
+
+x-path-env: &path-env
+  ATLASWORKS_DATA_SOURCE_DIR: /app/dataSource
+  ATLASWORKS_DATA_SOURCE_HOST_DIR: *host-data-source
+  ATLASWORKS_TILES_DIR: /app/tiles
+  ATLASWORKS_TILES_HOST_DIR: *host-tiles
+  ATLASWORKS_LOG_DIR: /app/log
+  ATLASWORKS_LOG_HOST_DIR: *host-log
+
+x-public-env: &public-env
+  TZ: Asia/Shanghai
+  ATLASWORKS_PUBLIC_BASE_HOST: ${ATLASWORKS_PUBLIC_BASE_HOST:-100.107.2.36}
+  ATLASWORKS_PUBLIC_BASE_MODE: ${ATLASWORKS_PUBLIC_BASE_MODE:-request_host}
+  ATLASWORKS_NGINX_PUBLIC_BASE_URL: ${ATLASWORKS_NGINX_PUBLIC_BASE_URL:-}
+  ATLASWORKS_NGINX_PUBLIC_BASE_PORT: ${ATLASWORKS_NGINX_PUBLIC_BASE_PORT:-18080}
+
+x-geoserver-client-env: &geoserver-client-env
+  ATLASWORKS_GEOSERVER_BASE_URL: ${ATLASWORKS_GEOSERVER_BASE_URL:-http://atlasworks-geoserver:8080/geoserver}
+  ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL: ${ATLASWORKS_GEOSERVER_PUBLIC_BASE_URL:-}
+  ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT: ${ATLASWORKS_GEOSERVER_PUBLIC_BASE_PORT:-18083}
+  ATLASWORKS_GEOSERVER_USERNAME: ${ATLASWORKS_GEOSERVER_USERNAME:-admin}
+  ATLASWORKS_GEOSERVER_PASSWORD: ${ATLASWORKS_GEOSERVER_PASSWORD:-geoserver}
+  ATLASWORKS_GEOSERVER_WORKSPACE: ${ATLASWORKS_GEOSERVER_WORKSPACE:-atlasworks}
+  ATLASWORKS_GEOSERVER_DATA_SOURCE_DIR: ${ATLASWORKS_GEOSERVER_DATA_SOURCE_DIR:-/opt/geoserver/data_dir/dataSource}
+
+x-mounts:
+  data-source-app: &mount-data-source-app
+    type: bind
+    source: *host-data-source
+    target: /app/dataSource
+  tiles-app: &mount-tiles-app
+    type: bind
+    source: *host-tiles
+    target: /app/tiles
+  log-app: &mount-log-app
+    type: bind
+    source: *host-log
+    target: /app/log
+  nginx-conf: &mount-nginx-conf
+    type: bind
+    source: *host-nginx-conf
+    target: /etc/nginx/conf.d/default.conf
+    read_only: true
+  nginx-tiles: &mount-nginx-tiles
+    type: bind
+    source: *host-tiles
+    target: /srv/atlasworks/tiles
+    read_only: true
+  geoserver-data: &mount-geoserver-data
+    type: bind
+    source: *host-geoserver-data
+    target: /opt/geoserver/data_dir
+  geoserver-data-source-app: &mount-geoserver-data-source-app
+    type: bind
+    source: *host-data-source
+    target: /app/dataSource
+  geoserver-data-source: &mount-geoserver-data-source
+    type: bind
+    source: *host-data-source
+    target: /opt/geoserver/data_dir/dataSource
+  geoserver-tiles: &mount-geoserver-tiles
+    type: bind
+    source: *host-tiles
+    target: /opt/geoserver/data_dir/tiles
+
+x-app-volumes: &app-volumes
+  - *mount-data-source-app
+  - *mount-tiles-app
+  - *mount-log-app
+
+x-worker-common: &worker-common
+  <<: *atlas-runtime
+  depends_on:
+    atlasworks-api:
+      condition: service_healthy
+  volumes: *app-volumes
+
+x-worker-env: &worker-env
+  <<: [*public-env, *path-env, *db-env]
+  ATLASWORKS_ROLE: worker
+  ATLASWORKS_WORKER_SKIP_DB_INIT: "1"
+  ATLASWORKS_TASK_DISPATCH: inline
+  TF_TASK_SYNC_ENABLED: "1"
+
+services:
+  # 控制面 API：负责任务入队、数据源管理、系统接口。
+  atlasworks-api:
+    <<: *atlas-runtime
+    build: *atlas-build
+    container_name: atlasworks-api
+    cpus: ${ATLASWORKS_API_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_API_MEM_LIMIT:-8g}
+    mem_reservation: ${ATLASWORKS_API_MEM_RESERVATION:-2g}
+    shm_size: ${ATLASWORKS_API_SHM_SIZE:-1g}
+    pids_limit: ${ATLASWORKS_API_PIDS_LIMIT:-1024}
+    ulimits:
+      nofile:
+        soft: ${ATLASWORKS_API_NOFILE_SOFT:-65535}
+        hard: ${ATLASWORKS_API_NOFILE_HARD:-65535}
+    environment:
+      <<: [*public-env, *path-env, *db-env, *geoserver-client-env]
+      HOST: 0.0.0.0
+      PORT: "18000"
+      ATLASWORKS_WORKERS: "1"
+      ATLASWORKS_THREADS: "4"
+      ATLASWORKS_PUBLIC_BASE_URL: ${ATLASWORKS_PUBLIC_BASE_URL:-http://100.107.2.36:18000}
+      ATLASWORKS_PUBLIC_BASE_PORT: ${ATLASWORKS_PUBLIC_BASE_PORT:-18000}
+      ATLASWORKS_DOCS_USER: ${ATLASWORKS_DOCS_USER:-}
+      ATLASWORKS_DOCS_PASSWORD: ${ATLASWORKS_DOCS_PASSWORD:-Swsj@2025}
+      ATLASWORKS_TASK_DISPATCH: worker
+      TF_TASK_SYNC_ENABLED: "1"
+      TF_TASK_SYNC_INTERVAL: "2"
+    ports:
+      - "${ATLASWORKS_HOST_PORT:-18000}:18000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18000/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes: *app-volumes
+
+  # 二维矢量切片 Worker：处理 MVT / GeoJSON 金字塔切片。
+  atlasworks-vector-worker:
+    <<: *worker-common
+    build: *atlas-build
+    container_name: atlasworks-vector-worker
+    cpus: ${ATLASWORKS_WORKER_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_WORKER_MEM_LIMIT:-8g}
+    mem_reservation: ${ATLASWORKS_WORKER_MEM_RESERVATION:-2g}
+    shm_size: ${ATLASWORKS_WORKER_SHM_SIZE:-1g}
+    pids_limit: ${ATLASWORKS_WORKER_PIDS_LIMIT:-2048}
+    ulimits:
+      nofile:
+        soft: ${ATLASWORKS_WORKER_NOFILE_SOFT:-65535}
+        hard: ${ATLASWORKS_WORKER_NOFILE_HARD:-65535}
+    environment:
+      <<: *worker-env
+      ATLASWORKS_TILING_SERVICE: vector
+      ATLASWORKS_WORKER_ID: atlasworks-vector-worker-1
+      ATLASWORKS_WORKER_POLL_INTERVAL: "2"
+      ATLASWORKS_WORKER_JOB_TYPES: mvt_tiles,geojson_tiles,vector_tiles
+
+  # 影像切片 Worker：处理 indexed/map 栅格切片，依赖 GeoServer 渲染能力。
+  atlasworks-raster-worker:
+    <<: *worker-common
+    container_name: atlasworks-raster-worker
+    cpus: ${ATLASWORKS_RASTER_WORKER_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_RASTER_WORKER_MEM_LIMIT:-8g}
+    environment:
+      <<: [*worker-env, *geoserver-client-env]
+      ATLASWORKS_TILING_SERVICE: raster
+      ATLASWORKS_WORKER_ID: atlasworks-raster-worker-1
+      ATLASWORKS_WORKER_JOB_TYPES: indexed_tiles,map_tiles
+
+  # 地形切片 Worker：处理 terrain / quantized-mesh 切片。
+  atlasworks-terrain-worker:
+    <<: *worker-common
+    container_name: atlasworks-terrain-worker
+    cpus: ${ATLASWORKS_TERRAIN_WORKER_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_TERRAIN_WORKER_MEM_LIMIT:-8g}
+    environment:
+      <<: *worker-env
+      ATLASWORKS_TILING_SERVICE: terrain
+      ATLASWORKS_WORKER_ID: atlasworks-terrain-worker-1
+      ATLASWORKS_WORKER_JOB_TYPES: terrain_tiles,terrain
+
+  # 3D Tiles Worker：处理点云、模型、OSGB 等 3D Tiles 转换。
+  atlasworks-3dtiles-worker:
+    <<: *worker-common
+    container_name: atlasworks-3dtiles-worker
+    cpus: ${ATLASWORKS_3DTILES_WORKER_CPUS:-4.0}
+    mem_limit: ${ATLASWORKS_3DTILES_WORKER_MEM_LIMIT:-8g}
+    environment:
+      <<: *worker-env
+      ATLASWORKS_TILING_SERVICE: tiles3d
+      ATLASWORKS_WORKER_ID: atlasworks-3dtiles-worker-1
+      ATLASWORKS_WORKER_JOB_TYPES: 3dtiles,3dtiles-pointcloud,3dtiles-vector,3dtiles-model,3dtiles-osgb
+
+  # 发布服务：负责发布记录、动态服务、WMTS 与静态发布入口。
+  atlasworks-publisher:
+    <<: *atlas-runtime
+    build: *atlas-build
+    container_name: atlasworks-publisher
+    cpus: ${ATLASWORKS_PUBLISHER_CPUS:-2.0}
+    mem_limit: ${ATLASWORKS_PUBLISHER_MEM_LIMIT:-4g}
+    depends_on:
+      atlasworks-api:
+        condition: service_healthy
+      atlasworks-geoserver:
+        condition: service_healthy
+    environment:
+      <<: [*public-env, *path-env, *db-env, *geoserver-client-env]
+      ATLASWORKS_ROLE: publisher
+      HOST: 0.0.0.0
+      PORT: "18001"
+      ATLASWORKS_PUBLIC_BASE_URL: ${ATLASWORKS_PUBLISHER_PUBLIC_BASE_URL:-http://100.107.2.36:18001}
+      ATLASWORKS_PUBLIC_BASE_PORT: ${ATLASWORKS_PUBLISHER_PUBLIC_BASE_PORT:-18001}
+      TF_TASK_SYNC_ENABLED: "0"
+    ports:
+      - "${ATLASWORKS_PUBLISHER_HOST_PORT:-18001}:18001"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18001/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes: *app-volumes
+
+  # 静态发布 Nginx：高性能发布 /published/* 瓦片目录。
+  atlasworks-nginx:
+    image: nginx:1.27-alpine
+    platform: linux/amd64
+    container_name: atlasworks-nginx
+    restart: unless-stopped
+    cpus: ${ATLASWORKS_NGINX_CPUS:-1.0}
+    mem_limit: ${ATLASWORKS_NGINX_MEM_LIMIT:-512m}
+    ports:
+      - "${ATLASWORKS_NGINX_HOST_PORT:-18080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - *mount-nginx-conf
+      - *mount-nginx-tiles
+
+  # GeoServer：负责 WMS / WMTS / ImageMosaic 标准地图服务。
+  atlasworks-geoserver:
+    image: docker.osgeo.org/geoserver:2.26.x
+    platform: linux/amd64
+    container_name: atlasworks-geoserver
+    restart: unless-stopped
+    environment:
+      GEOSERVER_ADMIN_USER: ${ATLASWORKS_GEOSERVER_USERNAME:-admin}
+      GEOSERVER_ADMIN_PASSWORD: ${ATLASWORKS_GEOSERVER_PASSWORD:-geoserver}
+      ENABLE_JSONP: "true"
+      CORS_ENABLED: "true"
+      CORS_ALLOWED_ORIGINS: "*"
+      GEOSERVER_DATA_DIR: /opt/geoserver/data_dir
+      INITIAL_MEMORY: 1G
+      MAXIMUM_MEMORY: 4G
+    ports:
+      - "${ATLASWORKS_GEOSERVER_HOST_PORT:-18083}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/geoserver/web/ || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    volumes:
+      - *mount-geoserver-data
+      - *mount-geoserver-data-source-app
+      - *mount-geoserver-data-source
+      - *mount-geoserver-tiles
